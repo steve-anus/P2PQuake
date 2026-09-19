@@ -10,11 +10,11 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$DIR/.."
 PINFILE="$ROOT/ENGINE.upstream"
 REMOTE=https://github.com/sezero/quakespasm
-CACHE=${QN_ENGINE_CACHE:-$HOME/.cache/p2pquake/qs-engine}
+CACHE=${QN_ENGINE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/p2pquake/qs-engine}
 
 [ -f "$PINFILE" ] || { echo "missing $PINFILE (line 2 holds the pinned commit)" >&2; exit 1; }
 CUR=$(sed -n 2p "$PINFILE")
-[ -d "$CACHE/.git" ] || git clone --quiet "$REMOTE" "$CACHE"
+[ -d "$CACHE/.git" ] || { mkdir -p "$(dirname "$CACHE")"; git clone --quiet "$REMOTE" "$CACHE"; }
 git -C "$CACHE" fetch --quiet origin master
 
 CAND="${1:?usage: update-engine.sh <commit-sha|tag|latest>}"

@@ -1,5 +1,5 @@
 'use strict';
-// Fuzz target 2 (qn-peer remote wire parse) without clang: randomized
+// Randomized mutation fuzzer for qn-peer's wire parsing (no clang needed): randomized
 // mutation of valid Plane B envelopes and Plane A frames, run through the
 // real readers. Legal outcomes: known error types only (EnvelopeError,
 // FrameError, TLVError, RangeError) — anything else (TypeError etc) or a

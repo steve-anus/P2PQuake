@@ -1,6 +1,6 @@
 'use strict';
 // Two peers, one machine, one real match room over hyperswarm (live DHT
-// discovery + Noise connections). Acceptance path per the wire spec:
+// discovery + Noise connections). The join path through the wire spec:
 // KEY_BIND (channel-bound) -> JOIN (proof, version) -> JOIN_OK/ROSTER ->
 // CHAT; plus refusal lanes: bad proof, below-minimum version, and a
 // deliberate mid-session replay the receiver must flag, not execute.

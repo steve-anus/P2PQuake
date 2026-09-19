@@ -1,4 +1,4 @@
-/* fuzz_frame.c — libFuzzer entry for the Plane A parser (fuzz target 1).
+/* fuzz_frame.c — libFuzzer entry: exercises the Plane A parser end to end.
  * Every input must end in one of: clean accept, NEED_MORE, or BAD-with-
  * close. Any crash, leak, or sanitizer trip is a bug at the trust boundary.
  * Build via `make fuzz` (needs clang). */

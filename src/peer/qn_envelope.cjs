@@ -2,7 +2,7 @@
 // Plane B (peer <-> peer) signed envelope per src/protocol/qn_protocol.md §3.
 // Identity doctrine: nothing in a payload is trusted until the §3.2 signature
 // verifies; names/ids are display hints. All crypto from node:crypto
-// (Ed25519, SHA-256) — see conventions "Dependencies" and spec §5.3.
+// (Ed25519, SHA-256) — the algorithm list is spec §5.3.
 
 const crypto = require('node:crypto');
 

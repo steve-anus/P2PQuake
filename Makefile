@@ -11,6 +11,7 @@ NODE ?= node
 NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
 
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
+QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
 .PHONY: all engine peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node clean
 
@@ -18,11 +19,12 @@ all: engine peer
 
 # USE_SDL2=1 is mandatory: the upstream Makefile defaults to SDL-1.2
 # (Quakespasm.txt "make USE_SDL2=1 to compile against SDL2").
-# MP3LIB=mpg123: upstream defaults to libmad (Makefile:26) which is not
-# installed here; the mpg123 backend uses the system library we do have.
+# MP3LIB=mpg123: the vendored engine defaults to libmad (Quake/Makefile:26)
+# which is not installed here; the mpg123 backend uses the system library.
 # Both build cleanly; flip this back if libmad ever becomes the preference.
 engine:
-	$(MAKE) -C $(QS_DIR)/Quake DEBUG=$(DEBUG) USE_SDL2=1 MP3LIB=mpg123
+	$(MAKE) -C $(QS_DIR)/Quake DEBUG=$(DEBUG) USE_SDL2=1 MP3LIB=mpg123 \
+	  "CC=$(CC) -ffile-prefix-map=$(HOME)=."
 
 peer:
 	cd $(PEER_DIR) && npm ci --ignore-scripts
@@ -62,7 +64,7 @@ fuzz:
 	fi
 	@if [ ! -f $(FUZZ_SRC) ]; then echo "fuzz: NOT-READY — no harness"; exit 1; fi
 	@mkdir -p bin
-	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz
+	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz -ffile-prefix-map=$(HOME)=.
 	./bin/qn_fuzz -max_total_time=$(or $(QN_TIME),60)
 
 fuzz-smoke:
@@ -70,7 +72,7 @@ fuzz-smoke:
 	  echo "fuzz-smoke: NOT-READY — clang missing (sudo apt install clang)"; exit 1; \
 	fi
 	@mkdir -p bin
-	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz
+	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz -ffile-prefix-map=$(HOME)=.
 	./bin/qn_fuzz -runs=100000
 
 fuzz-node:
