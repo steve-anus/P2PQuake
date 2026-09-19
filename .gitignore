@@ -1,0 +1,11 @@
+bin/
+node_modules/
+src/vendor/quakespasm/
+gamedata/id1/
+*.o
+*.d
+*.dSYM
+.DS_Store
+# Engine bytes + gamedata files are derived/verifiable, not tracked: the
+# engine by ENGINE.upstream (git pin), gamedata by its sha256 manifest
+# (gamedata.sha256, tracked once recorded). Only records and tools are committed.

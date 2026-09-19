@@ -1,0 +1,14 @@
+{
+  "name": "qn-peer",
+  "version": "0.0.1",
+  "private": true,
+  "description": "p2pquake match peer: DHT discovery, Noise-authenticated transport, signed match envelopes for the game engine",
+  "license": "GPL-2.0-or-later",
+  "dependencies": {
+    "hyperswarm": "4.17.1",
+    "hyperdht": "6.34.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
