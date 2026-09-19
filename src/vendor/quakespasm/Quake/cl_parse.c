@@ -678,7 +678,7 @@ void CL_ParseBaseline (entity_t *ent, int version) //johnfitz -- added argument
 	bits = (version == 2) ? MSG_ReadByte() : 0;
 	ent->baseline.modelindex = (bits & B_LARGEMODEL) ? MSG_ReadShort() : MSG_ReadByte();
 	ent->baseline.frame = (bits & B_LARGEFRAME) ? MSG_ReadShort() : MSG_ReadByte();
-	if (ent->baseline.modelindex < 0 || ent->baseline.modelindex >= MAX_MODELS)
+	if (ent->baseline.modelindex >= MAX_MODELS)
 		Host_Error ("CL_ParseBaseline: bad modelindex %i", ent->baseline.modelindex);
 	//johnfitz
 
@@ -923,7 +923,7 @@ void CL_ParseStatic (int version) //johnfitz -- added a parameter
 
 // copy it to the current state
 
-	if (ent->baseline.modelindex < 0 || ent->baseline.modelindex >= MAX_MODELS
+	if (ent->baseline.modelindex >= MAX_MODELS
 		|| !cl.model_precache[ent->baseline.modelindex])
 		Host_Error ("CL_ParseStatic: bad baseline modelindex %i", ent->baseline.modelindex);
 	ent->model = cl.model_precache[ent->baseline.modelindex];

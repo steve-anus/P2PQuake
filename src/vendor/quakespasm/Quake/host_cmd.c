@@ -2187,6 +2187,9 @@ static void Host_Viewmodel_f (void)
 	edict_t	*e;
 	qmodel_t	*m;
 
+	if (Cmd_Argc () != 2)
+		return;
+
 	e = FindViewthing ();
 	if (!e)
 		return;

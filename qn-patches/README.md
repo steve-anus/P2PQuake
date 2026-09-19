@@ -10,13 +10,18 @@ failing hunk, rebase or retire the patch, never skip it.
 |---|---|
 | `0001-cl-parse-index-clamps.patch` | rejects negative/out-of-range wire-supplied model, sound and viewentity indices (and NULL precache entries) with a disconnect instead of memory unsafety |
 | `0002-cl-parse-parse-exits-disconnect.patch` | turns four remote-triggerable `Sys_Error` process exits in the server-message parser into recoverable `Host_Error` disconnects |
-| `0003-host_cmd-path-traversal-filter.patch` | rejects `..`, absolute paths and drive prefixes in map/save names accepted by server-influenced console commands |
+| `0003-host_cmd-path-traversal-filter.patch` | rejects `..`, absolute paths and drive prefixes (and argless calls) in map/save/view names accepted by server-influenced console commands |
+| `0004-common-msg-read-float-bounds.patch` | bounds-checks `MSG_ReadFloat` against the message size like its sibling readers, flagging a bad read instead of reading past the message |
+| `0005-sv-phys-entity-cap.patch` | upstream's entity-cap fix: `SV_Physics` re-reads the cap each iteration instead of looping on a stale count |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,
 `Quake/main_sdl.c`, `Quake/net_main.c`, `Quake/host.c`, `Quake/cl_parse.c`,
-`Quake/host_cmd.c`, `Quake/Makefile`. Anything else upstream must stay
-untouched so updates stay cheap and reviews stay small.
+`Quake/host_cmd.c`, `Quake/common.c` (message-reader bounds only),
+`Quake/sv_phys.c` (upstream's entity-cap fix), `Quake/Makefile`.
+Anything else upstream must stay untouched so updates stay cheap and
+reviews stay small. `make engine-verify` checks this claim mechanically:
+it replays the series onto pristine pin bytes and diffs against the tree.
 
 To add a fix: edit one of those files, rebuild (`make engine DEBUG=1`), run
 the checks (`make check`), commit. Then export the change as the next

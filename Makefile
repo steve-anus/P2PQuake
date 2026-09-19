@@ -13,7 +13,7 @@ NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node clean
 
 all: engine peer
 
@@ -25,6 +25,21 @@ all: engine peer
 engine:
 	$(MAKE) -C $(QS_DIR)/Quake DEBUG=$(DEBUG) USE_SDL2=1 MP3LIB=mpg123 \
 	  "CC=$(CC) -ffile-prefix-map=$(HOME)=."
+
+# Check for the qn-patches/README claim: the vendored tree must equal the
+# pinned upstream bytes plus the ordered patch series, byte for byte.
+engine-verify:
+	@CACHE=$${QN_ENGINE_CACHE:-$${XDG_CACHE_HOME:-$$HOME/.cache}/p2pquake/qs-engine}; \
+	[ -d "$$CACHE/.git" ] || { echo "engine-verify: NOT-READY — no engine cache at $$CACHE"; exit 1; }; \
+	R=$$(pwd); W=$$(mktemp -d); trap 'rm -rf "$$W"' EXIT; \
+	git -C "$$CACHE" archive "$$(sed -n 2p ENGINE.upstream)" \
+	  | tar -x -C "$$W" --exclude=MacOSX --exclude=Windows --exclude=Linux; \
+	for p in qn-patches/*.patch; do \
+	  (cd "$$W" && patch -p1 -s -i "$$R/$$p") \
+	    || { echo "engine-verify: FAIL — $$p does not apply to the pin"; exit 1; }; \
+	done; \
+	diff -r -q -x '*.o' -x '*.d' -x quakespasm "$$W" src/vendor/quakespasm \
+	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series"
 
 peer:
 	cd $(PEER_DIR) && npm ci --ignore-scripts
