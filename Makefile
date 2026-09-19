@@ -13,7 +13,7 @@ NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify clean
 
 all: engine peer
 
@@ -92,6 +92,12 @@ fuzz-smoke:
 
 fuzz-node:
 	$(NODE) src/tests/fuzz_wire.cjs
+
+vectors-verify:
+	@mkdir -p bin
+	@$(NODE) tools/gen-vectors.cjs | grep -E '^(F|E)-V[0-9]+[[:space:]]' > bin/vectors.gen.txt
+	@grep -E '^(F|E)-V[0-9]+[[:space:]]' src/protocol/qn_protocol.md > bin/vectors.spec.txt
+	@if diff -u bin/vectors.spec.txt bin/vectors.gen.txt > /dev/null; then 	  echo "VECTORS OK: spec §7 equals generator output"; 	else echo "VECTORS STALE: regenerate spec §7 from tools/gen-vectors.cjs"; 	  diff -u bin/vectors.spec.txt bin/vectors.gen.txt | head -20; exit 1; fi
 
 clean:
 	rm -rf bin

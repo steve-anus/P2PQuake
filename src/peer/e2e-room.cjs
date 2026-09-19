@@ -100,6 +100,7 @@ function checkTagSizes(env) {
 // ---------------- host ----------------
 const host = new Hyperswarm({ dht });
 const roster = []; // accepted long-term pubkeys
+const slotMap = new Map(); // pubkey hex -> live engine slot (unique while rostered)
 let hostSeenChat = null;
 const hostConns = new Map(); // conn -> state (current per joined client)
 
@@ -107,8 +108,12 @@ host.on('connection', (conn) => {
   const st = {
     reader: new E.EnvelopeReader(), bound: null,
     win: new E.SeqWindow(), bucket: new E.RateBucket(), joined: false, seqOut: 0,
+    unknownRun: 0, preBucket: new E.RateBucket({ rate: 10, burst: 5 }),
   };
   hostConns.set(conn, st);
+  let unbound = 0; // §6.1 pre-auth connection cap
+  for (const [, s] of hostConns) if (!s.bound) unbound++;
+  if (unbound > 4) { conn.destroy(); hostConns.delete(conn); return; }
   const send = (type, fields) => {
     st.seqOut++;
     conn.write(E.encodeEnvelope({ type, matchId, seq: st.seqOut,
@@ -127,7 +132,8 @@ host.on('connection', (conn) => {
     try { bufs = st.reader.feed(chunk); }
     catch (e) { return closeHost(conn, 'reader: ' + e.message); }
     for (const raw of bufs) {
-      if (!st.bucket.consume()) return closeHost(conn, 'rate limit exceeded');
+      const pipe = st.bound ? st.bucket : st.preBucket; // §6.1 stricter pre-bind
+      if (!pipe.consume()) return closeHost(conn, 'rate limit exceeded');
       let env;
       try {
         if (!st.bound) {
@@ -143,8 +149,8 @@ host.on('connection', (conn) => {
               E.noiseBindingContext(host.keyPair.publicKey, conn.remotePublicKey), binding))
             throw new E.EnvelopeError('noise binding failed');
           if (st.win.check(env.seq) !== 'accept') throw new E.EnvelopeError('bind seq');
-          if (roster.some((r) => r.equals(claimed))) throw new E.EnvelopeError('dup bind');
           st.bound = claimed;
+          st.unknownRun = 0;
           continue;
         }
         env = inbound(raw, st.bound, st.win);
@@ -164,10 +170,16 @@ host.on('connection', (conn) => {
             if (roster.length >= 8) return refuse(E.CAUSES.MATCH_FULL);
             if (roster.some((r) => r.equals(who))) return refuse(E.CAUSES.DUP_IDENTITY);
             st.joined = true;
+            st.unknownRun = 0;
             roster.push(who);
+            const used = new Set(slotMap.values());
+            let slot = 0;
+            while (slot < 256 && used.has(slot)) slot++;
+            if (slot === 256) { roster.pop(); st.joined = false; return refuse(E.CAUSES.MATCH_FULL); }
+            slotMap.set(who.toString('hex'), slot);
             send(E.TYPES.JOIN_OK, [[1, Buffer.from(
               sha(roster.map((r) => r.toString('hex')).join('')))],
-              [2, Buffer.from('e1m1')], [3, Buffer.from([roster.length - 1])]]);
+              [2, Buffer.from('e1m1')], [3, Buffer.from([slot])]]);
             broadcastRoster();
             continue;
           }
@@ -178,9 +190,12 @@ host.on('connection', (conn) => {
             continue;
           case E.TYPES.BYE:
             dropFromRoster(st);
+            st.unknownRun = 0;
             continue;
           default:
-            throw new E.EnvelopeError('unexpected type 0x' + env.type.toString(16));
+            st.unknownRun = (st.unknownRun || 0) + 1; // §3.4b: drop+count, close at 10
+            if (st.unknownRun > 10) throw new E.EnvelopeError('drop storm (§3.4b)');
+            continue;
         }
       } catch (e) {
         if (!(e instanceof E.EnvelopeError || e instanceof F.TLVError)) throw e;
@@ -196,7 +211,7 @@ function dropFromRoster(st) {
   if (!st.joined || !st.bound) return;
   const i = roster.findIndex((r) => r.equals(st.bound));
   st.joined = false;
-  if (i >= 0) { roster.splice(i, 1); broadcastRoster(); }
+  if (i >= 0) { roster.splice(i, 1); slotMap.delete(st.bound.toString('hex')); broadcastRoster(); }
 }
 
 let rosterEpoch = 0n;
@@ -262,6 +277,7 @@ function runClient(role) {
               throw new E.EnvelopeError('noise binding');
             if (st.win.check(env.seq) !== 'accept') throw new E.EnvelopeError('bind seq');
             st.bound = claimed;
+            st.unknownRun = 0;
             const proof = role === 'badproof' ? Buffer.alloc(16, 0) : R.proofOf(code, pub);
             const minor = role === 'lowver' ? 0 : E.MINOR;
             const manifest = role === 'mismatch'
@@ -332,10 +348,11 @@ const guard = setTimeout(() => {
   const cBad = runClient('badproof');
   const cLow = runClient('lowver');
   const cMis = runClient('mismatch');
-  const cName = runClient('badname');
 
-  const [rOk, rBad, rLow, rMis, rName] = await Promise.all(
-    [cOk.done, cBad.done, cLow.done, cMis.done, cName.done]);
+  const [rOk, rBad, rLow, rMis] = await Promise.all(
+    [cOk.done, cBad.done, cLow.done, cMis.done]);
+  // badname runs after the first four settle: >4 concurrent unbound
+  // connections would trip the §6.1 pre-auth cap now enforced in here.
   rOk === 'joined' ? note('client joins by proof+signature') : failNote('join', rOk);
   rBad === `refused:${E.CAUSES.BAD_PROOF}` ? note('bad proof refused with cause 2')
     : failNote('badproof', rBad);
@@ -343,6 +360,8 @@ const guard = setTimeout(() => {
     : failNote('lowver', rLow);
   rMis === `refused:${E.CAUSES.ASSET_MISMATCH}` ? note('tampered asset identity refused with cause 7')
     : failNote('mismatch', rMis);
+  const cName = runClient('badname');
+  const rName = await cName.done;
   rName === 'closed early' ? note('non-printable name kills the connection at parse (name contract)')
     : failNote('badname', rName);
   note('unknown experimental TLV skipped, not fatal (guard b)');

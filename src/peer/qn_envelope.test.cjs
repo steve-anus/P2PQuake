@@ -168,3 +168,30 @@ test('join-lane wire constants pinned to spec (§3.4a, §6.2)', () => {
   assert.equal(E.CAUSES.ASSET_MISMATCH, 7);
   assert.equal(Object.keys(E.CAUSES).length, 7);
 });
+
+test('encodeEnvelope refuses seq overflow as an EnvelopeError (close, not crash — §3.3)', () => {
+  const priv = E.privateKeyFromSeed(seedA);
+  const base = { type: E.TYPES.CHAT, matchId: Buffer.alloc(16, 1), payload: Buffer.from('hi') };
+  assert.throws(() => E.encodeEnvelope({ ...base, seq: 0x100000000 }, priv), E.EnvelopeError);
+});
+
+test('a dead EnvelopeReader discards further feed instead of accumulating', () => {
+  const rd = new E.EnvelopeReader();
+  assert.throws(() => rd.feed(Buffer.from('zz')), E.EnvelopeError);
+  assert.equal(rd.dead, true);
+  const before = rd.buf.length;
+  for (let i = 0; i < 5; i++) assert.deepEqual(rd.feed(Buffer.alloc(900)), []);
+  assert.equal(rd.buf.length, before);
+});
+
+test('display-code parser rejects unicode case-folding tricks', () => {
+  for (const evil of ['\u017F'.repeat(16), '\uFB05'.repeat(8), 'A'.repeat(15) + '\u0131'])
+    assert.throws(() => R.bytesFromCode(evil), RangeError);
+});
+
+test('room derivations demand raw code bytes, not display strings', () => {
+  const display = 'ABCDEFGH-JKMNPQRS-01234567-89ABCDEM';
+  for (const f of [R.topicOf, R.matchIdOf, R.membershipKey])
+    assert.throws(() => f(display), TypeError);
+  assert.throws(() => R.proofOf(display, Buffer.alloc(32)), TypeError);
+});

@@ -106,6 +106,7 @@ class FrameReader {
     this.dead = false;
   }
   feed(chunk) {
+    if (this.dead) return []; // dead readers must not accumulate further bytes
     this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
     return this.drain();
   }

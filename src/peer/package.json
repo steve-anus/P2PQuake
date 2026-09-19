@@ -9,6 +9,6 @@
     "hyperdht": "6.34.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   }
 }

@@ -113,6 +113,7 @@ function encodeEnvelope(fields, privKey, { major = MAJOR, minor = MINOR } = {}) 
   const { type, matchId, seq, payload } = fields;
   if (!Buffer.isBuffer(matchId) || matchId.length !== 16) throw new RangeError('matchId 16 bytes');
   if (!Number.isInteger(seq) || seq < 1) throw new RangeError('seq must be >= 1');
+  if (seq > 0xffffffff) throw new EnvelopeError('seq overflow — close and reconnect (§3.3)');
   if (!Buffer.isBuffer(payload) || payload.length > MAX_PAYLOAD) throw new RangeError('payload limit');
   if (type < 0 || type > 0xffff) throw new RangeError('type out of range');
   const body = Buffer.alloc(HEAD_LEN + payload.length + SIG_LEN);
@@ -174,6 +175,7 @@ class EnvelopeReader {
     this.dead = false;
   }
   feed(chunk) {
+    if (this.dead) return []; // dead readers must not accumulate further bytes
     this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
     return this.drain();
   }

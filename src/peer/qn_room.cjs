@@ -26,6 +26,8 @@ function codeFromBytes(bytes) {
 }
 
 function bytesFromCode(code) {
+  if (typeof code !== 'string' || !/^[0-9A-Za-z-]+$/.test(code))
+    throw new RangeError('display code must be ASCII letters/digits/dashes');
   const s = code.toUpperCase().replace(/-/g, '');
   if (s.length !== 16) throw new RangeError('display code must be 16 chars');
   const bits = [];
@@ -39,7 +41,9 @@ function bytesFromCode(code) {
   return out;
 }
 
+const RAW_CODE_RULE = 'join code must be raw bytes; display strings go through bytesFromCode';
 function topicOf(joinCode) {
+  if (!Buffer.isBuffer(joinCode)) throw new TypeError(RAW_CODE_RULE);
   return crypto.createHash('sha256').update(joinCode).digest();
 }
 
@@ -48,6 +52,7 @@ function matchIdOf(joinCode) {
 }
 
 function membershipKey(joinCode) {
+  if (!Buffer.isBuffer(joinCode)) throw new TypeError(RAW_CODE_RULE);
   // hkdfSync(digest, ikm, salt, info, length) — returns ArrayBuffer
   return Buffer.from(
     crypto.hkdfSync('sha256', joinCode, Buffer.from('p2pquake-room'),
