@@ -13,7 +13,7 @@ NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify e2e clean
 
 all: engine peer
 
@@ -44,6 +44,9 @@ engine-verify:
 peer:
 	cd $(PEER_DIR) && npm ci --ignore-scripts
 
+e2e:
+	cd $(PEER_DIR) && $(NODE) e2e-room.cjs
+
 check:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then \
 	  echo "check: NOT-READY — no driver/test sources yet (spec comes first)"; exit 1; \
@@ -52,6 +55,7 @@ check:
 	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
 	./bin/qn_tests
 	$(if $(NODE_TEST_SRC),cd $(PEER_DIR) && $(NODE) --test $(notdir $(NODE_TEST_SRC)),)
+	$(MAKE) --no-print-directory e2e
 
 asan:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi
