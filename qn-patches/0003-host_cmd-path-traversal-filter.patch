@@ -68,3 +68,11 @@
  	
  	char	name[MAX_OSPATH];
  	char	mapname[MAX_QPATH];
+@@ -2152,6 +2183,7 @@
+ */
+ static void Host_Viewmodel_f (void)
+ {
++	QN_GUARD_NAME();
+ 	edict_t	*e;
+ 	qmodel_t	*m;
+ 

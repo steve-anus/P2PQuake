@@ -1,5 +1,16 @@
 --- a/Quake/cl_parse.c
 +++ b/Quake/cl_parse.c
+@@ -182,8 +182,8 @@
+ 	//johnfitz
+ 
+ 	//johnfitz -- check soundnum
+-	if (sound_num >= MAX_SOUNDS)
+-		Host_Error ("CL_ParseStartSoundPacket: %i > MAX_SOUNDS", sound_num);
++	if (sound_num < 0 || sound_num >= MAX_SOUNDS || !cl.sound_precache[sound_num])
++		Host_Error ("CL_ParseStartSoundPacket: bad sound_num %i", sound_num);
+ 	//johnfitz
+ 
+ 	if (ent > cl_max_edicts) //johnfitz -- no more MAX_EDICTS
 @@ -206,8 +206,8 @@
  
  	field_mask = MSG_ReadByte();
@@ -20,7 +31,16 @@
  			Host_Error ("CL_ParseModel: bad modnum");
  	}
  	else
-@@ -676,6 +676,8 @@
+@@ -630,6 +630,8 @@
+ 	//johnfitz
+ 
+ 	//johnfitz -- moved here from above
++	if (modnum < 0 || modnum >= MAX_MODELS)
++		Host_Error ("CL_ParseUpdate: bad modnum %i", modnum);
+ 	model = cl.model_precache[modnum];
+ 	if (model != ent->model)
+ 	{
+@@ -676,6 +678,8 @@
  	bits = (version == 2) ? MSG_ReadByte() : 0;
  	ent->baseline.modelindex = (bits & B_LARGEMODEL) ? MSG_ReadShort() : MSG_ReadByte();
  	ent->baseline.frame = (bits & B_LARGEFRAME) ? MSG_ReadShort() : MSG_ReadByte();
@@ -29,7 +49,7 @@
  	//johnfitz
  
  	ent->baseline.colormap = MSG_ReadByte();
-@@ -919,6 +921,9 @@
+@@ -919,6 +923,9 @@
  
  // copy it to the current state
  
@@ -39,7 +59,18 @@
  	ent->model = cl.model_precache[ent->baseline.modelindex];
  	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
  	ent->frame = ent->baseline.frame;
-@@ -1116,6 +1121,8 @@
+@@ -957,6 +964,10 @@
+ 	vol = MSG_ReadByte ();
+ 	atten = MSG_ReadByte ();
+ 
++	//QN -- hostile server: precache index fully validated before use
++	if (sound_num < 0 || sound_num >= MAX_SOUNDS || !cl.sound_precache[sound_num])
++		Host_Error ("CL_ParseStaticSound: bad sound_num %i", sound_num);
++
+ 	S_StaticSound (cl.sound_precache[sound_num], org, vol, atten);
+ }
+ 
+@@ -1116,6 +1127,8 @@
  
  		case svc_setview:
  			cl.viewentity = MSG_ReadShort ();

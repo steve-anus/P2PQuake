@@ -2183,6 +2183,7 @@ Host_Viewmodel_f
 */
 static void Host_Viewmodel_f (void)
 {
+	QN_GUARD_NAME();
 	edict_t	*e;
 	qmodel_t	*m;
 

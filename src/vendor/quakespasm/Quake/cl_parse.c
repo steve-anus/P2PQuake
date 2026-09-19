@@ -182,8 +182,8 @@ void CL_ParseStartSoundPacket(void)
 	//johnfitz
 
 	//johnfitz -- check soundnum
-	if (sound_num >= MAX_SOUNDS)
-		Host_Error ("CL_ParseStartSoundPacket: %i > MAX_SOUNDS", sound_num);
+	if (sound_num < 0 || sound_num >= MAX_SOUNDS || !cl.sound_precache[sound_num])
+		Host_Error ("CL_ParseStartSoundPacket: bad sound_num %i", sound_num);
 	//johnfitz
 
 	if (ent > cl_max_edicts) //johnfitz -- no more MAX_EDICTS
@@ -630,6 +630,8 @@ void CL_ParseUpdate (int bits)
 	//johnfitz
 
 	//johnfitz -- moved here from above
+	if (modnum < 0 || modnum >= MAX_MODELS)
+		Host_Error ("CL_ParseUpdate: bad modnum %i", modnum);
 	model = cl.model_precache[modnum];
 	if (model != ent->model)
 	{
@@ -961,6 +963,10 @@ void CL_ParseStaticSound (int version) //johnfitz -- added argument
 
 	vol = MSG_ReadByte ();
 	atten = MSG_ReadByte ();
+
+	//QN -- hostile server: precache index fully validated before use
+	if (sound_num < 0 || sound_num >= MAX_SOUNDS || !cl.sound_precache[sound_num])
+		Host_Error ("CL_ParseStaticSound: bad sound_num %i", sound_num);
 
 	S_StaticSound (cl.sound_precache[sound_num], org, vol, atten);
 }

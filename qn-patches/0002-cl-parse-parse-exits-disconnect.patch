@@ -9,7 +9,7 @@
  		ent->colormap = cl.scores[i-1].translations;
  	}
  	if (bits & U_SKIN)
-@@ -873,7 +873,7 @@
+@@ -875,7 +875,7 @@
  	byte	*dest, *source;
  
  	if (slot > cl.maxclients)
@@ -18,7 +18,7 @@
  	dest = cl.scores[slot].translations;
  	source = vid.colormap;
  	memcpy (dest, vid.colormap, sizeof(cl.scores[slot].translations));
-@@ -1128,7 +1128,7 @@
+@@ -1134,7 +1134,7 @@
  		case svc_lightstyle:
  			i = MSG_ReadByte ();
  			if (i >= MAX_LIGHTSTYLES)
@@ -27,7 +27,7 @@
  			q_strlcpy (cl_lightstyle[i].map, MSG_ReadString(), MAX_STYLESTRING);
  			cl_lightstyle[i].length = Q_strlen(cl_lightstyle[i].map);
  			//johnfitz -- save extra info
-@@ -1241,7 +1241,7 @@
+@@ -1247,7 +1247,7 @@
  		case svc_updatestat:
  			i = MSG_ReadByte ();
  			if (i < 0 || i >= MAX_CL_STATS)
