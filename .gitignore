@@ -7,7 +7,5 @@ gamedata/id1/
 .DS_Store
 # Compiled engine binary (build output).
 src/vendor/quakespasm/Quake/quakespasm
-# IDE project files; no build here uses them.
-src/vendor/quakespasm/Linux/CodeBlocks/
 # Game data is runtime-only, supplied per install; gamedata.sha256 records
 # the hashes for whatever sits in gamedata/id1/.
