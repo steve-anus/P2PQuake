@@ -171,9 +171,9 @@ already seen → close (gap spiral).
 |---------|----------------|----------------------------------------------------------|
 | 0x0001 KEY_BIND  | both directions   | 0x01 pubkey u8*32; 0x02 noise_binding: signature by pubkey over `sha256("QNWB" || min(ourNoise,theirNoise) || max(ourNoise,theirNoise))` — the two noise keys of this connection in ascending byte order, so both endpoints compute the same value (channel binding)  |
 | 0x0010 JOIN      | client→host    | 0x01 pubkey 32; 0x02 proof 16 (§5.1); 0x03 name 1..20 printable; 0x04 ver major u8; 0x05 ver minor u8; 0x06 manifest 32; 0x07 gamedir 1..32 printable; 0x08 engine_id 32 (§3.4a) |
-| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map 1..16; 0x03 your_client_slot u8 (unique among the current roster; the host must not reuse a live slot)   |
+| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map 1..16; 0x03 your_client_slot u8 (unique among the current roster; the host must not reuse a live slot); 0x06 manifest 32; 0x07 gamedir 1..32 printable; 0x08 engine_id 32; 0x09 host_pubkey 32 (§3.4a)   |
 | 0x0012 JOIN_NO   | host→client    | 0x01 cause u8 (§6.2)                                           |
-| 0x0020 ROSTER    | host→all       | 0x01 pubkeys: count u8 then count×32; 0x02 min_major u8; 0x03 min_minor u8; 0x04 epoch u64 LE strictly increasing (§3.4a) |
+| 0x0020 ROSTER    | host→all       | 0x01 pubkeys: count u8 then count×32; 0x02 min_major u8; 0x03 min_minor u8; 0x04 epoch u64 LE strictly increasing; 0x05 host_pubkey 32 (§3.4a) |
 | 0x0030 RELAY     | both           | 0x01 origin pubkey 32 — the engine-side sender: the host key or a member of the current signed ROSTER (§3.4a); 0x02 body ≤1100 (opaque engine-plane message body, host↔client legs) |
 | 0x0040 CHAT      | both           | 0x01 text 1..256 printable                                     |
 | 0x0050 BYE       | both           | (empty)                                                      |
@@ -218,6 +218,22 @@ the host key or a member of the current signed ROSTER — anything else
 closes. The engine attributes a gameplay sender from the host-assigned
 slot (JOIN_OK `your_client_slot`), never from this tag; the host, as sim
 authority, is what the signature on the envelope authenticates.
+
+Host key pinning (the invite). An invitation carries a join code and the
+host's long-term public key. The code admits members; the pinned key names
+who the client accepts as host. Every host-signed message (JOIN_OK, ROSTER,
+RELAY) must satisfy three-way equality: the `host_pubkey` claim it carries,
+the key the connection bound to at KEY_BIND, and the pinned key — all three
+equal, or the client closes that connection and warns the player the invite
+may have been forwarded or tampered with. JOIN_OK also carries the host's
+own `manifest`, `gamedir`, and `engine_id` (tags 0x06/0x07/0x08 as defined
+above): the client verifies byte equality against the values it computes
+from its own install before entering the match — the host→client direction
+of the asset lane, same rule, same verdict (`game files or engine differ
+from the host`). A client that joins by code alone, without a pinned key
+(an explicit open-invite choice), still gets the membership check but not
+the host identity check: the player is warned that host impersonation by a
+code holder is not detectable on that lane.
 
 **§3.4b Unknown-plane-B discipline.** Unknown Plane B envelopes (same major): an unknown type code, or a TLV
 tag outside the type's required set and outside the experimental range
@@ -414,12 +430,14 @@ F-V5	REJECT	31464e5101ff2000010000000a00653658be599701dc8f4eb7779fd3
 E-V1	ACCEPT	c4004e51000101001e28ac898b13e4800cb7a0802d5166c7010000006800010020000ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b930200400095141758f0ca577bddcb9d4e9f796c968dec4e984c6a3d95407e31f78935056b58dedd32a246c15274b06d35b67e0729a4c12f8f3bae683b1699fb4181915a011b892a307fa545fbe35e65d1b89c1394bc7fc95fd4566c87780ed8e939b148ac33facdd7861f5dbb38aff83ca58621cb0a70b7e44b81ed7b1869f545f6931c03
 E-V2	ACCEPT	f9004e51000110001e28ac898b13e4800cb7a0802d5166c7010000009d0001002000319abc8df3e8b181a7fdb59d2a4a3b53e0bc9a793b1833c6b73bf17ec1137264020010009f830d48648ecdf283e74fa8f37c326503000300626f6204000100000500010001060020008e849ad83e480e776e1d3577ec7719c42bcc5a24b8860ff604c1b44e015259020700030069643108002000f208ac8045898cc8bee0795c9618f90d83ddb46d67b0641ba1ba6c0e1b04afdb23810100aa0a176c7cbaa626546d76c8ef9e766c7d64a505710a0392db502ca6347233fa52db7ced72f0de5c54b8027e097c7ace45233c92c87cd74e6704b31863c95ba00f
 E-V3	ACCEPT	61004e51000112001e28ac898b13e4800cb7a0802d5166c701000000050001000100017afb6d45940edf35effcede79462859bd3671600fb1f46b03c1c23ab26e3b9171eae61d04bd9318519680d0d8667f62f72b344365d7aecea2e2b09eff5ded30e
-E-V4	ACCEPT	97004e51000120001e28ac898b13e4800cb7a0802d5166c7020000003b000100210001319abc8df3e8b181a7fdb59d2a4a3b53e0bc9a793b1833c6b73bf17ec11372640200010000030001000104000800070000000000000052e7f38b4e8fbac1e2922a721ef0cfc0c3f744e27902b5255d2f45489b449bb25241395a8448012756c2d5c3aed7b8af2fa1ace1edf06ba4d62a79d0ac572000
+E-V4	ACCEPT	bb004e51000120001e28ac898b13e4800cb7a0802d5166c7020000005f000100210001319abc8df3e8b181a7fdb59d2a4a3b53e0bc9a793b1833c6b73bf17ec113726402000100000300010001040008000700000000000000050020000ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b9393f7d96d52036a4cf052e47b230b86c0a88db435b5cf0fede9b8b4242054067459148b55543c7cddc258693b218dd6adc75d0f899e1b9b629bbf3aa4b9cc5206
 E-V5	ACCEPT	88004e51000130001e28ac898b13e4800cb7a0802d5166c7030000002c0001002000319abc8df3e8b181a7fdb59d2a4a3b53e0bc9a793b1833c6b73bf17ec113726402000400626f64790bd37d1ea624a6fbb2b7cc3ac9cc414851156febde2d3fc1e2a02d1bb9ad58ee2ca2223abac575d195309f6234db8117025c0a412067165d68f31d5f2780a70b
 E-V6	ACCEPT	62004e51000140001e28ac898b13e4800cb7a0802d5166c7030000000600010002006767cb5d6f8d51604340199c3641f74493a938eff5ad57810101cc0c397287d8666df461f78c638650e22a9c2c1133e4d75b20b1ebc422f6852993c05e90fa7c760b
 E-V7	ACCEPT	62004e51000140001e28ac898b13e4800cb7a0802d5166c7030000000600010002006767cb5d6f8d51604340199c3641f74493a938eff5ad57810101cc0c397287d8666df461f78c638650e22a9c2c1133e4d75b20b1ebc422f6852993c05e90fa7c760b
 E-V8	REJECT	62004e51010140001e28ac898b13e4800cb7a0802d5166c70400000006000100020067678279856a177e8112670df97a4755f2bc952137c698eafeb052e0a070ec3d4e49c3b4152fb4f684cdc9c090b5e937205cce79e06a945b203133e875889ca4aa0e
 E-V9	REJECT	62004e51000140001e28ac898b13e4800cb7a0802d5166c7030000000600010002009867cb5d6f8d51604340199c3641f74493a938eff5ad57810101cc0c397287d8666df461f78c638650e22a9c2c1133e4d75b20b1ebc422f6852993c05e90fa7c760b
+E-V10	ACCEPT	00014e51000111001e28ac898b13e4800cb7a0802d5166c705000000a40001002000d4f94fed1e26c11f383d540dad417939d5641ff3c5965abacbc6f84b824068ae0200040065316d310300010001060020008e849ad83e480e776e1d3577ec7719c42bcc5a24b8860ff604c1b44e015259020700030069643108002000f208ac8045898cc8bee0795c9618f90d83ddb46d67b0641ba1ba6c0e1b04afdb090020000ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b93737f2df4552c7c5bdc5beb4a1e1ca508bc10a17d160b82cb4b3fc9ed097dd2f65affb2e78a5593ab89a9f0f08519b31a673ea93a0bdc7dd9622309072181f70d
+E-V11	REJECT	00014e51000111001e28ac898b13e4800cb7a0802d5166c705000000a40001002000d4f94fed1e26c11f383d540dad417939d5641ff3c5965abacbc6f84b824068ae0200040065316d310300010001060020008e849ad83e480e776e1d3577ec7719c42bcc5a24b8860ff604c1b44e015259020700030069643108002000f208ac8045898cc8bee0795c9618f90d83ddb46d67b0641ba1ba6c0e1b04afdb090020000ee993f331cc2f341a0fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b93737f2df4552c7c5bdc5beb4a1e1ca508bc10a17d160b82cb4b3fc9ed097dd2f65affb2e78a5593ab89a9f0f08519b31a673ea93a0bdc7dd9622309072181f70d
 ```
 
 `ACCEPT` vectors must decode and verify; `REJECT` vectors must fail as noted

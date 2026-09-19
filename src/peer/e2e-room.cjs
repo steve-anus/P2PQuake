@@ -40,6 +40,9 @@ for (const role of ['ok', 'badproof', 'lowver', 'mismatch', 'badname']) {
 }
 
 const MIN_MAJOR = E.MAJOR, MIN_MINOR = E.MINOR; // host demands current minor
+// What the player received alongside the join code (spec 3.4a host key
+// pinning): the host's long-term public key, pinned by the invite.
+const HOST_PIN = Buffer.from(hostPub);
 
 const results = new Map();
 const note = (n) => { results.set(n, true); console.log('OK  ', n); };
@@ -63,9 +66,11 @@ function requireTags(payload, tags) {
 const TAG_SIZES = {
   [E.TYPES.JOIN]: { 1: [32, 32], 2: [16, 16], 3: [1, 20], 4: [1, 1], 5: [1, 1],
     6: [32, 32], 7: [1, 32], 8: [32, 32] },
-  [E.TYPES.JOIN_OK]: { 1: [32, 32], 2: [1, 16], 3: [1, 1] },
+  [E.TYPES.JOIN_OK]: { 1: [32, 32], 2: [1, 16], 3: [1, 1],
+    6: [32, 32], 7: [1, 32], 8: [32, 32], 9: [32, 32] },
   [E.TYPES.JOIN_NO]: { 1: [1, 1] },
-  [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8] },
+  [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8],
+    5: [32, 32] },
   [E.TYPES.CHAT]: { 1: [1, 256] },
 };
 function checkTagSizes(env) {
@@ -179,7 +184,9 @@ host.on('connection', (conn) => {
             slotMap.set(who.toString('hex'), slot);
             send(E.TYPES.JOIN_OK, [[1, Buffer.from(
               sha(roster.map((r) => r.toString('hex')).join('')))],
-              [2, Buffer.from('e1m1')], [3, Buffer.from([slot])]]);
+              [2, Buffer.from('e1m1')], [3, Buffer.from([slot])],
+              [6, Buffer.from(MANIFEST_ID)], [7, Buffer.from(GAMDIR)],
+              [8, Buffer.from(ENGINE_ID)], [9, Buffer.from(hostPub)]]);
             broadcastRoster();
             continue;
           }
@@ -225,7 +232,7 @@ function broadcastRoster() {
     conn.write(E.encodeEnvelope({ type: E.TYPES.ROSTER, matchId, seq: st.seqOut,
       payload: F.encodeTLV([[1, Buffer.concat([Buffer.from([roster.length]), ...roster])],
         [2, Buffer.from([MIN_MAJOR])], [3, Buffer.from([MIN_MINOR])],
-        [4, epochBuf]]) }, hostPriv));
+        [4, epochBuf], [5, Buffer.from(hostPub)]]) }, hostPriv));
   }
 }
 
@@ -295,9 +302,25 @@ function runClient(role) {
           }
           env = inbound(raw, st.bound, st.win);
           if (env.replayed) { goal.replaySeen = true; continue; }
+          if ((env.type === E.TYPES.JOIN_OK || env.type === E.TYPES.ROSTER ||
+               env.type === E.TYPES.RELAY) &&
+              !(st.bound && st.bound.equals(HOST_PIN))) {
+            // A host-signed message from a peer not bound to the invite's
+            // pinned key: close that connection (spec 3.4a); the join
+            // continues on the pinned host's own connection.
+            st.rogue = true;
+            goal.rogueClosed = (goal.rogueClosed || 0) + 1;
+            conn.destroy();
+            return;
+          }
           if (env.type === E.TYPES.JOIN_OK && role === 'ok') {
             checkTagSizes(env);
-            requireTags(env.payload, [1, 2, 3]);
+            const t = requireTags(env.payload, [1, 2, 3, 6, 7, 8, 9]);
+            if (!t.get(9).equals(st.bound))
+              throw new E.EnvelopeError('host key claim != bound key');
+            if (!t.get(6).equals(MANIFEST_ID) || !t.get(7).equals(GAMDIR) ||
+                !t.get(8).equals(ENGINE_ID))
+              throw new E.EnvelopeError('host assets differ from this install (spec 3.4a)');
             st.unknownRun = 0;
             st.got.joinOk = true;
             send(E.TYPES.CHAT, [[1, Buffer.from('hello from client')]]);
@@ -311,8 +334,10 @@ function runClient(role) {
           }
           if (env.type === E.TYPES.ROSTER && role === 'ok') {
             checkTagSizes(env);
-            const epoch = requireTags(env.payload, [1, 2, 3, 4]).get(4)
-              .readBigUInt64LE();
+            const t = requireTags(env.payload, [1, 2, 3, 4, 5]);
+            if (!t.get(5).equals(st.bound))
+              throw new E.EnvelopeError('roster host key claim != bound key');
+            const epoch = t.get(4).readBigUInt64LE();
             if (st.rosterEpoch === undefined) st.rosterEpoch = -1n;
             if (epoch <= st.rosterEpoch)
               throw new E.EnvelopeError('roster epoch regression (§3.4a)');
@@ -330,9 +355,83 @@ function runClient(role) {
       }
     });
     conn.on('error', () => {});
-    conn.on('close', () => { if (!st.got.joinOk) settle('closed early'); });
+    conn.on('close', () => { if (!st.got.joinOk && !st.rogue) settle('closed early'); });
   });
   return { goal, swarm, done };
+}
+
+// ---------------- rogue announcer ----------------
+// A second server-side announcer on the same topic with its own long-term
+// key. It completes the handshake and answers a joined member with
+// host-signed messages, so the three-way equality rule is exercised
+// end-to-end: the client must close this peer's connection and still join
+// the pinned host (spec 3.4a). Non-joined roles are left in peace so their
+// verdicts come only from the real host.
+function runRogue() {
+  const priv = E.privateKeyFromSeed(sha('e2e-rogue-host'));
+  const pub = E.publicRaw(E.publicKeyFromSeed(sha('e2e-rogue-host')));
+  const swarm = new Hyperswarm({ dht });
+  const tally = { attacked: 0, closedByPeer: 0 };
+  let epoch = 0n;
+  swarm.on('connection', (conn) => {
+    const st = { reader: new E.EnvelopeReader(), bound: null,
+      win: new E.SeqWindow(), bucket: new E.RateBucket(), seqOut: 0, attacked: false };
+    conn.on('close', () => { if (st.attacked) tally.closedByPeer++; });
+    const send = (type, fields) => {
+      st.seqOut++;
+      conn.write(E.encodeEnvelope({ type, matchId, seq: st.seqOut,
+        payload: F.encodeTLV(fields) }, priv));
+    };
+    conn.on('data', (chunk) => {
+      let bufs;
+      try { bufs = st.reader.feed(chunk); }
+      catch (e) { console.log('rogue reader err:', e.message); conn.destroy(); return; }
+      for (const raw of bufs) {
+        if (!st.bucket.consume()) return;
+        try {
+          let env;
+          if (!st.bound) {
+            const len = raw.readUInt16LE(2 + 2 + 1 + 1 + 2 + 16 + 4);
+            const payload = raw.subarray(2 + E.HEAD_LEN, 2 + E.HEAD_LEN + len);
+            const pre = new Map(F.decodeTLV(payload).map((f) => [f.tag, f.value]));
+            const claimed = pre.get(1);
+            if (!claimed || claimed.length !== 32) { conn.destroy(); return; }
+            env = E.decodeEnvelope(raw, claimed, { expectedMatchId: matchId });
+            if (env.type !== E.TYPES.KEY_BIND) { conn.destroy(); return; }
+            if (st.win.check(env.seq) !== 'accept') { conn.destroy(); return; }
+            st.bound = claimed;
+            send(E.TYPES.KEY_BIND, [[1, Buffer.from(pub)],
+              [2, Buffer.from(E.signWith(priv,
+                E.noiseBindingContext(swarm.keyPair.publicKey,
+                  conn.remotePublicKey)))]]);
+            continue;
+          }
+          env = inbound(raw, st.bound, st.win);
+          if (env.replayed) continue;
+          if (env.type === E.TYPES.JOIN && !st.attacked) {
+            const name = F.decodeTLV(env.payload).find((f) => f.tag === 3);
+            if (name && name.value.length === 2 && name.value[0] === 0x6f &&
+                name.value[1] === 0x6b) {
+              st.attacked = true; tally.attacked++;
+              send(E.TYPES.JOIN_OK, [[1, sha('rogue-roster')],
+                [2, Buffer.from('e1m1')], [3, Buffer.from([9])],
+                [6, Buffer.from(MANIFEST_ID)], [7, Buffer.from(GAMDIR)],
+                [8, Buffer.from(ENGINE_ID)], [9, Buffer.from(pub)]]);
+              epoch++;
+              const ep = Buffer.alloc(8);
+              ep.writeBigUInt64LE(epoch);
+              send(E.TYPES.ROSTER, [[1, Buffer.concat(
+                [Buffer.from([1]), Buffer.from(pub)])],
+                [2, Buffer.from([MIN_MAJOR])], [3, Buffer.from([MIN_MINOR])],
+                [4, ep], [5, Buffer.from(pub)]]);
+            }
+          }
+        } catch (e) { console.log('rogue err:', e.stack || e.message); conn.destroy(); return; }
+      }
+    });
+    conn.on('error', () => {});
+  });
+  return { swarm, tally };
 }
 
 // ---------------- run ----------------
@@ -344,6 +443,8 @@ const guard = setTimeout(() => {
 (async () => {
   const hostDisc = host.join(topic, { server: true, client: false });
   await hostDisc.flushed(); // visible on the DHT before clients look for it
+  const rogue = runRogue();
+  await rogue.swarm.join(topic, { server: true, client: false }).flushed();
   const cOk = runClient('ok');
   const cBad = runClient('badproof');
   const cLow = runClient('lowver');
@@ -388,10 +489,18 @@ const guard = setTimeout(() => {
   cOk.goal.replaySeen ? note('mid-session replay flagged by receiver, not executed')
     : failNote('replay', 'receiver did not flag the duplicate');
 
+  // The host key pin check: the rogue answered the joined member with
+  // host-signed messages; the client must have closed that connection
+  // while the join over the pinned host's connection stands.
+  cOk.goal.rogueClosed >= 1 && rogue.tally.attacked >= 1 &&
+    rogue.tally.closedByPeer >= 1 && results.get('client joins by proof+signature')
+    ? note('non-pinned host closed by the client; the pinned host still joins')
+    : failNote('hostpin', `rogueClosed=${cOk.goal.rogueClosed} attacked=${rogue.tally.attacked} closed=${rogue.tally.closedByPeer}`);
+
   const allPass = [...results.values()].every(Boolean);
   console.log(allPass ? 'E2E OK:' : 'E2E FAILED:', results.size, 'assertions');
   clearTimeout(guard);
-  await Promise.allSettled([host.destroy(), cOk.swarm.destroy(),
+  await Promise.allSettled([host.destroy(), rogue.swarm.destroy(), cOk.swarm.destroy(),
     cBad.swarm.destroy(), cLow.swarm.destroy(), cMis.swarm.destroy(),
     cName.swarm.destroy()]);
   process.exit(allPass ? 0 : 1);

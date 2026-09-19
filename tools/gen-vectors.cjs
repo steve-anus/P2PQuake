@@ -56,7 +56,8 @@ addE('E-V3', env({ type: E.TYPES.JOIN_NO, seq: 1, payload:
 addE('E-V4', env({ type: E.TYPES.ROSTER, seq: 2, payload:
   F.encodeTLV([[1, Buffer.concat([Buffer.from([1]), pubBRaw])],
     [2, Buffer.from([0])], [3, Buffer.from([1])],
-    [4, Buffer.from([7, 0, 0, 0, 0, 0, 0, 0])]]) }, privA), true); // epoch = 7
+    [4, Buffer.from([7, 0, 0, 0, 0, 0, 0, 0])],
+    [5, Buffer.from(pubARaw)]]) }, privA), true); // epoch = 7; host key claim
 addE('E-V5', env({ type: E.TYPES.RELAY, seq: 3, payload:
   F.encodeTLV([[1, Buffer.from(pubBRaw)], [2, Buffer.from('body')]]) }, privA), true);
 const chat = env({ type: E.TYPES.CHAT, seq: 3, payload:
@@ -66,6 +67,13 @@ addE('E-V7', Buffer.from(chat), true, 'byte-identical E-V6; REJECT via SeqWindow
 addE('E-V8', env({ type: E.TYPES.CHAT, seq: 4, payload:
   F.encodeTLV([[1, Buffer.from('gg')]]) }, privB, { major: 1 }), false);
 addE('E-V9', flip(chat, 2 + E.HEAD_LEN + 4), false); // chat TEXT (payload value) corrupted
+const joinOk = env({ type: E.TYPES.JOIN_OK, seq: 5, payload:
+  F.encodeTLV([[1, sha('p2pquake-roster-hash')], [2, Buffer.from('e1m1')],
+    [3, Buffer.from([1])], [6, sha('p2pquake-manifest')],
+    [7, Buffer.from('id1')], [8, sha('p2pquake-engine')],
+    [9, Buffer.from(pubARaw)]]) }, privA);
+addE('E-V10', joinOk, true); // host identity + claimed host key
+addE('E-V11', flip(joinOk, 2 + E.HEAD_LEN + 140), false); // host_pubkey value corrupted -> signature mismatch
 
 // --- self-check ---
 let bad = 0;
@@ -92,7 +100,8 @@ for (const v of vectors) {
   // Plane B: which key verifies depends on the sender inside the vector
   const senderOf = { 'E-V1': pubARaw, 'E-V2': pubBRaw, 'E-V3': pubARaw,
     'E-V4': pubARaw, 'E-V5': pubARaw, 'E-V6': pubBRaw, 'E-V7': pubBRaw,
-    'E-V8': pubBRaw, 'E-V9': pubBRaw }[v.id];
+    'E-V8': pubBRaw, 'E-V9': pubBRaw, 'E-V10': pubARaw,
+    'E-V11': pubARaw }[v.id];
   if (!v.accept) { // E-V8 old major
     try { E.decodeEnvelope(v.buf, senderOf); fail(v.id, 'expected major rejection'); }
     catch (e) { if (!(e instanceof E.EnvelopeError)) fail(v.id, e.message); }
@@ -112,6 +121,8 @@ for (const v of vectors) {
   const d = E.decodeEnvelope(vectors.find((v) => v.id === 'E-V4').buf, pubARaw);
   const f = Object.fromEntries(F.decodeTLV(d.payload).map((x) => [x.tag, x.value]));
   if (f[1].length !== 1 + 32 || f[2][0] !== 0 || f[3][0] !== 1) fail('E-V4', 'fields');
+  if (!f[5] || f[5].length !== 32 || !f[5].equals(Buffer.from(pubARaw)))
+    fail('E-V4', 'host key claim');
 }
 if (bad) process.exit(1);
 
