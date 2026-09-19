@@ -34,9 +34,6 @@ read -r ans
 git -C "$CACHE" checkout -q "$REF"
 rm -rf "$ROOT/src/vendor/quakespasm"
 mkdir -p "$ROOT/src/vendor/quakespasm"
-# The vendored tree is Linux-only: other platforms' prebuilt binaries and
-# IDE files never participate in a build here. Quake/, docs, LICENSE and
-# Misc/ (which holds the quakespasm.pak sources) are kept.
 tar -C "$CACHE" --exclude=./.git --exclude=./MacOSX --exclude=./Windows \
     --exclude=./Linux -cf - . \
   | tar -C "$ROOT/src/vendor/quakespasm" -xf -
