@@ -171,10 +171,10 @@ already seen → close (gap spiral).
 |---------|----------------|----------------------------------------------------------|
 | 0x0001 KEY_BIND  | both directions   | 0x01 pubkey u8*32; 0x02 noise_binding: signature by pubkey over `sha256("QNWB" || min(ourNoise,theirNoise) || max(ourNoise,theirNoise))` — the two noise keys of this connection in ascending byte order, so both endpoints compute the same value (channel binding)  |
 | 0x0010 JOIN      | client→host    | 0x01 pubkey 32; 0x02 proof 16 (§5.1); 0x03 name 1..20 printable; 0x04 ver major u8; 0x05 ver minor u8; 0x06 manifest 32; 0x07 gamedir 1..32 printable; 0x08 engine_id 32 (§3.4a) |
-| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map 1..16; 0x03 your_client_slot u8   |
+| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map 1..16; 0x03 your_client_slot u8 (unique among the current roster; the host must not reuse a live slot)   |
 | 0x0012 JOIN_NO   | host→client    | 0x01 cause u8 (§6.2)                                           |
 | 0x0020 ROSTER    | host→all       | 0x01 pubkeys: count u8 then count×32; 0x02 min_major u8; 0x03 min_minor u8; 0x04 epoch u64 LE strictly increasing (§3.4a) |
-| 0x0030 RELAY     | both           | 0x01 origin pubkey 32 — MUST equal the envelope's bound key (§3.4a); 0x02 body ≤1100 (opaque engine-plane message body, host↔client legs) |
+| 0x0030 RELAY     | both           | 0x01 origin pubkey 32 — the engine-side sender: the host key or a member of the current signed ROSTER (§3.4a); 0x02 body ≤1100 (opaque engine-plane message body, host↔client legs) |
 | 0x0040 CHAT      | both           | 0x01 text 1..256 printable                                     |
 | 0x0050 BYE       | both           | (empty)                                                      |
 | 0x00FF PING      | both           | 0x01 nonce u32                                               |
@@ -187,7 +187,10 @@ identity of the software a peer actually runs:
   peer's gamedata is verified against;
 * `gamedir` = the active game directory (`id1` by default);
 * `engine_id` = SHA-256 over the bytes of the engine binary qn-peer spawned
-  for this match.
+  for this match. The identity must bind to the bytes actually executed:
+  hash via the fd used for exec, or re-verify the running image
+  (`/proc/<pid>/exe`) before JOIN_OK; a recheck mismatch is ASSET_MISMATCH
+  — stop, not continue (closes the hash-then-swap TOCTOU).
 
 The host computes all three locally and requires byte equality with the
 JOIN claims; any mismatch → JOIN_NO cause 7 (`ASSET_MISMATCH`). Claims are
@@ -200,8 +203,27 @@ identity pins the manifest, the directory, and the exact engine bytes.
 ROSTER `epoch` is a strictly increasing little-endian u64 the host re-signs
 with every roster mutation. A client keeps the highest (epoch, roster) pair
 seen; a ROSTER at or below the stored epoch is a protocol violation →
-close, never merge. This defeats stale or duplicate announcers on a reused
-join-code topic and unauthorized roster edits.
+close, never merge. A client's (epoch, roster) state is keyed by
+(host key, match_id) and persists across reconnections for the life of
+the match; the host seeds its counter from persisted state and never
+restarts it at zero on a reused topic. This defeats stale or duplicate
+announcers on a reused join-code topic and unauthorized roster edits.
+
+RELAY trust (§3.4a): the host is the only RELAY source for clients. A
+client accepts RELAY only on the connection bound to the host key pinned
+by its invite, and RELAY on any other connection is a protocol violation
+→ close. A host accepts client RELAY only with origin equal to that
+connection's bound key. In every accepted RELAY the origin tag must be
+the host key or a member of the current signed ROSTER — anything else
+closes. The engine attributes a gameplay sender from the host-assigned
+slot (JOIN_OK `your_client_slot`), never from this tag; the host, as sim
+authority, is what the signature on the envelope authenticates.
+
+**§3.4b Unknown-plane-B discipline.** Unknown Plane B envelopes (same major): an unknown type code, or a TLV
+tag outside the type's required set and outside the experimental range
+0x8000..0xFFFF, fails that envelope — drop and count it; more than 10
+consecutive counted envelopes → close, mirroring Plane A. Experimental
+tags (0x8000..0xFFFF) are skipped silently.
 
 The noise keys in KEY_BIND are the two transport keys of this connection
 (`remotePublicKey` plus the signer's own node key, both from the transport
@@ -244,7 +266,10 @@ test (see the test suite names in parentheses):
    **stdin** as the very first thing it does after spawning. The token is
    never placed in argv, the environment, logs, console output, or any file.
 3. qn-peer reads 32 bytes from stdin, connects to the socket, and sends
-   type `AUTH` with exactly those bytes as the first frame.
+   type `AUTH` with exactly those bytes as the first frame. AUTH is the sole
+   pre-authentication frame and carries seq = 1; per-direction sequence
+   numbers increase strictly and never restart, so the next peer→engine
+   frame carries seq = 2.
 4. The engine compares with a constant-time equality. Any other first
    frame, any mismatch, or timeout 5 s → close; qn-peer then exits.
 5. Until AUTH passes, the engine accepts no other frame. After AUTH passes,
@@ -366,8 +391,11 @@ Generated by `tools/gen-vectors.cjs` (fixed test seeds; rerun and diff — outpu
 is deterministic). Key material and derivation:
 
 ```
-sha256 of code: 653658be599701dc8f4e
-pubkeys(raw): {
+join_code (raw hex): 653658be599701dc8f4e   (topic = sha256(join_code), match_id = topic[0..16))
+pubkeys(raw hex):
+  A: 0ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b93
+  B: 319abc8df3e8b181a7fdb59d2a4a3b53e0bc9a793b1833c6b73bf17ec1137264
+# (legacy heading kept for diff stability):
 ```
 
 ### 7.1 Plane A frames (`QN…` magic per §2.1)

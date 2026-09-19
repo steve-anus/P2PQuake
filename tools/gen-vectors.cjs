@@ -118,5 +118,5 @@ if (bad) process.exit(1);
 for (const v of vectors) {
   console.log(`${v.id}\t${v.accept ? 'ACCEPT' : 'REJECT'}\t${v.buf.toString('hex')}`);
 }
-console.log('# sha256 of code:', sha('p2pquake-vector-code').subarray(0, 10).toString('hex'));
+console.log('# join_code (raw hex):', sha('p2pquake-vector-code').subarray(0, 10).toString('hex')); // topic = sha256(join_code)
 console.log('# pubkeys(raw):', { A: pubARaw.toString('hex'), B: pubBRaw.toString('hex') });
