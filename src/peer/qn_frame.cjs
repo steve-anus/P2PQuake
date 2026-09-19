@@ -126,8 +126,8 @@ class FrameReader {
         throw new FrameError('seq regression'); // spec §2.2: close
       }
       this.lastSeq = d.frame.seq;
-      // Unknown types are drop-and-count for callers holding a known set;
-      // count here, hand the frame to the caller to decide.
+      // Unknown types pass through: consumers holding a known set must
+      // drop-and-count consecutive unknowns and close past the limit (§2.3).
       out.push(d.frame);
     }
     return out;

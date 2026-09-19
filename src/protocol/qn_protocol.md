@@ -170,12 +170,12 @@ already seen → close (gap spiral).
 | type    | dir            | required TLV tags                                        |
 |---------|----------------|----------------------------------------------------------|
 | 0x0001 KEY_BIND  | both directions   | 0x01 pubkey u8*32; 0x02 noise_binding: signature by pubkey over `sha256("QNWB" || min(ourNoise,theirNoise) || max(ourNoise,theirNoise))` — the two noise keys of this connection in ascending byte order, so both endpoints compute the same value (channel binding)  |
-| 0x0010 JOIN      | client→host    | 0x01 pubkey 32; 0x02 proof 16 (§5.1); 0x03 name ≤20; 0x04 ver major u8; 0x05 ver minor u8 |
-| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map ≤16; 0x03 your_client_slot u8   |
+| 0x0010 JOIN      | client→host    | 0x01 pubkey 32; 0x02 proof 16 (§5.1); 0x03 name 1..20; 0x04 ver major u8; 0x05 ver minor u8 |
+| 0x0011 JOIN_OK   | host→client    | 0x01 roster_hash 32; 0x02 map 1..16; 0x03 your_client_slot u8   |
 | 0x0012 JOIN_NO   | host→client    | 0x01 cause u8 (§6.2)                                           |
 | 0x0020 ROSTER    | host→all       | 0x01 pubkeys: count u8 then count×32; 0x02 min_major u8; 0x03 min_minor u8; 0x04 nonce 8 |
 | 0x0030 RELAY     | both           | 0x01 origin pubkey 32; 0x02 body ≤1100 (opaque engine-plane message body, host↔client legs) |
-| 0x0040 CHAT      | both           | 0x01 text ≤256 printable                                     |
+| 0x0040 CHAT      | both           | 0x01 text 1..256 printable                                     |
 | 0x0050 BYE       | both           | (empty)                                                      |
 | 0x00FF PING      | both           | 0x01 nonce u32                                               |
 | 0x0100 PONG      | both           | 0x01 nonce u32                                               |

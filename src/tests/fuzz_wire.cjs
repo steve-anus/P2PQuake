@@ -2,7 +2,7 @@
 // Randomized mutation fuzzer for qn-peer's wire parsing (no clang needed): randomized
 // mutation of valid Plane B envelopes and Plane A frames, run through the
 // real readers. Legal outcomes: known error types only (EnvelopeError,
-// FrameError, TLVError, RangeError) — anything else (TypeError etc) or a
+// FrameError, TLVError) — anything else (TypeError etc) or a
 // hang is a bug. Usage: make fuzz-node [QN_RUNS=n]
 const crypto = require('node:crypto');
 const F = require('../peer/qn_frame.cjs');

@@ -74,6 +74,9 @@ function checkTagSizes(env) {
     const n1 = sizes.get(1);
     if (n1 < 1 || (n1 - 1) % 32 !== 0)
       throw new F.TLVError('roster pubkey list malformed');
+    const t1 = seen.find((x) => x.tag === 1).value;
+    if (t1[0] !== (n1 - 1) / 32)
+      throw new F.TLVError('roster count byte disagrees with entries');
   }
   if (env.type === E.TYPES.CHAT) {
     for (const b of requireTags(env.payload, [1]).get(1))
@@ -159,7 +162,6 @@ host.on('connection', (conn) => {
             hostSeenChat = requireTags(env.payload, [1]).get(1).toString();
             continue;
           case E.TYPES.BYE:
-            st.closed = true;
             dropFromRoster(st);
             continue;
           default:
