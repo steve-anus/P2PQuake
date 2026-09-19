@@ -163,3 +163,8 @@ test('display codes are 16 Crockford chars, losslessly round-tripped', () => {
     }
   });
 }
+
+test('join-lane wire constants pinned to spec (§3.4a, §6.2)', () => {
+  assert.equal(E.CAUSES.ASSET_MISMATCH, 7);
+  assert.equal(Object.keys(E.CAUSES).length, 7);
+});

@@ -6,6 +6,8 @@
 // deliberate mid-session replay the receiver must flag, not execute.
 // Exit 0 = every assertion held.
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const Hyperswarm = require('hyperswarm');
 const DHT = require('hyperdht'); // one shared node: production shape, and it
                                  // stops re-bootstrapping the public commons
@@ -17,6 +19,12 @@ const R = require('./qn_room.cjs');
 const dht = new DHT();
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest();
+const shaBuf = (b) => crypto.createHash('sha256').update(b).digest();
+// Real asset & build identity (§3.4a), computed from the bytes we actually use.
+const MANIFEST_ID = shaBuf(fs.readFileSync(path.join(__dirname, '..', '..', 'gamedata.sha256')));
+const ENGINE_ID = shaBuf(fs.readFileSync(path.join(__dirname, '..', 'vendor',
+  'quakespasm', 'Quake', 'quakespasm')));
+const GAMDIR = Buffer.from('id1');
 const code = R.randomJoinCode(); // fresh topic per run: no stale advertisements
 const topic = R.topicOf(code);
 const matchId = R.matchIdOf(code);
@@ -24,7 +32,7 @@ const matchId = R.matchIdOf(code);
 const hostPriv = E.privateKeyFromSeed(sha('e2e-host'));
 const hostPub = E.publicRaw(E.publicKeyFromSeed(sha('e2e-host')));
 const clientKeys = {}; // role -> {priv, pub}
-for (const role of ['ok', 'badproof', 'lowver']) {
+for (const role of ['ok', 'badproof', 'lowver', 'mismatch', 'badname']) {
   clientKeys[role] = {
     priv: E.privateKeyFromSeed(sha('e2e-client-' + role)),
     pub: E.publicRaw(E.publicKeyFromSeed(sha('e2e-client-' + role))),
@@ -53,7 +61,8 @@ function requireTags(payload, tags) {
 
 // Required tag sizes from the wire table (spec 3.4); a wrong size closes.
 const TAG_SIZES = {
-  [E.TYPES.JOIN]: { 1: [32, 32], 2: [16, 16], 3: [1, 20], 4: [1, 1], 5: [1, 1] },
+  [E.TYPES.JOIN]: { 1: [32, 32], 2: [16, 16], 3: [1, 20], 4: [1, 1], 5: [1, 1],
+    6: [32, 32], 7: [1, 32], 8: [32, 32] },
   [E.TYPES.JOIN_OK]: { 1: [32, 32], 2: [1, 16], 3: [1, 1] },
   [E.TYPES.JOIN_NO]: { 1: [1, 1] },
   [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8] },
@@ -81,6 +90,10 @@ function checkTagSizes(env) {
   if (env.type === E.TYPES.CHAT) {
     for (const b of requireTags(env.payload, [1]).get(1))
       if (b < 0x20 || b > 0x7e) throw new F.TLVError('chat not printable');
+  }
+  if (env.type === E.TYPES.JOIN) {
+    for (const b of requireTags(env.payload, [3]).get(3))
+      if (b < 0x20 || b > 0x7e) throw new F.TLVError('name not printable');
   }
 }
 
@@ -140,12 +153,14 @@ host.on('connection', (conn) => {
           case E.TYPES.JOIN: {
             if (st.joined) throw new E.EnvelopeError('second JOIN on bound conn');
             checkTagSizes(env);
-            const t = requireTags(env.payload, [1, 2, 3, 4, 5]);
+            const t = requireTags(env.payload, [1, 2, 3, 4, 5, 6, 7, 8]);
             const who = t.get(1);
             if (!who.equals(st.bound)) throw new E.EnvelopeError('identity mismatch');
             if (t.get(4)[0] !== MIN_MAJOR || t.get(5)[0] < MIN_MINOR)
               return refuse(E.CAUSES.VERSION_TOO_OLD);
             if (!R.verifyProof(code, who, t.get(2))) return refuse(E.CAUSES.BAD_PROOF);
+            if (!t.get(6).equals(MANIFEST_ID) || !t.get(7).equals(GAMDIR) ||
+                !t.get(8).equals(ENGINE_ID)) return refuse(E.CAUSES.ASSET_MISMATCH);
             if (roster.length >= 8) return refuse(E.CAUSES.MATCH_FULL);
             if (roster.some((r) => r.equals(who))) return refuse(E.CAUSES.DUP_IDENTITY);
             st.joined = true;
@@ -184,14 +199,18 @@ function dropFromRoster(st) {
   if (i >= 0) { roster.splice(i, 1); broadcastRoster(); }
 }
 
+let rosterEpoch = 0n;
 function broadcastRoster() {
+  rosterEpoch++;
+  const epochBuf = Buffer.alloc(8);
+  epochBuf.writeBigUInt64LE(rosterEpoch);
   for (const [conn, st] of hostConns) {
     if (!st.joined) continue;
     st.seqOut++;
     conn.write(E.encodeEnvelope({ type: E.TYPES.ROSTER, matchId, seq: st.seqOut,
       payload: F.encodeTLV([[1, Buffer.concat([Buffer.from([roster.length]), ...roster])],
         [2, Buffer.from([MIN_MAJOR])], [3, Buffer.from([MIN_MINOR])],
-        [4, sha('e2e-nonce').subarray(0, 8)]]) }, hostPriv));
+        [4, epochBuf]]) }, hostPriv));
   }
 }
 
@@ -245,9 +264,15 @@ function runClient(role) {
             st.bound = claimed;
             const proof = role === 'badproof' ? Buffer.alloc(16, 0) : R.proofOf(code, pub);
             const minor = role === 'lowver' ? 0 : E.MINOR;
+            const manifest = role === 'mismatch'
+              ? Buffer.from(MANIFEST_ID).fill(MANIFEST_ID[0] ^ 0xff, 0, 1)
+              : Buffer.from(MANIFEST_ID);
             const fields = [[1, Buffer.from(pub)], [2, Buffer.from(proof)],
               [3, Buffer.from(role)], [4, Buffer.from([E.MAJOR])],
-              [5, Buffer.from([minor])]];
+              [5, Buffer.from([minor])], [6, manifest], [7, Buffer.from(GAMDIR)],
+              [8, Buffer.from(ENGINE_ID)]];
+            if (role === 'badname')
+              fields[2][1] = Buffer.from([0x07, 0x1b, 0x5b, 0x33, 0x31, 0x6d]); // BEL+ANSI
             if (role === 'ok') fields.push([0x8123, Buffer.from([7])]); // guard (b)
             send(E.TYPES.JOIN, fields);
             continue;
@@ -270,7 +295,12 @@ function runClient(role) {
           }
           if (env.type === E.TYPES.ROSTER && role === 'ok') {
             checkTagSizes(env);
-            requireTags(env.payload, [1, 2, 3, 4]);
+            const epoch = requireTags(env.payload, [1, 2, 3, 4]).get(4)
+              .readBigUInt64LE();
+            if (st.rosterEpoch === undefined) st.rosterEpoch = -1n;
+            if (epoch <= st.rosterEpoch)
+              throw new E.EnvelopeError('roster epoch regression (§3.4a)');
+            st.rosterEpoch = epoch;
             st.unknownRun = 0;
             if (st.got.joinOk) settle('joined');
             continue;
@@ -301,13 +331,20 @@ const guard = setTimeout(() => {
   const cOk = runClient('ok');
   const cBad = runClient('badproof');
   const cLow = runClient('lowver');
+  const cMis = runClient('mismatch');
+  const cName = runClient('badname');
 
-  const [rOk, rBad, rLow] = await Promise.all([cOk.done, cBad.done, cLow.done]);
+  const [rOk, rBad, rLow, rMis, rName] = await Promise.all(
+    [cOk.done, cBad.done, cLow.done, cMis.done, cName.done]);
   rOk === 'joined' ? note('client joins by proof+signature') : failNote('join', rOk);
   rBad === `refused:${E.CAUSES.BAD_PROOF}` ? note('bad proof refused with cause 2')
     : failNote('badproof', rBad);
   rLow === `refused:${E.CAUSES.VERSION_TOO_OLD}` ? note('below-minimum version refused with cause 1')
     : failNote('lowver', rLow);
+  rMis === `refused:${E.CAUSES.ASSET_MISMATCH}` ? note('tampered asset identity refused with cause 7')
+    : failNote('mismatch', rMis);
+  rName === 'closed early' ? note('non-printable name kills the connection at parse (name contract)')
+    : failNote('badname', rName);
   note('unknown experimental TLV skipped, not fatal (guard b)');
   // CHAT may still be in flight when the client resolves (ROSTER and CHAT
   // cross on the wire) — poll with a deadline instead of a racy one-shot.
@@ -336,7 +373,8 @@ const guard = setTimeout(() => {
   console.log(allPass ? 'E2E OK:' : 'E2E FAILED:', results.size, 'assertions');
   clearTimeout(guard);
   await Promise.allSettled([host.destroy(), cOk.swarm.destroy(),
-    cBad.swarm.destroy(), cLow.swarm.destroy()]);
+    cBad.swarm.destroy(), cLow.swarm.destroy(), cMis.swarm.destroy(),
+    cName.swarm.destroy()]);
   process.exit(allPass ? 0 : 1);
 })().catch((e) => {
   clearTimeout(guard);

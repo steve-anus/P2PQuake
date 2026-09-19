@@ -33,6 +33,7 @@ const CAUSES = Object.freeze({
   MATCH_CLOSED: 4,
   DUP_IDENTITY: 5,
   RATE_LIMITED: 6,
+  ASSET_MISMATCH: 7,
 });
 
 class EnvelopeError extends Error {

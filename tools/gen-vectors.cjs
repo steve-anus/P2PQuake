@@ -47,13 +47,16 @@ addE('E-V2', env({ type: E.TYPES.JOIN, seq: 1, payload:
     [3, Buffer.from('bob')],
     [4, Buffer.from([E.MAJOR])],
     [5, Buffer.from([E.MINOR])],
+    [6, sha('p2pquake-manifest')],
+    [7, Buffer.from('id1')],
+    [8, sha('p2pquake-engine')],
     [0x8123, Buffer.from([0xaa])]]) }, privB), true); // experimental tag skipped
 addE('E-V3', env({ type: E.TYPES.JOIN_NO, seq: 1, payload:
   F.encodeTLV([[1, Buffer.from([E.CAUSES.VERSION_TOO_OLD])]]) }, privA), true);
 addE('E-V4', env({ type: E.TYPES.ROSTER, seq: 2, payload:
   F.encodeTLV([[1, Buffer.concat([Buffer.from([1]), pubBRaw])],
     [2, Buffer.from([0])], [3, Buffer.from([1])],
-    [4, sha('nonce').subarray(0, 8)]]) }, privA), true);
+    [4, Buffer.from([7, 0, 0, 0, 0, 0, 0, 0])]]) }, privA), true); // epoch = 7
 addE('E-V5', env({ type: E.TYPES.RELAY, seq: 3, payload:
   F.encodeTLV([[1, Buffer.from(pubBRaw)], [2, Buffer.from('body')]]) }, privA), true);
 const chat = env({ type: E.TYPES.CHAT, seq: 3, payload:
