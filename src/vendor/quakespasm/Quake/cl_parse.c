@@ -206,8 +206,8 @@ void CL_ParseLocalSound(void)
 
 	field_mask = MSG_ReadByte();
 	sound_num = (field_mask&SND_LARGESOUND) ? MSG_ReadShort() : MSG_ReadByte();
-	if (sound_num >= MAX_SOUNDS)
-		Host_Error ("CL_ParseLocalSound: %i > MAX_SOUNDS", sound_num);
+	if (sound_num < 0 || sound_num >= MAX_SOUNDS || !cl.sound_precache[sound_num])
+		Host_Error ("CL_ParseLocalSound: bad sound_num %i", sound_num);
 
 	S_LocalSound (cl.sound_precache[sound_num]->name);
 }
@@ -502,7 +502,7 @@ void CL_ParseUpdate (int bits)
 	if (bits & U_MODEL)
 	{
 		modnum = MSG_ReadByte ();
-		if (modnum >= MAX_MODELS)
+		if (modnum < 0 || modnum >= MAX_MODELS)
 			Host_Error ("CL_ParseModel: bad modnum");
 	}
 	else
@@ -522,7 +522,7 @@ void CL_ParseUpdate (int bits)
 	else
 	{
 		if (i > cl.maxclients)
-			Sys_Error ("i >= cl.maxclients");
+			Host_Error ("i >= cl.maxclients");
 		ent->colormap = cl.scores[i-1].translations;
 	}
 	if (bits & U_SKIN)
@@ -676,6 +676,8 @@ void CL_ParseBaseline (entity_t *ent, int version) //johnfitz -- added argument
 	bits = (version == 2) ? MSG_ReadByte() : 0;
 	ent->baseline.modelindex = (bits & B_LARGEMODEL) ? MSG_ReadShort() : MSG_ReadByte();
 	ent->baseline.frame = (bits & B_LARGEFRAME) ? MSG_ReadShort() : MSG_ReadByte();
+	if (ent->baseline.modelindex < 0 || ent->baseline.modelindex >= MAX_MODELS)
+		Host_Error ("CL_ParseBaseline: bad modelindex %i", ent->baseline.modelindex);
 	//johnfitz
 
 	ent->baseline.colormap = MSG_ReadByte();
@@ -871,7 +873,7 @@ void CL_NewTranslation (int slot)
 	byte	*dest, *source;
 
 	if (slot > cl.maxclients)
-		Sys_Error ("CL_NewTranslation: slot > cl.maxclients");
+		Host_Error ("CL_NewTranslation: slot > cl.maxclients");
 	dest = cl.scores[slot].translations;
 	source = vid.colormap;
 	memcpy (dest, vid.colormap, sizeof(cl.scores[slot].translations));
@@ -919,6 +921,9 @@ void CL_ParseStatic (int version) //johnfitz -- added a parameter
 
 // copy it to the current state
 
+	if (ent->baseline.modelindex < 0 || ent->baseline.modelindex >= MAX_MODELS
+		|| !cl.model_precache[ent->baseline.modelindex])
+		Host_Error ("CL_ParseStatic: bad baseline modelindex %i", ent->baseline.modelindex);
 	ent->model = cl.model_precache[ent->baseline.modelindex];
 	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
 	ent->frame = ent->baseline.frame;
@@ -1116,12 +1121,14 @@ void CL_ParseServerMessage (void)
 
 		case svc_setview:
 			cl.viewentity = MSG_ReadShort ();
+			if (cl.viewentity < 0 || cl.viewentity >= MAX_EDICTS)
+				Host_Error ("svc_setview: bad entity %i", cl.viewentity);
 			break;
 
 		case svc_lightstyle:
 			i = MSG_ReadByte ();
 			if (i >= MAX_LIGHTSTYLES)
-				Sys_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
+				Host_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
 			q_strlcpy (cl_lightstyle[i].map, MSG_ReadString(), MAX_STYLESTRING);
 			cl_lightstyle[i].length = Q_strlen(cl_lightstyle[i].map);
 			//johnfitz -- save extra info
@@ -1234,7 +1241,7 @@ void CL_ParseServerMessage (void)
 		case svc_updatestat:
 			i = MSG_ReadByte ();
 			if (i < 0 || i >= MAX_CL_STATS)
-				Sys_Error ("svc_updatestat: %i is invalid", i);
+				Host_Error ("svc_updatestat: %i is invalid", i);
 			cl.stats[i] = MSG_ReadLong ();;
 			break;
 

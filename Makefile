@@ -7,10 +7,12 @@ PEER_DIR := src/peer
 DRIVER_SRC := $(wildcard src/driver/*.c)
 TEST_SRC   := $(wildcard src/tests/*.c)
 CC ?= gcc
+NODE ?= node
+NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
 
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 
-.PHONY: all engine peer check asan ubsan tsan fuzz fuzz-smoke clean
+.PHONY: all engine peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node clean
 
 all: engine peer
 
@@ -29,24 +31,50 @@ check:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then \
 	  echo "check: NOT-READY — no driver/test sources yet (spec comes first)"; exit 1; \
 	fi
+	@mkdir -p bin
 	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
 	./bin/qn_tests
+	$(if $(NODE_TEST_SRC),cd $(PEER_DIR) && $(NODE) --test $(notdir $(NODE_TEST_SRC)),)
 
 asan:
-	@if [ -z "$(DRIVER_SRC)" ]; then echo "asan: NOT-READY — no driver sources"; exit 1; fi
-	$(CC) $(QN_CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(DRIVER_SRC) -o bin/qn_asan
+	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi
+	@mkdir -p bin
+	$(CC) $(QN_CFLAGS) -fsanitize=address -fno-omit-frame-pointer $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_asan
+	./bin/qn_asan
 
 ubsan:
-	@if [ -z "$(DRIVER_SRC)" ]; then echo "ubsan: NOT-READY — no driver sources"; exit 1; fi
-	$(CC) $(QN_CFLAGS) -fsanitize=undefined $(DRIVER_SRC) -o bin/qn_ubsan
+	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "ubsan: NOT-READY — no driver/test sources"; exit 1; fi
+	@mkdir -p bin
+	$(CC) $(QN_CFLAGS) -fsanitize=undefined $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_ubsan
+	./bin/qn_ubsan
 
 tsan:
-	@if [ -z "$(DRIVER_SRC)" ]; then echo "tsan: NOT-READY — no driver sources"; exit 1; fi
-	$(CC) $(QN_CFLAGS) -fsanitize=thread $(DRIVER_SRC) -o bin/qn_tsan
+	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "tsan: NOT-READY — no driver/test sources"; exit 1; fi
+	@mkdir -p bin
+	$(CC) $(QN_CFLAGS) -fsanitize=thread $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tsan
+	./bin/qn_tsan
 
-fuzz fuzz-smoke:
-	@echo "$@: NOT-READY — fuzz harnesses land with the wire spec; needs clang"
-	@exit 1
+FUZZ_SRC := src/tests/fuzz_frame.c
+
+fuzz:
+	@if ! command -v clang >/dev/null 2>&1; then \
+	  echo "fuzz: NOT-READY — clang missing (sudo apt install clang)"; exit 1; \
+	fi
+	@if [ ! -f $(FUZZ_SRC) ]; then echo "fuzz: NOT-READY — no harness"; exit 1; fi
+	@mkdir -p bin
+	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz
+	./bin/qn_fuzz -max_total_time=$(or $(QN_TIME),60)
+
+fuzz-smoke:
+	@if ! command -v clang >/dev/null 2>&1; then \
+	  echo "fuzz-smoke: NOT-READY — clang missing (sudo apt install clang)"; exit 1; \
+	fi
+	@mkdir -p bin
+	clang -g -O2 -fsanitize=fuzzer,address $(DRIVER_SRC) $(FUZZ_SRC) -o bin/qn_fuzz
+	./bin/qn_fuzz -runs=100000
+
+fuzz-node:
+	$(NODE) src/tests/fuzz_wire.cjs
 
 clean:
 	rm -rf bin

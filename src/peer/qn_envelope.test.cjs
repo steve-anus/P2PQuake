@@ -1,0 +1,136 @@
+'use strict';
+// Plane B envelope + identity/sequence/rate discipline (spec §3, §5, §6).
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+
+const E = require('./qn_envelope.cjs');
+const R = require('./qn_room.cjs');
+const F = require('./qn_frame.cjs');
+
+const seedA = crypto.createHash('sha256').update('p2pquake-test-key-A').digest();
+const seedB = crypto.createHash('sha256').update('p2pquake-test-key-B').digest();
+const privA = E.privateKeyFromSeed(seedA);
+const pubA = E.publicKeyFromSeed(seedA);
+const pubARaw = E.publicRaw(pubA);
+const privB = E.privateKeyFromSeed(seedB);
+const pubB = E.publicKeyFromSeed(seedB);
+const pubBRaw = E.publicRaw(pubB);
+const code = crypto.createHash('sha256').update('p2pquake-vector-code').digest().subarray(0, 10);
+const matchId = R.matchIdOf(code);
+
+function env(type, seq, payload, priv, opts) {
+  return E.encodeEnvelope({ type, matchId, seq, payload }, priv, opts);
+}
+
+test('ed25519 sign/verify round-trip and key mismatch', () => {
+  const msg = Buffer.from('message');
+  const sig = E.signWith(privA, msg);
+  assert.ok(E.verifyWith(pubARaw, msg, sig));
+  assert.ok(!E.verifyWith(pubBRaw, msg, sig));
+  assert.equal(pubARaw.length, 32);
+});
+
+test('envelope round-trip verifies under the sender key', () => {
+  const buf = env(E.TYPES.CHAT, 1, F.encodeTLV([[1, Buffer.from('hi')]]), privB);
+  const d = E.decodeEnvelope(buf, pubBRaw);
+  assert.equal(d.type, E.TYPES.CHAT);
+  assert.equal(d.seq, 1);
+  assert.deepEqual(d.matchId, matchId);
+  const [f] = F.decodeTLV(d.payload);
+  assert.equal(f.value.toString(), 'hi');
+});
+
+test('tampering is a signature failure (verify before read, §8.2)', () => {
+  const buf = env(E.TYPES.CHAT, 1, Buffer.from([1, 0, 2, 0, 65, 66]), privB);
+  const bad = Buffer.from(buf);
+  bad[2 + E.HEAD_LEN + 2] ^= 0xff; // flip a payload byte
+  assert.throws(() => E.decodeEnvelope(bad, pubBRaw), E.EnvelopeError);
+});
+
+test('foreign sender key fails verification', () => {
+  const buf = env(E.TYPES.CHAT, 1, Buffer.alloc(0), privB);
+  assert.throws(() => E.decodeEnvelope(buf, pubARaw), E.EnvelopeError);
+});
+
+test('old major is refused outright (guard §3.5c)', () => {
+  const buf = env(E.TYPES.CHAT, 1, Buffer.alloc(0), privB, { major: 1 });
+  assert.throws(() => E.decodeEnvelope(buf, pubBRaw), /major mismatch/);
+});
+
+test('unknown minor version is accepted at envelope layer (guard §3.5b)', () => {
+  const buf = env(E.TYPES.CHAT, 1, Buffer.alloc(0), privB, { minor: 9 });
+  const d = E.decodeEnvelope(buf, pubBRaw);
+  assert.equal(d.minor, 9); // skip-unknown lives with the TLV consumers
+});
+
+test('total_len bounds are terminal for the reader', () => {
+  const reader = new E.EnvelopeReader();
+  assert.throws(() => reader.feed(Buffer.from([0xff, 0xff, ...new Array(90).fill(0)])),
+    E.EnvelopeError);
+  assert.ok(reader.dead);
+});
+
+test('SeqWindow: first must be 1, strict increase, replay/gap rules (§3.3)', () => {
+  const w = new E.SeqWindow();
+  assert.equal(w.check(5), 'first');            // refuses to trust mid-stream starts
+  assert.equal(w.check(1), 'accept');
+  assert.equal(w.check(2), 'accept');
+  assert.equal(w.check(2), 'replay');           // duplicate counted
+  assert.equal(w.check(1), 'replay');           // regression counted
+  assert.equal(w.check(66), 'accept');          // gap 63 is within the 64 rule
+  const w2 = new E.SeqWindow();
+  w2.check(1);
+  assert.equal(w2.check(67), 'close-gap');      // gap 65 > 64
+  const w3 = new E.SeqWindow({ maxDrops: 3 });
+  w3.check(1);
+  for (let i = 0; i < 3; i++) assert.match(w3.check(1), /replay|close/);
+  assert.equal(w3.check(1), 'close-drops');     // 4th drop > maxDrops=3
+});
+
+test('RateBucket: burst then deny then refill (§6.1)', () => {
+  let t = 0;
+  const b = new E.RateBucket({ rate: 200, burst: 3, now: () => t });
+  assert.ok(b.consume() && b.consume() && b.consume());
+  assert.ok(!b.consume());
+  t += 10; // 2 tokens in 10 ms at 200/s
+  assert.ok(b.consume() && b.consume());
+  assert.ok(!b.consume());
+});
+
+test('KEY_BIND channel binding matches at both endpoints (§3.4)', () => {
+  const noiseA = Buffer.alloc(32, 0xaa);
+  const noiseB = Buffer.alloc(32, 0xbb);
+  const sig = E.signWith(privA, E.noiseBindingContext(noiseA, noiseB));
+  // The peer, seeing the pair from its side, derives the identical value.
+  assert.ok(E.verifyWith(pubARaw, E.noiseBindingContext(noiseB, noiseA), sig));
+  // A third connection's keys must not verify this binding.
+  assert.ok(!E.verifyWith(pubARaw,
+    E.noiseBindingContext(noiseB, Buffer.alloc(32, 0xcc)), sig));
+  assert.throws(() => E.noiseBindingContext(noiseA, Buffer.alloc(31)), RangeError);
+});
+
+test('room derivation matches spec §5 deterministically', () => {
+  const topic = R.topicOf(code);
+  assert.equal(topic.toString('hex'),
+    crypto.createHash('sha256').update(code).digest('hex'));
+  assert.deepEqual(R.matchIdOf(code), topic.subarray(0, 16));
+  const mk = R.membershipKey(code);
+  assert.equal(mk.length, 32);
+  const pub = pubBRaw;
+  const proof = R.proofOf(code, pub);
+  assert.ok(R.verifyProof(code, pub, proof));
+  assert.ok(!R.verifyProof(code, pubARaw, proof));   // wrong identity
+  assert.ok(!R.verifyProof(Buffer.alloc(10), pub, proof)); // wrong code
+});
+
+test('display codes are 16 Crockford chars, losslessly round-tripped', () => {
+  for (let i = 0; i < 50; i++) {
+    const c = R.randomJoinCode();
+    const d = R.codeFromBytes(c);
+    assert.match(d, /^[0-9A-HJ-NP-TV-Z]{4}(-[0-9A-HJ-NP-TV-Z]{4}){3}$/);
+    assert.deepEqual(R.bytesFromCode(d), c);
+    assert.deepEqual(R.bytesFromCode(d.toLowerCase()), c); // case-insensitive
+  }
+  assert.throws(() => R.bytesFromCode('IIII-LLLL-OOOO-UVWX'), RangeError);
+});

@@ -239,8 +239,31 @@ static void ExtraMaps_List (const char* mod_name)
 Host_Maps_f
 ==================
 */
+/*
+================
+Host_IsSafeGameName
+
+Server-influenced console commands take file/dir names; reject anything
+that could escape the game directory (traversal, absolute paths, drive
+prefixes). Internal '/' stays legal: maps live in subdirectories.
+================
+*/
+static qboolean Host_IsSafeGameName (const char *name)
+{
+	if (!name[0] || strstr(name, ".."))
+		return false;
+	if (name[0] == '/' || name[0] == '\\' || name[0] == '~')
+		return false;
+	if (strchr(name, ':'))
+		return false;
+	return true;
+}
+
+#define QN_GUARD_NAME() 	if (Cmd_Argc() >= 2 && !Host_IsSafeGameName (Cmd_Argv(1))) 	{ 		Con_Printf ("Unsafe name \"%s\"\n", Cmd_Argv(1)); 		return; 	}
+
 static void Host_Maps_f(void)
 {
+	QN_GUARD_NAME();
 	if (Cmd_Argc() > 1) {
 		// filter to specific directory of search path
 		ExtraMaps_List(Cmd_Argv(1));
@@ -822,6 +845,8 @@ static void Host_Map_f (void)
 	int		i;
 	char	name[MAX_QPATH], *p;
 
+	QN_GUARD_NAME();
+
 	if (Cmd_Argc() < 2)	//no map name given
 	{
 		if (cls.state == ca_dedicated)
@@ -926,6 +951,8 @@ Goes to a new map, taking all clients along
 static void Host_Changelevel_f (void)
 {
 	char	level[MAX_QPATH];
+
+	QN_GUARD_NAME();
 
 	if (Cmd_Argc() != 2)
 	{
@@ -1074,6 +1101,8 @@ Host_Savegame_f
 static void Host_Savegame_f (void)
 {
 	char	name[MAX_OSPATH];
+
+	QN_GUARD_NAME();
 	FILE	*f;
 	int	i;
 	char	comment[SAVEGAME_COMMENT_LENGTH+1];
@@ -1174,6 +1203,8 @@ Host_Loadgame_f
 static void Host_Loadgame_f (void)
 {
 	static char	*start;
+
+	QN_GUARD_NAME();
 	
 	char	name[MAX_OSPATH];
 	char	mapname[MAX_QPATH];
