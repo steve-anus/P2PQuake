@@ -87,11 +87,13 @@ zero seq → close.
 | 0x0003 PONG     | both        | u32 nonce (echo)                          |
 | 0x0010 HOST_UP  | engine→peer | TLV: 0x01 map name (≤16), 0x02 hostname (≤20), 0x03 max players u8 |
 | 0x0011 HOST_DOWN| engine→peer | (empty)                                |
+| 0x0012 HOST_READY| peer→engine| TLV: 0x01 join code (10 bytes, §5.1); sent exactly once when the host lane opens its room (§4.1) |
 | 0x0020 JOIN_OPEN| engine→peer | 10-byte join code (§5.1)                  |
 | 0x0021 JOIN_CLOSE| engine→peer| (empty)                                  |
+| 0x0022 JOIN_PIN | engine→peer | TLV: 0x01 host pubkey (32) — the invite's pinned host key (§4.1) |
 | 0x0030 PEER_UP  | peer→engine | TLV: 0x01 pubkey (32), 0x02 name (≤20 sanitized) |
 | 0x0031 PEER_DOWN| peer→engine | TLV: 0x01 pubkey (32), 0x03 cause u8 (§6.3)|
-| 0x0040 SV_DATA  | peer→engine | TLV: 0x01 from pubkey (32), 0x02 body (opaque bytes for the engine's server-message parse) |
+| 0x0040 SV_DATA  | both        | TLV: 0x01 from pubkey (32), 0x02 body (opaque bytes for the engine's server-message parse) |
 | 0x0041 CL_DATA  | peer→engine | TLV: 0x01 from pubkey (32), 0x02 body (opaque bytes for the engine's client-message parse, host side) |
 | 0x0050 STUFFTEXT| peer→engine | printable ASCII line ≤512, NUL-terminated; engine-side allowlist enforced independently (§6.4) |
 | 0x0060 CLIENT_CMD| engine→peer| TLV: 0x01 body (usercmd bytes from the local client) |
@@ -100,6 +102,13 @@ zero seq → close.
 
 Unknown type value → that frame is dropped and counted; more than 10
 dropped-in-a-row → close (a version or code mismatch is spiralling).
+
+SV_DATA direction is contextual: the host engine sends it peer-ward to feed
+the relay of server output (Plane B RELAY, §3.4a); the client engine receives
+it peer-delivered. The `from` tag on any peer-delivered frame is filled by
+the daemon from the §3.5 connection binding — never from relayed payload
+text — and the engine only ever parses bytes its own local daemon placed on
+Plane A.
 
 ### 2.4 TLV encoding (Plane A payloads and Plane B payloads alike)
 
@@ -186,11 +195,12 @@ identity of the software a peer actually runs:
 * `manifest` = SHA-256 over the bytes of the `gamedata.sha256` manifest the
   peer's gamedata is verified against;
 * `gamedir` = the active game directory (`id1` by default);
-* `engine_id` = SHA-256 over the bytes of the engine binary qn-peer spawned
-  for this match. The identity must bind to the bytes actually executed:
-  hash via the fd used for exec, or re-verify the running image
-  (`/proc/<pid>/exe`) before JOIN_OK; a recheck mismatch is ASSET_MISMATCH
-  — stop, not continue (closes the hash-then-swap TOCTOU).
+* `engine_id` = SHA-256 over the bytes of the engine image this qn-peer is
+  paired with. The engine spawns qn-peer (§4), so the pairing is the parent
+  process: qn-peer opens `/proc/<ppid>/exe` and hashes the bytes read through
+  that open descriptor (hash-by-fd — the descriptor, not the path, is the
+  identity). A mismatch against the bytes at JOIN time is ASSET_MISMATCH —
+  stop, not continue (closes the hash-then-swap window).
 
 The host computes all three locally and requires byte equality with the
 JOIN claims; any mismatch → JOIN_NO cause 7 (`ASSET_MISMATCH`). Claims are
@@ -293,6 +303,28 @@ test (see the test suite names in parentheses):
 
 The qn-peer must exit when its Plane A socket closes (no orphans); the
 engine reaps it and on respawn repeats the whole handshake.
+
+### 4.1 Lane establishment (normative)
+
+* **HOST_UP opens the host lane.** The daemon generates the join code
+  (§5.1), announces its topic, and answers with exactly one `HOST_READY`
+  carrying the 10-byte code: the engine renders it at its join-code display
+  surface, and nowhere else (code-printing rule, §5.1). A second HOST_UP
+  before HOST_DOWN, or HOST_READY already sent, is a protocol violation →
+  FATAL cause 2. HOST_DOWN withdraws the announcement and drops the room; a
+  later HOST_UP opens a fresh room with a fresh code — Plane A sequence
+  numbers never restart (§2.2).
+* **JOIN_OPEN opens the client lane**, optionally preceded by `JOIN_PIN`.
+  With a pinned key present the lane is *pinned*: the Plane B connection
+  whose §3.5 binding equals the pinned key is the host lane, and any
+  host-signed message failing the §3.4a three-way equality ends the join.
+  Without a preceding JOIN_PIN the lane is the explicit **open-invite** mode:
+  the first peer to complete KEY_BIND is treated as host, and the player is
+  warned with a fixed console line that host impersonation is not detectable
+  on this lane. JOIN_PIN after JOIN_OPEN, a second JOIN_PIN, or a JOIN_PIN
+  whose payload is not exactly one 32-byte tag → close.
+* The two lanes are mutually exclusive per process: the second lane's opener
+  frame → FATAL cause 2.
 
 ---
 
@@ -422,6 +454,8 @@ F-V2	ACCEPT	31464e5101002000010000000a00653658be599701dc8f4eb7779fd3
 F-V3	ACCEPT	31464e5101004000030000002c00010020000ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b9302000400626f64797c72eeda
 F-V4	REJECT	31464e51010001000100000020000a9a403dff2bd3b363d33901f735649f21fe3394aaafc17afd221e523ebd6e104a46bc5d
 F-V5	REJECT	31464e5101ff2000010000000a00653658be599701dc8f4eb7779fd3
+F-V6	ACCEPT	31464e5101001200020000000e0001000a00653658be599701dc8f4ec8912e04
+F-V7	ACCEPT	31464e5101002200010000002400010020000ee993f331cc2f34e50fd5d92b7e02b25c6407be7a49d6382a45d94f12a03b933655498f
 ```
 
 ### 7.2 Plane B envelopes (§3.1)

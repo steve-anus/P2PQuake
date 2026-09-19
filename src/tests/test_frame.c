@@ -221,6 +221,15 @@ static const uint8_t g_fv5[] = {
     0xd3
 };
 
+static const uint8_t g_fv6[] = {
+    0x31, 0x46, 0x4e, 0x51, 0x01, 0x00, 0x12, 0x00, 0x02, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x0a, 0x00, 0x65, 0x36, 0x58, 0xbe, 0x59, 0x97, 0x01, 0xdc, 0x8f, 0x4e, 0xc8, 0x91, 0x2e, 0x04
+};
+
+static const uint8_t g_fv7[] = {
+    0x31, 0x46, 0x4e, 0x51, 0x01, 0x00, 0x22, 0x00, 0x01, 0x00, 0x00, 0x00, 0x24, 0x00, 0x01, 0x00, 0x20, 0x00, 0x0e, 0xe9, 0x93, 0xf3, 0x31, 0xcc, 0x2f, 0x34, 0xe5, 0x0f, 0xd5, 0xd9, 0x2b, 0x7e, 0x02, 0xb2, 0x5c, 0x64, 0x07, 0xbe, 0x7a, 0x49, 0xd6, 0x38, 0x2a, 0x45, 0xd9, 0x4f, 0x12, 0xa0, 0x3b, 0x93, 0x36, 0x55, 0x49, 0x8f
+};
+
+
 
 static void check_golden(void)
 {
@@ -233,6 +242,10 @@ static void check_golden(void)
     CHECK(f.type == QN_T_SV_DATA && f.seq == 3 && f.len == 44);
     CHECK(qn_frame_parse(g_fv4, sizeof g_fv4, &f) == QN_PARSE_BAD); /* crc */
     CHECK(qn_frame_parse(g_fv5, sizeof g_fv5, &f) == QN_PARSE_BAD); /* major */
+    CHECK(qn_frame_parse(g_fv6, sizeof g_fv6, &f) == QN_PARSE_OK);
+    CHECK(f.type == QN_T_HOST_READY && f.seq == 2 && f.len == 14);
+    CHECK(qn_frame_parse(g_fv7, sizeof g_fv7, &f) == QN_PARSE_OK);
+    CHECK(f.type == QN_T_JOIN_PIN && f.seq == 1 && f.len == 36);
 }
 
 int main(void)
@@ -259,6 +272,17 @@ int main(void)
     uint8_t big[2048];
     memset(big, 0x5A, sizeof big);
     roundtrip(QN_T_SV_DATA, big, sizeof big); /* payload at the cap */
+    const uint16_t tag1[1] = {0x0001};
+    uint8_t tlvA[24];
+    const uint8_t *valA[1] = {code};
+    const uint16_t lenA[1] = {10};
+    CHECK(qn_tlv_write(tlvA, sizeof tlvA, tag1, valA, lenA, 1) == 14);
+    roundtrip(QN_T_HOST_READY, tlvA, 14); /* §4.1 HOST_READY payload */
+    uint8_t tlvB[40];
+    const uint8_t *valB[1] = {token};
+    const uint16_t lenB[1] = {32};
+    CHECK(qn_tlv_write(tlvB, sizeof tlvB, tag1, valB, lenB, 1) == 36);
+    roundtrip(QN_T_JOIN_PIN, tlvB, 36); /* §4.1 JOIN_PIN payload */
 
     /* --- malformed frames are terminal (spec §2.1) --- */
     uint8_t buf[QN_MAX_FRAME + 8];

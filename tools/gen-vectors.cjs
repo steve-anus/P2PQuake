@@ -33,6 +33,10 @@ addF('F-V4', flip(F.encodeFrame(F.TYPES.AUTH, 1, sha('p2pquake-vector-token')),
   14 + 32 + 3), false); // stored CRC field corrupted
 addF('F-V5', flip(F.encodeFrame(F.TYPES.JOIN_OPEN, 1, Buffer.from(code)), 5),
   false); // version major -> 1
+addF('F-V6', F.encodeFrame(F.TYPES.HOST_READY, 2,
+  F.encodeTLV([[1, Buffer.from(code)]])), true); // §4.1: the code for the engine's display surface
+addF('F-V7', F.encodeFrame(F.TYPES.JOIN_PIN, 1,
+  F.encodeTLV([[1, Buffer.from(pubARaw)]])), true); // §4.1: pinned host key, precedes JOIN_OPEN
 
 // --- Plane B envelopes ---
 const env = (fields, priv, opts) => E.encodeEnvelope(
