@@ -1,0 +1,38 @@
+--- a/Quake/cl_parse.c
++++ b/Quake/cl_parse.c
+@@ -522,7 +522,7 @@
+ 	else
+ 	{
+ 		if (i > cl.maxclients)
+-			Sys_Error ("i >= cl.maxclients");
++			Host_Error ("i >= cl.maxclients");
+ 		ent->colormap = cl.scores[i-1].translations;
+ 	}
+ 	if (bits & U_SKIN)
+@@ -873,7 +873,7 @@
+ 	byte	*dest, *source;
+ 
+ 	if (slot > cl.maxclients)
+-		Sys_Error ("CL_NewTranslation: slot > cl.maxclients");
++		Host_Error ("CL_NewTranslation: slot > cl.maxclients");
+ 	dest = cl.scores[slot].translations;
+ 	source = vid.colormap;
+ 	memcpy (dest, vid.colormap, sizeof(cl.scores[slot].translations));
+@@ -1128,7 +1128,7 @@
+ 		case svc_lightstyle:
+ 			i = MSG_ReadByte ();
+ 			if (i >= MAX_LIGHTSTYLES)
+-				Sys_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
++				Host_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
+ 			q_strlcpy (cl_lightstyle[i].map, MSG_ReadString(), MAX_STYLESTRING);
+ 			cl_lightstyle[i].length = Q_strlen(cl_lightstyle[i].map);
+ 			//johnfitz -- save extra info
+@@ -1241,7 +1241,7 @@
+ 		case svc_updatestat:
+ 			i = MSG_ReadByte ();
+ 			if (i < 0 || i >= MAX_CL_STATS)
+-				Sys_Error ("svc_updatestat: %i is invalid", i);
++				Host_Error ("svc_updatestat: %i is invalid", i);
+ 			cl.stats[i] = MSG_ReadLong ();;
+ 			break;
+ 
