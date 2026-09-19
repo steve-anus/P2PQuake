@@ -72,8 +72,12 @@ function signWith(privKey, msg) {
 }
 
 function verifyWith(pubKeyOrRaw, msg, sig) {
-  const key = Buffer.isBuffer(pubKeyOrRaw) ? publicKeyFromRaw(pubKeyOrRaw) : pubKeyOrRaw;
-  return crypto.verify(null, msg, key, sig);
+  try {
+    const key = Buffer.isBuffer(pubKeyOrRaw) ? publicKeyFromRaw(pubKeyOrRaw) : pubKeyOrRaw;
+    return crypto.verify(null, msg, key, sig);
+  } catch (e) {
+    throw new EnvelopeError('verify error: ' + e.message);
+  }
 }
 
 // §3.2: signature is Ed25519 over sha256("QNW0" || envelope bytes [0, 28+n))
@@ -131,7 +135,8 @@ function encodeEnvelope(fields, privKey, { major = MAJOR, minor = MINOR } = {}) 
 // Decode one complete envelope buffer (framing done by EnvelopeReader).
 // verifyKey: Buffer(32 raw) | KeyObject. For KEY_BIND pass the pubkey found
 // inside the payload (room layer does that check itself).
-function decodeEnvelope(buf, verifyKey) {
+// expectedMatchId: 16-byte Buffer; a mismatch is a close (§3.1).
+function decodeEnvelope(buf, verifyKey, { expectedMatchId } = {}) {
   if (buf.length < 2 + HEAD_LEN + SIG_LEN) throw new EnvelopeError('short envelope');
   const total = buf.readUInt16LE(0);
   const min = 2 + HEAD_LEN + SIG_LEN;
@@ -149,6 +154,9 @@ function decodeEnvelope(buf, verifyKey) {
   if (seq === 0) throw new EnvelopeError('zero seq');
   const len = buf.readUInt16LE(p); p += 2;
   if (len > MAX_PAYLOAD) throw new EnvelopeError('oversized payload');
+  if (total !== HEAD_LEN + len + SIG_LEN) throw new EnvelopeError('length desync');
+  if (expectedMatchId !== undefined && !matchId.equals(expectedMatchId))
+    throw new EnvelopeError('wrong match');
   const payload = buf.subarray(p, p + len); p += len;
   const sig = buf.subarray(p, p + SIG_LEN);
   if (!verifyWith(verifyKey, signatureContext(buf.subarray(2, 2 + HEAD_LEN + len)), sig)) {
@@ -199,7 +207,7 @@ class SeqWindow {
     this.maxGap = maxGap;
   }
   check(seq) {
-    if (this.highest === 0 && seq !== 1) return 'first';
+    if (this.highest === 0 && seq !== 1) return 'close-first';
     if (seq <= this.highest) {
       this.drops++;
       return this.drops > this.maxDrops ? 'close-drops' : 'replay';
@@ -212,7 +220,7 @@ class SeqWindow {
 
 // §6.1 per-connection message rate: token bucket 200/s, burst 50.
 class RateBucket {
-  constructor({ rate = 200, burst = 50, now = () => Date.now() } = {}) {
+  constructor({ rate = 200, burst = 50, now = () => globalThis.performance.now() } = {}) {
     this.rate = rate; this.burst = burst; this.tokens = burst; this.last = now();
     this.now = now;
   }

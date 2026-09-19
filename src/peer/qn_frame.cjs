@@ -103,7 +103,6 @@ class FrameReader {
   constructor() {
     this.buf = Buffer.alloc(0);
     this.lastSeq = 0;
-    this.dropRun = 0; // consecutive unknown-type drops (spec §2.3)
     this.dead = false;
   }
   feed(chunk) {

@@ -52,6 +52,9 @@ enum {
 
 uint32_t qn_crc32(const uint8_t *data, size_t n);
 
+/* One-time init before parsing anything (pre-warms shared tables). */
+void qn_frame_init(void);
+
 qn_parse_t qn_frame_parse(const uint8_t *buf, size_t n, qn_frame_t *out);
 
 /* Serialise one frame; returns total length or 0 on rejection
@@ -85,8 +88,9 @@ typedef struct {
 void qn_tlv_iter_init(qn_tlv_iter_t *it, const uint8_t *buf, size_t n);
 int  qn_tlv_iter_next(qn_tlv_iter_t *it, qn_tlv_t *out);
 
-/* Fetch one expected tag from a well-formed stream; 1 = found (out filled),
- * 0 = absent, -1 = malformed. */
+/* Fetch one expected tag. The entire stream is validated first, so a
+ * find-only consumer and a full iteration can never disagree:
+ * 1 = found (out filled), 0 = absent, -1 = malformed (close). */
 int qn_tlv_find(const uint8_t *buf, size_t n, uint16_t tag, qn_tlv_t *out);
 
 /* Serialise tags with values; tags must be ascending and unique.

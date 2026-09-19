@@ -162,7 +162,8 @@ identity is only ever the §3.5 key binding (see Landmine: self-declared
 One counter per (connection, sending long-term key), starting at 1 after
 binding, strictly increasing, wrap forbidden. A received seq ≤ the highest
 already seen → drop and count (replay); > 100 counted drops → close.
-A received seq jumping ahead by more than 64 → close (gap spiral).
+A received seq that skips **more than 64 messages** ahead of the highest
+already seen → close (gap spiral).
 
 ### 3.4 Wire types
 
@@ -309,8 +310,11 @@ dependencies are introduced by this spec.
 The engine executes only the handshake-phrase allowlist from a remote-sourced
 STUFFTEXT frame; anything else is dropped and logged without execution.
 The allowlist is derived from the engine source and the shipped gamedata's
-string table, never guessed; enforcement lives in the engine's parser, not
-in qn-peer, and is asserted by its own test.
+string table, never guessed. Enforcement lives in the engine's parser, not
+qn-peer. It is a required gate: remote-sourced STUFFTEXT may not be
+dispatched to the console until this allowlist exists and is asserted by
+its own test; the first driver build that wires that dispatch is
+incomplete without it.
 
 ### 6.5 Timeouts
 

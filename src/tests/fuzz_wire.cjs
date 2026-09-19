@@ -40,7 +40,8 @@ function mutate(buf) {
   return b;
 }
 
-const LEGAL = [E.EnvelopeError, F.FrameError, F.TLVError, RangeError];
+// Anything else (TypeError, RangeError, ...) escaping the parsers is a bug.
+const LEGAL = [E.EnvelopeError, F.FrameError, F.TLVError];
 let survived = 0, rejected = 0;
 const t0 = Date.now();
 for (let i = 0; i < RUNS; i++) {

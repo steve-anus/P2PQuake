@@ -73,7 +73,7 @@ test('total_len bounds are terminal for the reader', () => {
 
 test('SeqWindow: first must be 1, strict increase, replay/gap rules (§3.3)', () => {
   const w = new E.SeqWindow();
-  assert.equal(w.check(5), 'first');            // refuses to trust mid-stream starts
+  assert.equal(w.check(5), 'close-first');      // mid-stream starts close, never judge
   assert.equal(w.check(1), 'accept');
   assert.equal(w.check(2), 'accept');
   assert.equal(w.check(2), 'replay');           // duplicate counted
@@ -134,3 +134,32 @@ test('display codes are 16 Crockford chars, losslessly round-tripped', () => {
   }
   assert.throws(() => R.bytesFromCode('IIII-LLLL-OOOO-UVWX'), RangeError);
 });
+
+/* --- room discipline (spec §3.1/§3.2) --- */
+{
+  const seed = crypto.createHash('sha256').update('room-discipline').digest();
+  const priv = E.privateKeyFromSeed(seed);
+  const pub = E.publicRaw(E.publicKeyFromSeed(seed));
+  const mid = crypto.createHash('sha256').update('match').digest().subarray(0, 16);
+  const raw = E.encodeEnvelope(
+    { type: E.TYPES.CHAT, matchId: mid, seq: 1,
+      payload: F.encodeTLV([[1, Buffer.from('hi')]]) }, priv);
+
+  test('envelope carries its room: foreign match_id closes (§3.1)', () => {
+    assert.equal(E.decodeEnvelope(raw, pub, { expectedMatchId: mid }).seq, 1);
+    assert.throws(() => E.decodeEnvelope(raw, pub, { expectedMatchId: Buffer.alloc(16, 7) }),
+      (e) => e instanceof E.EnvelopeError && /wrong match/.test(e.message));
+  });
+
+  test('declared length disagreeing with content closes (§3.1)', () => {
+    const bad = Buffer.from(raw);
+    bad.writeUInt16LE(500, 2 + 26); /* payload_len field of the body */
+    assert.throws(() => E.decodeEnvelope(bad, pub), E.EnvelopeError);
+  });
+
+  test('claimed key of wrong shape surfaces as EnvelopeError only (§3.2)', () => {
+    for (const junk of [Buffer.alloc(5), 'not-a-key', undefined, null]) {
+      assert.throws(() => E.decodeEnvelope(raw, junk), E.EnvelopeError);
+    }
+  });
+}

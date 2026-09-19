@@ -38,7 +38,7 @@ const note = (n) => { results.set(n, true); console.log('OK  ', n); };
 const failNote = (n, why) => { results.set(n, false); console.log('FAIL', n, '—', why); };
 
 function inbound(raw, key, win) {
-  const env = E.decodeEnvelope(raw, key);
+  const env = E.decodeEnvelope(raw, key, { expectedMatchId: matchId });
   const r = win.check(env.seq);
   if (r === 'replay') return { ...env, replayed: true };
   if (r.startsWith('close')) throw new E.EnvelopeError('window ' + r);
@@ -51,6 +51,36 @@ function requireTags(payload, tags) {
   return m;
 }
 
+// Required tag sizes from the wire table (spec 3.4); a wrong size closes.
+const TAG_SIZES = {
+  [E.TYPES.JOIN]: { 1: [32, 32], 2: [16, 16], 3: [1, 20], 4: [1, 1], 5: [1, 1] },
+  [E.TYPES.JOIN_OK]: { 1: [32, 32], 2: [1, 16], 3: [1, 1] },
+  [E.TYPES.JOIN_NO]: { 1: [1, 1] },
+  [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8] },
+  [E.TYPES.CHAT]: { 1: [1, 256] },
+};
+function checkTagSizes(env) {
+  const spec = TAG_SIZES[env.type];
+  if (spec === undefined) return; // same-major experimental types are skipped
+  const seen = F.decodeTLV(env.payload);
+  const sizes = new Map(seen.map((f) => [f.tag, f.value.length]));
+  for (const tag of Object.keys(spec).map(Number)) {
+    const [lo, hi] = spec[tag];
+    const n = sizes.get(tag);
+    if (n === undefined || n < lo || n > hi)
+      throw new F.TLVError('tag ' + tag + ' off size contract');
+  }
+  if (env.type === E.TYPES.ROSTER) {
+    const n1 = sizes.get(1);
+    if (n1 < 1 || (n1 - 1) % 32 !== 0)
+      throw new F.TLVError('roster pubkey list malformed');
+  }
+  if (env.type === E.TYPES.CHAT) {
+    for (const b of requireTags(env.payload, [1]).get(1))
+      if (b < 0x20 || b > 0x7e) throw new F.TLVError('chat not printable');
+  }
+}
+
 // ---------------- host ----------------
 const host = new Hyperswarm({ dht });
 const roster = []; // accepted long-term pubkeys
@@ -60,7 +90,7 @@ const hostConns = new Map(); // conn -> state (current per joined client)
 host.on('connection', (conn) => {
   const st = {
     reader: new E.EnvelopeReader(), bound: null,
-    win: new E.SeqWindow(), joined: false, seqOut: 0,
+    win: new E.SeqWindow(), bucket: new E.RateBucket(), joined: false, seqOut: 0,
   };
   hostConns.set(conn, st);
   const send = (type, fields) => {
@@ -81,6 +111,7 @@ host.on('connection', (conn) => {
     try { bufs = st.reader.feed(chunk); }
     catch (e) { return closeHost(conn, 'reader: ' + e.message); }
     for (const raw of bufs) {
+      if (!st.bucket.consume()) return closeHost(conn, 'rate limit exceeded');
       let env;
       try {
         if (!st.bound) {
@@ -89,7 +120,7 @@ host.on('connection', (conn) => {
           const pre = new Map(F.decodeTLV(payload).map((f) => [f.tag, f.value]));
           const claimed = pre.get(1);
           if (!claimed || claimed.length !== 32) throw new E.EnvelopeError('bind pubkey');
-          env = E.decodeEnvelope(raw, claimed); // §3.2 verify before trusting
+          env = E.decodeEnvelope(raw, claimed, { expectedMatchId: matchId });
           if (env.type !== E.TYPES.KEY_BIND) throw new E.EnvelopeError('not first envelope');
           const binding = pre.get(2);
           if (!binding || !E.verifyWith(claimed,
@@ -105,6 +136,7 @@ host.on('connection', (conn) => {
         switch (env.type) {
           case E.TYPES.JOIN: {
             if (st.joined) throw new E.EnvelopeError('second JOIN on bound conn');
+            checkTagSizes(env);
             const t = requireTags(env.payload, [1, 2, 3, 4, 5]);
             const who = t.get(1);
             if (!who.equals(st.bound)) throw new E.EnvelopeError('identity mismatch');
@@ -123,10 +155,12 @@ host.on('connection', (conn) => {
           }
           case E.TYPES.CHAT:
             if (!st.joined) throw new E.EnvelopeError('chat pre-join');
+            checkTagSizes(env);
             hostSeenChat = requireTags(env.payload, [1]).get(1).toString();
             continue;
           case E.TYPES.BYE:
             st.closed = true;
+            dropFromRoster(st);
             continue;
           default:
             throw new E.EnvelopeError('unexpected type 0x' + env.type.toString(16));
@@ -138,8 +172,15 @@ host.on('connection', (conn) => {
     }
   });
   conn.on('error', () => {}); // discovery races are not failures
+  conn.on('close', () => { dropFromRoster(st); hostConns.delete(conn); });
 });
 function closeHost(conn, why) { console.log('host closes conn:', why); conn.destroy(); }
+function dropFromRoster(st) {
+  if (!st.joined || !st.bound) return;
+  const i = roster.findIndex((r) => r.equals(st.bound));
+  st.joined = false;
+  if (i >= 0) { roster.splice(i, 1); broadcastRoster(); }
+}
 
 function broadcastRoster() {
   for (const [conn, st] of hostConns) {
@@ -167,7 +208,7 @@ function runClient(role) {
     // a reconnect's KEY_BIND must not look like a replay of the last one.
     const st = {
       reader: new E.EnvelopeReader(), bound: null,
-      win: new E.SeqWindow(), seqOut: 0, got: {},
+      win: new E.SeqWindow(), bucket: new E.RateBucket(), seqOut: 0, got: {},
     };
     goal.current = st;
     const send = (type, fields) => {
@@ -183,20 +224,23 @@ function runClient(role) {
       try { bufs = st.reader.feed(chunk); }
       catch (e) { return settle('reader ' + e.message); }
       for (const raw of bufs) {
+        if (!st.bucket.consume()) return settle('rate limit exceeded');
         try {
           let env;
           if (!st.bound) {
             const len = raw.readUInt16LE(2 + 2 + 1 + 1 + 2 + 16 + 4);
             const payload = raw.subarray(2 + E.HEAD_LEN, 2 + E.HEAD_LEN + len);
             const pre = new Map(F.decodeTLV(payload).map((f) => [f.tag, f.value]));
-            env = E.decodeEnvelope(raw, pre.get(1));
+            const claimed = pre.get(1);
+            if (!claimed || claimed.length !== 32) throw new E.EnvelopeError('bind pubkey');
+            env = E.decodeEnvelope(raw, claimed, { expectedMatchId: matchId });
             if (env.type !== E.TYPES.KEY_BIND) throw new E.EnvelopeError('not first');
             const binding = pre.get(2);
-            if (!binding || !E.verifyWith(pre.get(1),
+            if (!binding || !E.verifyWith(claimed,
                 E.noiseBindingContext(swarm.keyPair.publicKey, conn.remotePublicKey), binding))
               throw new E.EnvelopeError('noise binding');
             if (st.win.check(env.seq) !== 'accept') throw new E.EnvelopeError('bind seq');
-            st.bound = pre.get(1);
+            st.bound = claimed;
             const proof = role === 'badproof' ? Buffer.alloc(16, 0) : R.proofOf(code, pub);
             const minor = role === 'lowver' ? 0 : E.MINOR;
             const fields = [[1, Buffer.from(pub)], [2, Buffer.from(proof)],
@@ -209,21 +253,29 @@ function runClient(role) {
           env = inbound(raw, st.bound, st.win);
           if (env.replayed) { goal.replaySeen = true; continue; }
           if (env.type === E.TYPES.JOIN_OK && role === 'ok') {
+            checkTagSizes(env);
             requireTags(env.payload, [1, 2, 3]);
+            st.unknownRun = 0;
             st.got.joinOk = true;
             send(E.TYPES.CHAT, [[1, Buffer.from('hello from client')]]);
             continue;
           }
           if (env.type === E.TYPES.JOIN_NO) {
+            checkTagSizes(env);
             const cause = requireTags(env.payload, [1]).get(1)[0];
             settle('refused:' + cause);
             continue;
           }
           if (env.type === E.TYPES.ROSTER && role === 'ok') {
+            checkTagSizes(env);
             requireTags(env.payload, [1, 2, 3, 4]);
+            st.unknownRun = 0;
             if (st.got.joinOk) settle('joined');
             continue;
           }
+          if (env.type === E.TYPES.BYE) { settle('host said bye'); continue; }
+          st.unknownRun = (st.unknownRun || 0) + 1;
+          if (st.unknownRun > 10) throw new E.EnvelopeError('drop storm');
         } catch (e) {
           return settle('client-error ' + e.message);
         }

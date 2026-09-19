@@ -224,6 +224,7 @@ static void check_golden(void)
 
 int main(void)
 {
+    qn_frame_init();
     check_golden();
 
     /* CRC32 standard check value proves the IEEE parameter set. */
@@ -336,10 +337,15 @@ int main(void)
     qn_tlv_iter_init(&it, tlv, tl - 1); /* truncate the last value */
     CHECK(qn_tlv_iter_next(&it, &t) == 1);
     CHECK(qn_tlv_iter_next(&it, &t) == -1);
-    CHECK(qn_tlv_find(tlv, tl - 1, 0x0001, &t) == -1 ||
-          qn_tlv_find(tlv, tl - 1, 0x0001, &t) == 1);
-    /* ^ find may stop early on the known tag; truncation of a *later*
-     * record still must surface as -1 when iteration reaches it */
+    CHECK(qn_tlv_find(tlv, tl - 1, 0x0001, &t) == -1);
+    /* ^ find validates the whole stream: a defect anywhere rejects it,
+     * even after the wanted tag has already been seen */
+    {
+        /* same-tag twice = malformed, even when the first copy parses */
+        static const uint8_t dup[10] = { 0x00, 0x01, 0x00, 0x01, 0x41,
+                                         0x00, 0x01, 0x00, 0x01, 0x42 };
+        CHECK(qn_tlv_find(dup, sizeof dup, 0x0001, &t) == -1);
+    }
     qn_tlv_iter_init(&it, tlv, tl);
     int seen = 0;
     while (qn_tlv_iter_next(&it, &t) == 1) {

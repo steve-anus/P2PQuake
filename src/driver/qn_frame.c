@@ -24,6 +24,11 @@ static void crc_init(void)
     crc_ready = 1;
 }
 
+void qn_frame_init(void)
+{
+    crc_init();
+}
+
 uint32_t qn_crc32(const uint8_t *data, size_t n)
 {
     crc_init();
@@ -106,7 +111,7 @@ qn_parse_t qn_frame_parse(const uint8_t *buf, size_t n, qn_frame_t *out)
 size_t qn_frame_write(uint8_t *out, size_t cap, uint16_t type, uint32_t seq,
                       const uint8_t *payload, uint16_t len)
 {
-    if (seq == 0 || len > QN_MAX_PAYLOAD) {
+    if (seq == 0 || len > QN_MAX_PAYLOAD || (len > 0 && payload == NULL)) {
         return 0;
     }
     size_t total = QN_HEADER_LEN + (size_t)len + QN_CRC_LEN;
@@ -170,19 +175,24 @@ int qn_tlv_iter_next(qn_tlv_iter_t *it, qn_tlv_t *out)
 
 int qn_tlv_find(const uint8_t *buf, size_t n, uint16_t tag, qn_tlv_t *out)
 {
+    /* The whole stream is validated before any answer: a find-only
+     * consumer must reach the same verdict as one that iterates
+     * everything. Never answer about a stream you did not finish. */
     qn_tlv_iter_t it;
     qn_tlv_iter_init(&it, buf, n);
     qn_tlv_t f;
-    while (qn_tlv_iter_next(&it, &f) == 1) {
+    int found = 0;
+    int rc;
+    while ((rc = qn_tlv_iter_next(&it, &f)) == 1) {
         if (f.tag == tag) {
             *out = f;
-            return 1;
-        }
-        if (f.tag > tag) {
-            return 0; /* ascending order: can't appear later */
+            found = 1;
         }
     }
-    return -1;
+    if (rc == -1) {
+        return -1;
+    }
+    return found;
 }
 
 size_t qn_tlv_write(uint8_t *out, size_t cap, const uint16_t *tags,
