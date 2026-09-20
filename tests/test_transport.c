@@ -47,7 +47,9 @@ static ssize_t read_tmo(int fd, uint8_t *b, size_t n)
 static void write_all(int fd, const uint8_t *b, size_t n)
 {
     while (n > 0) {
-        ssize_t w = write(fd, b, n);
+        /* The peer may already be gone; a dead socket must surface as a
+         * failed write, never as a signal to this suite. */
+        ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
         CHECK(w > 0);
         if (w <= 0) {
             return;

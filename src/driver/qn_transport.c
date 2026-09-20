@@ -284,7 +284,11 @@ int qn_transport_send(qn_transport_t *t, uint16_t type,
         return -1;
     }
     while (off < n) {
-        ssize_t w = write(t->fd, frame + off, n - off);
+        /* A dead peer must not kill the engine: a plain write() to a
+         * socket whose reader is gone raises SIGPIPE first and only
+         * then would return EPIPE — the mask-free way to survive it is
+         * to ask the socket not to raise it. */
+        ssize_t w = send(t->fd, frame + off, n - off, MSG_NOSIGNAL);
         if (w < 0 && errno == EINTR) {
             continue;
         }
