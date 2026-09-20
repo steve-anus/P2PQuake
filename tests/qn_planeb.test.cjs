@@ -8,10 +8,10 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
-const E = require('./qn_envelope.cjs');
-const F = require('./qn_frame.cjs');
-const R = require('./qn_room.cjs');
-const P = require('./qn_planeb.cjs');
+const E = require('../src/peer/qn_envelope.cjs');
+const F = require('../src/peer/qn_frame.cjs');
+const R = require('../src/peer/qn_room.cjs');
+const P = require('../src/peer/qn_planeb.cjs');
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest();
 

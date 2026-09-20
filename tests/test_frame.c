@@ -1,7 +1,7 @@
 /* test_frame.c — Plane A codec conformance suite (spec §2, §8).
  * Every frame type round-trips; every reject rule is exercised.
  * Run under ASan+UBSan via `make check` in the repo root. */
-#include "../driver/qn_frame.h"
+#include "../src/driver/qn_frame.h"
 
 #include <stdio.h>
 #include <string.h>

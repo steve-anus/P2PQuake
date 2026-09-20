@@ -4,9 +4,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
-const E = require('./qn_envelope.cjs');
-const R = require('./qn_room.cjs');
-const F = require('./qn_frame.cjs');
+const E = require('../src/peer/qn_envelope.cjs');
+const R = require('../src/peer/qn_room.cjs');
+const F = require('../src/peer/qn_frame.cjs');
 
 const seedA = crypto.createHash('sha256').update('p2pquake-test-key-A').digest();
 const seedB = crypto.createHash('sha256').update('p2pquake-test-key-B').digest();

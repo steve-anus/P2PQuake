@@ -2,7 +2,7 @@
  * Every input must end in one of: clean accept, NEED_MORE, or BAD-with-
  * close. Any crash, leak, or sanitizer trip is a bug at the trust boundary.
  * Build via `make fuzz` (needs clang). */
-#include "../driver/qn_frame.h"
+#include "../src/driver/qn_frame.h"
 
 #include <stdlib.h>
 

@@ -1,11 +1,11 @@
 'use strict';
 // Plane A codec conformance (spec §2/§8) — Node side. The C suite in
-// src/tests/test_frame.c covers the same rules; golden vectors in the spec
+// tests/test_frame.c covers the same rules; golden vectors in the spec
 // (§7) bind the two implementations together.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const F = require('./qn_frame.cjs');
+const F = require('../src/peer/qn_frame.cjs');
 
 test('crc32 standard check value (IEEE parameter set)', () => {
   assert.equal(F.crc32(Buffer.from('123456789')), 0xcbf43926);

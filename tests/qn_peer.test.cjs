@@ -14,11 +14,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const F = require('./qn_frame.cjs');
-const R = require('./qn_room.cjs');
-const Q = require('./qn-peer.cjs');
+const F = require('../src/peer/qn_frame.cjs');
+const R = require('../src/peer/qn_room.cjs');
+const Q = require('../src/peer/qn-peer.cjs');
 
-const PEER = path.join(__dirname, 'qn-peer.cjs');
+const PEER = path.join(__dirname, '..', 'src', 'peer', 'qn-peer.cjs');
 
 function mkSocketPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpeer-test-'));
@@ -226,7 +226,7 @@ test('redactor scrubs live join codes in raw-hex and display form', () => {
 });
 
 test('computeIdentity hashes the parent running image by fd (§3.4a)', () => {
-  const gm = path.join(__dirname, '..', '..', 'gamedata.sha256');
+  const gm = path.join(__dirname, '..', 'gamedata.sha256');
   const idn = Q.computeIdentity({ gamedataPath: gm, gamedir: 'id1', ppid: process.pid });
   assert.deepEqual(idn.engineId,
     crypto.createHash('sha256').update(fs.readFileSync(process.execPath)).digest(),

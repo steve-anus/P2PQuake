@@ -5,9 +5,9 @@
 // FrameError, TLVError) — anything else (TypeError etc) or a
 // hang is a bug. Usage: make fuzz-node [QN_RUNS=n]
 const crypto = require('node:crypto');
-const F = require('../peer/qn_frame.cjs');
-const E = require('../peer/qn_envelope.cjs');
-const R = require('../peer/qn_room.cjs');
+const F = require('../src/peer/qn_frame.cjs');
+const E = require('../src/peer/qn_envelope.cjs');
+const R = require('../src/peer/qn_room.cjs');
 
 const RUNS = Number(process.env.QN_RUNS || 20000);
 const sha = (s) => crypto.createHash('sha256').update(s).digest();

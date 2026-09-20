@@ -3,17 +3,16 @@
 # fail loudly until their real checks exist.
 
 QS_DIR   := src/vendor/quakespasm
-PEER_DIR := src/peer
 DRIVER_SRC := $(wildcard src/driver/*.c)
-TEST_SRC   := $(wildcard src/tests/*.c)
+TEST_SRC   := $(wildcard tests/*.c)
 CC ?= gcc
 NODE ?= node
-NODE_TEST_SRC := $(wildcard $(PEER_DIR)/*.test.cjs)
+NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify e2e clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify e2e smoke-dht clean
 
 all: engine peer
 
@@ -42,10 +41,13 @@ engine-verify:
 	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series"
 
 peer:
-	cd $(PEER_DIR) && npm ci --ignore-scripts
+	npm ci --ignore-scripts
 
 e2e:
-	cd $(PEER_DIR) && $(NODE) e2e-room.cjs
+	$(NODE) tests/e2e-room.cjs
+
+smoke-dht:
+	$(NODE) tests/smoke-dht.cjs
 
 check:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then \
@@ -54,7 +56,7 @@ check:
 	@mkdir -p bin
 	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
 	./bin/qn_tests
-	$(if $(NODE_TEST_SRC),cd $(PEER_DIR) && $(NODE) --test $(notdir $(NODE_TEST_SRC)),)
+	$(if $(NODE_TEST_SRC),$(NODE) --test $(NODE_TEST_SRC),)
 	$(MAKE) --no-print-directory e2e
 
 asan:
@@ -75,7 +77,7 @@ tsan:
 	$(CC) $(QN_CFLAGS) -fsanitize=thread $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tsan
 	./bin/qn_tsan
 
-FUZZ_SRC := src/tests/fuzz_frame.c
+FUZZ_SRC := tests/fuzz_frame.c
 
 fuzz:
 	@if ! command -v clang >/dev/null 2>&1; then \
@@ -95,7 +97,7 @@ fuzz-smoke:
 	./bin/qn_fuzz -runs=100000
 
 fuzz-node:
-	$(NODE) src/tests/fuzz_wire.cjs
+	$(NODE) tests/fuzz_wire.cjs
 
 vectors-verify:
 	@mkdir -p bin

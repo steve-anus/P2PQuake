@@ -18,16 +18,16 @@ const { spawn } = require('node:child_process');
 const Hyperswarm = require('hyperswarm');
 const DHT = require('hyperdht'); // shared swarm for every in-process lane
 
-const F = require('./qn_frame.cjs');
-const E = require('./qn_envelope.cjs');
-const R = require('./qn_room.cjs');
-const P = require('./qn_planeb.cjs');
+const F = require('../src/peer/qn_frame.cjs');
+const E = require('../src/peer/qn_envelope.cjs');
+const R = require('../src/peer/qn_room.cjs');
+const P = require('../src/peer/qn_planeb.cjs');
 
 const dht = new DHT();
 const sha = (s) => crypto.createHash('sha256').update(s).digest();
 const shaBuf = (b) => crypto.createHash('sha256').update(b).digest();
-const MANIFEST_ID = shaBuf(fs.readFileSync(path.join(__dirname, '..', '..', 'gamedata.sha256')));
-const PEER = path.join(__dirname, 'qn-peer.cjs');
+const MANIFEST_ID = shaBuf(fs.readFileSync(path.join(__dirname, '..', 'gamedata.sha256')));
+const PEER = path.join(__dirname, '..', 'src', 'peer', 'qn-peer.cjs');
 
 const results = new Map();
 const note = (n) => { results.set(n, true); console.log('OK  ', n); };
