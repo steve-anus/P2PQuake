@@ -260,7 +260,10 @@ async function run(opts) {
     try { swarm.destroy(); } catch { /* best-effort teardown */ }
   };
 
+  let exiting = false; // first terminal decision owns the exit, no racing resolvers
   const fatal = (cause) => {
+    if (exiting) return;
+    exiting = true;
     a.send(F.TYPES.FATAL, Buffer.from([cause]));
     destroyLane();
     a.stop();
@@ -270,6 +273,8 @@ async function run(opts) {
   const a = new PlaneA(opts.sock, {
     clock: opts.clock,
     onFatal: (why) => {
+      if (exiting) return;
+      exiting = true;
       log(why);
       // §2.3/§6.3: malformed and drop-storm deaths must reach the engine as a
       // FATAL frame with a cause, and never masquerade as a clean hangup.
@@ -394,10 +399,12 @@ async function run(opts) {
           onRoster: (members) => {
             // Membership reaches the engine as deltas: refresh broadcasts must
             // not re-announce, and departures must not stay silently present.
+            const self = opts.keys.pub.toString('hex');
             const cur = new Set(members.map((m) => m.toString('hex')));
+            cur.add(self); // the local identity is never a remote peer, up or down
             for (const m of members) {
               const hex = m.toString('hex');
-              if (announced.has(hex)) continue;
+              if (hex === self || announced.has(hex)) continue;
               announced.add(hex);
               a.send(F.TYPES.PEER_UP, F.encodeTLV([[1, m], [2, Buffer.from(hex.slice(0, 12))]]));
             }
@@ -434,7 +441,7 @@ async function run(opts) {
   };
 
   return new Promise((resolve) => {
-    opts.sock.on('close', () => resolve(a.spoke ? 0 : 1));
+    opts.sock.on('close', () => { if (!exiting) resolve(a.spoke ? 0 : 1); });
   });
 }
 

@@ -327,6 +327,14 @@ async function main() {
       e.message + ' || host:[' + tail(hostDaemon) + '] client:[' + tail(clientDaemon) + ']');
   }
 
+  // no PEER_UP may ever carry the client's own identity key back to it
+  const selfUps = clientEngine.frames.filter((f) => f.type === F.TYPES.PEER_UP)
+    .map((f) => new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value])))
+    .filter((t) => t.get(1) && t.get(1).equals(clientPub));
+  selfUps.length === 0
+    ? note('the engine is never told it is its own remote peer')
+    : failNote('the engine is never told it is its own remote peer', selfUps.length + ' self PEER_UPs');
+
   // bridge host→client: engine server output reaches the client engine tagged
   const body = Buffer.from('servmsg-' + Date.now());
   clientEngine.frames.length = 0;

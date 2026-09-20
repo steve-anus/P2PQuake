@@ -288,3 +288,27 @@ test('plane A pump: PONG echoes the nonce and the sequence continues at 2 (§2.2
   assert.equal(sock.written.length, 2);
   assert.equal(F.decodeFrame(sock.written[1]).frame.seq, 3);
 });
+
+test('terminal decision owns the exit: malformed input then close cannot resolve clean', async () => {
+  const sock = new FakeSock();
+  const clock = { now: () => 0, setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) };
+  const realExit = process.exit;
+  process.exit = () => {}; // the terminal path ends in exit(1); stub so the runner lives
+  try {
+    let settled = 'pending';
+    Q.run({
+      sock, keys: { priv: null, pub: Buffer.alloc(32) },
+      identity: { manifest: Buffer.alloc(32), gamedir: Buffer.from('id1'), engineId: Buffer.alloc(32) },
+      name: Buffer.from('t'), pinned: null, clock, redactor: Q.makeRedactor(),
+      epochs: { load: () => -1n, save: () => {} },
+    }).then((c) => { settled = 'resolved:' + c; });
+    sock.emit('data', F.encodeFrame(F.TYPES.HOST_UP, 1, Buffer.from([0x01, 0x00, 0x04, 0x65])));
+    sock.emit('close'); // engine dies right after the garbage — the race
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(settled, 'pending', 'close after a terminal cause must not resolve a clean exit');
+    const types = sock.written.map((b) => F.decodeFrame(b).frame.type);
+    assert.ok(types.includes(F.TYPES.FATAL), 'the cause-bearing FATAL frame went out first');
+  } finally {
+    process.exit = realExit;
+  }
+});
