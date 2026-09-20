@@ -15,6 +15,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const F = require('./qn_frame.cjs');
+const R = require('./qn_room.cjs');
 const Q = require('./qn-peer.cjs');
 
 const PEER = path.join(__dirname, 'qn-peer.cjs');
@@ -170,4 +171,120 @@ test('runtime guard: current major passes, a wrong major refuses', () => {
 
 test('dialAndAuth refuses a wrong-length token before touching the wire', async () => {
   await assert.rejects(Q.dialAndAuth('/nonexistent.sock', Buffer.alloc(4)), /bad token length/);
+});
+
+// ---- identity, persistence, redaction, and the plane A pump ----
+// The security-critical helpers of the daemon, exercised directly (spec
+// §3.4a, §5.2, §2.3): key-file modes, epoch store, code scrubbing, and the
+// terminal-cause doctrine for engine misbehavior.
+
+function tmp0700(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpeer-id-'));
+  fs.chmodSync(dir, 0o700);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true })); // ours only
+  return dir;
+}
+
+test('ensureIdentity: creates owner-only key files and refuses loose modes', (t) => {
+  const dir = tmp0700(t);
+  const k1 = Q.ensureIdentity(dir);
+  assert.equal(k1.pub.length, 32);
+  assert.equal(fs.statSync(path.join(dir, 'identity.key')).mode & 0o777, 0o600);
+  const k2 = Q.ensureIdentity(dir);
+  assert.deepEqual(k2.pub, k1.pub, 'identity stable across runs');
+  const dir2 = tmp0700(t);
+  Q.ensureIdentity(dir2);
+  fs.chmodSync(path.join(dir2, 'identity.key'), 0o644);
+  assert.throws(() => Q.ensureIdentity(dir2), /group\/other-accessible/);
+  const dir3 = tmp0700(t);
+  Q.ensureIdentity(dir3);
+  fs.chmodSync(dir3, 0o755);
+  assert.throws(() => Q.ensureIdentity(dir3), /group\/other-accessible/);
+});
+
+test('epoch store: persists monotonic values; absent or corrupt reads as none', (t) => {
+  const dir = tmp0700(t);
+  const es = Q.makeEpochStore(dir);
+  assert.equal(es.load('aa', 'bb'), -1n);
+  es.save('aa', 'bb', 41n);
+  assert.equal(es.load('aa', 'bb'), 41n);
+  assert.equal(es.load('ff', 'bb'), -1n, 'scoped per subject');
+  fs.writeFileSync(path.join(dir, 'epoch-aa-cc.txt'), 'garbage');
+  assert.equal(es.load('aa', 'cc'), -1n, 'corrupt never throws, never trusts');
+});
+
+test('redactor scrubs live join codes in raw-hex and display form', () => {
+  const rd = Q.makeRedactor();
+  const code = crypto.randomBytes(10);
+  rd.register(code);
+  const hexLine = 'saw ' + code.toString('hex') + ' end';
+  const dispLine = 'saw ' + R.codeFromBytes(code) + ' end';
+  assert.equal(rd.redact(hexLine), 'saw [redacted] end');
+  assert.equal(rd.redact(dispLine), 'saw [redacted] end');
+  rd.release(code);
+  assert.equal(rd.redact(hexLine), hexLine, 'released codes stop masking unrelated text');
+});
+
+test('computeIdentity hashes the parent running image by fd (§3.4a)', () => {
+  const gm = path.join(__dirname, '..', '..', 'gamedata.sha256');
+  const idn = Q.computeIdentity({ gamedataPath: gm, gamedir: 'id1', ppid: process.pid });
+  assert.deepEqual(idn.engineId,
+    crypto.createHash('sha256').update(fs.readFileSync(process.execPath)).digest(),
+    'engine_id binds to the bytes actually executed');
+  assert.deepEqual(idn.manifest,
+    crypto.createHash('sha256').update(fs.readFileSync(gm)).digest());
+  assert.equal(idn.gamedir.toString(), 'id1');
+});
+
+class FakeSock {
+  constructor() { this.written = []; this.h = {}; }
+  on(ev, fn) { (this.h[ev] = this.h[ev] || []).push(fn); }
+  emit(ev, arg) { for (const fn of this.h[ev] || []) fn(arg); }
+  write(b) { this.written.push(Buffer.from(b)); }
+  destroy() { this.destroyed = true; }
+}
+const fixedClock = { now: () => 0, setTimeout: () => 1, clearTimeout: () => {} };
+
+test('plane A pump: a throwing engine dispatch is a terminal cause, never a crash', () => {
+  // The daemon's frame handler decodes TLV inline; a truncated payload must
+  // arrive at the engine as a cause-bearing death, not an uncaught exception.
+  const sock = new FakeSock();
+  const fatals = [];
+  new Q.PlaneA(sock, {
+    clock: fixedClock,
+    onFrame: (f) => new Map(F.decodeTLV(f.payload)), // exactly what handle() does
+    onFatal: (w) => fatals.push(w),
+  });
+  sock.emit('data', F.encodeFrame(F.TYPES.HOST_UP, 1, Buffer.from([0x01, 0x00, 0x04, 0x65])));
+  assert.deepEqual(fatals, ['plane-a-malformed']);
+});
+
+test('plane A pump: unknown types drop-count, close past the bound, and reset on clean input (§2.3)', () => {
+  const sock = new FakeSock();
+  const fatals = [];
+  new Q.PlaneA(sock, { clock: fixedClock, onFrame: () => {}, onFatal: (w) => fatals.push(w) });
+  for (let s = 1; s <= 11; s++) sock.emit('data', F.encodeFrame(0x7777, s, Buffer.alloc(0)));
+  assert.deepEqual(fatals, ['plane-a-drop-storm']);
+  const sock2 = new FakeSock();
+  const fatals2 = [];
+  new Q.PlaneA(sock2, { clock: fixedClock, onFrame: () => {}, onFatal: (w) => fatals2.push(w) });
+  for (let s = 1; s <= 10; s++) sock2.emit('data', F.encodeFrame(0x7777, s, Buffer.alloc(0)));
+  sock2.emit('data', F.encodeFrame(F.TYPES.PING, 11, Buffer.alloc(4, 7))); // resets the run
+  assert.equal(sock2.written.length, 1, 'the clean frame was consumed with a PONG');
+  for (let s = 12; s <= 21; s++) sock2.emit('data', F.encodeFrame(0x7777, s, Buffer.alloc(0)));
+  assert.deepEqual(fatals2, [], 'two runs of ten, neither terminal');
+});
+
+test('plane A pump: PONG echoes the nonce and the sequence continues at 2 (§2.2)', () => {
+  const sock = new FakeSock();
+  const a = new Q.PlaneA(sock, { clock: fixedClock, onFrame: () => {}, onFatal: () => {} });
+  sock.emit('data', F.encodeFrame(F.TYPES.PING, 1, Buffer.from([1, 2, 3, 4])));
+  assert.equal(sock.written.length, 1);
+  const f = F.decodeFrame(sock.written[0]).frame;
+  assert.equal(f.type, F.TYPES.PONG);
+  assert.equal(f.seq, 2, 'AUTH was seq 1; this direction never restarts');
+  assert.equal(Buffer.compare(Buffer.from(f.payload), Buffer.from([1, 2, 3, 4])), 0);
+  a.send(F.TYPES.PING, Buffer.alloc(4));
+  assert.equal(sock.written.length, 2);
+  assert.equal(F.decodeFrame(sock.written[1]).frame.seq, 3);
 });

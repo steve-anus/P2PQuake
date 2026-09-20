@@ -397,6 +397,7 @@ dependencies are introduced by this spec.
 
 | value | cause |
 |---|---|
+| 0 | peer left (PEER_DOWN only: a normal departure, no fault implied) |
 | 1 | token auth failed (engine tears down peer; respawn allowed) |
 | 2 | frame malformed storm |
 | 3 | engine socket closed (peer exits) |
