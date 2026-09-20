@@ -248,7 +248,7 @@ static void check_golden(void)
     CHECK(f.type == QN_T_JOIN_PIN && f.seq == 1 && f.len == 36);
 }
 
-int main(void)
+int qn_test_frame(int *checks_out)
 {
     qn_frame_init();
     check_golden();
@@ -398,10 +398,10 @@ int main(void)
                        (const uint8_t *[]){v1}, (const uint16_t[]){3},
                        1) == 0);
 
+    *checks_out = checks;
     if (failures) {
-        printf("QN_TESTS FAILED: %d/%d\n", failures, checks);
+        printf("QN frame tests FAILED: %d/%d\n", failures, checks);
         return 1;
     }
-    printf("QN_TESTS OK: %d checks\n", checks);
     return 0;
 }
