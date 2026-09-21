@@ -15,13 +15,17 @@ failing hunk, rebase or retire the patch, never skip it.
 | `0005-sv-phys-entity-cap.patch` | upstream's entity-cap fix: `SV_Physics` re-reads the cap each iteration instead of looping on a stale count |
 | `0006-net-qn-landriver.patch` | new files `Quake/net_qn.c` / `Quake/net_qn.h`: the p2pquake landriver -- virtual socket table and address model for the local qn-peer transport; absent unless `-qn` is on the command line, standby (all data-plane ops refuse) until the Plane A lifecycle hooks report an authenticated daemon. Cosmetic note: while registered, the datagram layer prints its resolve-failure line once per landriver, so an unresolvable name shows one extra `Could not resolve` line than UDP-only builds |
 | `0007-net-bsd-qn-registration.patch` | registers the QN landriver in `net_landrivers[]` after UDP |
-| `0008-makefile-qn-object.patch` | adds `net_qn.o` to the engine's net objects |
+| `0008-makefile-qn-object.patch` | adds `net_qn.o` and the shared driver modules `qn_transport.o` / `qn_frame.o` / `qn_spawn.o` to the engine's net objects, with a `vpath` and include flag for the project's `src/driver` directory |
+| `0009-main-sdl-qn-pump.patch` | calls `QN_Pump` once per frame from both host loops in `main_sdl.c`: drives the landriver's Plane A session -- on-demand daemon spawn, auth watchdog, frame dispatch, and the host/client lane framing |
+| `0010-net-dgrm-datagram-limits.patch` | the datagram layer's size contract: chunks reliable DATA messages by the landriver's advertised datagram ceiling instead of the compile-time maximum (zero leaves behaviour unchanged — over the p2p lane every datagram must arrive whole inside one relay body); drops a received packet whose declared length disagrees with the bytes actually delivered; refuses a reassembly build-up past the receive buffer |
+| `0011-net-defs-datagram-max.patch` | adds the `datagram_max` field to `net_landriver_t` that a landriver may advertise and the datagram layer honours (the p2p landriver does; UDP leaves it zero for the compile-time default) |
+| `0012-common-longswap-unsigned-shift.patch` | `LongSwap` composes its bytes in the unsigned domain: `(int)b1 << 24` overflows signed int for `b1 >= 128` — undefined behaviour, surfaced by `-fsanitize=undefined` on the net paths |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,
 `Quake/main_sdl.c`, `Quake/net_main.c`, `Quake/host.c`, `Quake/cl_parse.c`,
-`Quake/host_cmd.c`, `Quake/common.c` (message-reader bounds only),
-`Quake/sv_phys.c` (upstream's entity-cap fix), `Quake/Makefile`.
+`Quake/host_cmd.c`, `Quake/common.c` (message-reader bounds; byte-swap composition in the unsigned domain),
+`Quake/sv_phys.c` (upstream's entity-cap fix), `Quake/net_dgrm.c` (reliable DATA chunking via the advertised ceiling only), `Quake/net_defs.h` (the `datagram_max` field only), `Quake/Makefile`.
 Anything else upstream must stay untouched so updates stay cheap and
 reviews stay small. `make engine-verify` checks this claim mechanically:
 it replays the series onto pristine pin bytes and diffs against the tree.

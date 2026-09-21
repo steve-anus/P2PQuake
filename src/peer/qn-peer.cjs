@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 'use strict';
 // qn-peer: the p2pquake networking daemon (spec §4, Plane A client).
 //

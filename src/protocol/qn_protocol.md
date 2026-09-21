@@ -302,7 +302,12 @@ test (see the test suite names in parentheses):
    AUTH is never accepted again.
 
 The qn-peer must exit when its Plane A socket closes (no orphans); the
-engine reaps it and on respawn repeats the whole handshake.
+engine reaps it and on respawn repeats the whole handshake. A daemon that
+exits with status 0 has ended the session by choice: the engine must not
+respawn it for the remainder of that engine run. Respawn (up to the cap
+above) is reserved for abnormal endings -- crash, signal, or watchdog kill.
+The respawn budget counts every daemon start attempted during the run,
+including starts that die before authentication.
 
 ### 4.1 Lane establishment (normative)
 
@@ -370,10 +375,15 @@ dependencies are introduced by this spec.
 | Plane A frame payload | 2048 bytes |
 | Plane B envelope payload | 1200 bytes |
 | RELAY body | 1100 bytes |
+| engine DATA payload (p2p landriver) | 1092 bytes — after the 8-byte datagram header this is exactly one relay body |
 | name field | 20 bytes printable ASCII |
 | chat text | 256 bytes printable |
 | map name | 16 bytes |
 | peers per match | 8 (+1 host) |
+
+A datagram that exceeds one of these caps is dropped by the peer that sees
+it, never fragmented around the cap: an oversized unreliable message simply
+does not arrive.
 | seq drop counter → close | 100 |
 | seq gap → close | > 64 |
 | Plane A drop-storm → close | 10 consecutive malformed/dropped |

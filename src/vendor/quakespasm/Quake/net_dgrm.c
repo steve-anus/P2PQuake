@@ -31,6 +31,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // these two macros are to make the code more readable
 #define sfunc	net_landrivers[sock->landriver]
+
+/* Reliable DATA chunks must fit the landriver's datagram ceiling:
+ * the p2p lane carries each datagram inside one relay body, capped
+ * below MAX_DATAGRAM (protocol 3.4); zero means no constraint. */
+#define DATAGRAM_CHUNK	(sfunc.datagram_max ? sfunc.datagram_max \
+				 : MAX_DATAGRAM)
 #define dfunc	net_landrivers[net_landriverlevel]
 
 static int net_landriverlevel;
@@ -149,14 +155,14 @@ int Datagram_SendMessage (qsocket_t *sock, sizebuf_t *data)
 	Q_memcpy(sock->sendMessage, data->data, data->cursize);
 	sock->sendMessageLength = data->cursize;
 
-	if (data->cursize <= MAX_DATAGRAM)
+	if (data->cursize <= DATAGRAM_CHUNK)
 	{
 		dataLen = data->cursize;
 		eom = NETFLAG_EOM;
 	}
 	else
 	{
-		dataLen = MAX_DATAGRAM;
+		dataLen = DATAGRAM_CHUNK;
 		eom = 0;
 	}
 	packetLen = NET_HEADERSIZE + dataLen;
@@ -182,14 +188,14 @@ static int SendMessageNext (qsocket_t *sock)
 	unsigned int	dataLen;
 	unsigned int	eom;
 
-	if (sock->sendMessageLength <= MAX_DATAGRAM)
+	if (sock->sendMessageLength <= DATAGRAM_CHUNK)
 	{
 		dataLen = sock->sendMessageLength;
 		eom = NETFLAG_EOM;
 	}
 	else
 	{
-		dataLen = MAX_DATAGRAM;
+		dataLen = DATAGRAM_CHUNK;
 		eom = 0;
 	}
 	packetLen = NET_HEADERSIZE + dataLen;
@@ -215,14 +221,14 @@ static int ReSendMessage (qsocket_t *sock)
 	unsigned int	dataLen;
 	unsigned int	eom;
 
-	if (sock->sendMessageLength <= MAX_DATAGRAM)
+	if (sock->sendMessageLength <= DATAGRAM_CHUNK)
 	{
 		dataLen = sock->sendMessageLength;
 		eom = NETFLAG_EOM;
 	}
 	else
 	{
-		dataLen = MAX_DATAGRAM;
+		dataLen = DATAGRAM_CHUNK;
 		eom = 0;
 	}
 	packetLen = NET_HEADERSIZE + dataLen;
@@ -286,6 +292,7 @@ int Datagram_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
 int	Datagram_GetMessage (qsocket_t *sock)
 {
 	unsigned int	length;
+	unsigned int	recvLen;
 	unsigned int	flags;
 	int				ret = 0;
 	struct qsockaddr readaddr;
@@ -304,6 +311,7 @@ int	Datagram_GetMessage (qsocket_t *sock)
 	//	if ((rand() & 255) > 220)
 	//		continue;
 
+		recvLen = length;	/* bytes actually delivered */
 		if (length == 0)
 			break;
 
@@ -330,6 +338,15 @@ int	Datagram_GetMessage (qsocket_t *sock)
 		length = BigLong(packetBuffer.length);
 		flags = length & (~NETFLAG_LENGTH_MASK);
 		length &= NETFLAG_LENGTH_MASK;
+
+		/* The declared length is attacker data (a hostile daemon or
+		 * remote peer); every copy below trusts it. A packet whose
+		 * header lies about its size is dropped, not interpreted. */
+		if (length != recvLen)
+		{
+			shortPacketCount++;
+			continue;
+		}
 
 		if (flags & NETFLAG_CTL)
 			continue;
@@ -380,10 +397,10 @@ int	Datagram_GetMessage (qsocket_t *sock)
 				Con_DPrintf("Duplicate ACK received\n");
 				continue;
 			}
-			sock->sendMessageLength -= MAX_DATAGRAM;
+			sock->sendMessageLength -= DATAGRAM_CHUNK;
 			if (sock->sendMessageLength > 0)
 			{
-				memmove (sock->sendMessage, sock->sendMessage + MAX_DATAGRAM, sock->sendMessageLength);
+				memmove (sock->sendMessage, sock->sendMessage + DATAGRAM_CHUNK, sock->sendMessageLength);
 				sock->sendNext = true;
 			}
 			else
@@ -408,6 +425,14 @@ int	Datagram_GetMessage (qsocket_t *sock)
 			sock->receiveSequence++;
 
 			length -= NET_HEADERSIZE;
+
+			/* the reassembly buffer is a fixed NET_MAXMESSAGE: a
+			 * build-up past it is a lie no honest sender produces */
+			if (sock->receiveMessageLength + length > NET_MAXMESSAGE)
+			{
+				Con_DPrintf("Oversized message\n");
+				return 0;
+			}
 
 			if (flags & NETFLAG_EOM)
 			{

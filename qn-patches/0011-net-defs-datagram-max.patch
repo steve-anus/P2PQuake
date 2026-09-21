@@ -1,0 +1,14 @@
+--- a/Quake/net_defs.h
++++ b/Quake/net_defs.h
+@@ -168,6 +168,11 @@
+ 	const char	*name;
+ 	qboolean	initialized;
+ 	sys_socket_t	controlSock;
++	int		datagram_max;	/* largest DATA payload this landriver
++					   carries in one datagram; 0 selects
++					   MAX_DATAGRAM. The p2p landriver sets
++					   1092 so every datagram fits one
++					   relay body (protocol 3.4) */
+ 	sys_socket_t	(*Init) (void);
+ 	void		(*Shutdown) (void);
+ 	void		(*Listen) (qboolean state);

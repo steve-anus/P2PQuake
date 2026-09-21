@@ -337,11 +337,106 @@ static void test_sockets(void)
     (void)rmdir(tmpdir);
 }
 
+/* Two frames delivered in one read(): the first is parsed then memmove-
+ * compacted out of t->buf, so any pointer into the pre-compaction buffer
+ * would dangle. The engine reads f->payload after recv returns; a frame
+ * that shares its segment with a successor must still hand back its own
+ * bytes, not the successor's shifted up into its place. */
+static void test_coalesced_frames(void)
+{
+    qn_transport_t t;
+    int fd;
+    uint8_t seg[2 * QN_MAX_FRAME];
+    uint8_t a[10], b[4];
+    size_t n, off = 0, i;
+    qn_frame_t f;
+
+    for (i = 0; i < sizeof a; i++) {
+        a[i] = (uint8_t)(0x30 + i);
+    }
+    b[0] = 0xAA; b[1] = 0xBB; b[2] = 0xCC; b[3] = 0xDD;
+
+    pair_init(&t, &fd, 1000);
+    auth_in(fd);
+    CHECK(qn_transport_poll(&t, 1000) == QN_TR_AUTHED);
+
+    n = frame(seg, QN_T_HOST_READY, 2, a, (uint16_t)sizeof a);
+    off += n;
+    n = frame(seg + off, QN_T_PING, 3, b, (uint16_t)sizeof b);
+    off += n;
+    write_all(fd, seg, off);          /* both frames in one segment */
+
+    CHECK(qn_transport_poll(&t, 1001) == QN_TR_NEED);
+    CHECK(qn_transport_recv(&t, &f) == 1);
+    CHECK(f.type == QN_T_HOST_READY && f.len == (uint16_t)sizeof a);
+    for (i = 0; i < sizeof a; i++) {
+        CHECK(f.payload[i] == a[i]);   /* survives the compaction */
+    }
+    CHECK(qn_transport_recv(&t, &f) == 1);
+    CHECK(f.type == QN_T_PING && f.len == (uint16_t)sizeof b);
+    for (i = 0; i < sizeof b; i++) {
+        CHECK(f.payload[i] == b[i]);
+    }
+    close(fd);
+    qn_transport_close(&t);
+}
+
+/* A frame header lying past the receive buffer is terminal pre-auth and
+ * post-auth: never a fake 'peer closed', never a silent stall. */
+static void test_frame_overflow(void)
+{
+    qn_transport_t t;
+    int sv[2];
+    uint8_t token[QN_AUTH_TOKEN_LEN];
+    uint8_t hdr[QN_MAX_FRAME];
+    static uint8_t junk[16384];
+    size_t i, n;
+    qn_frame_t f;
+
+    for (i = 0; i < QN_AUTH_TOKEN_LEN; i++) token[i] = (uint8_t)(0xA0 + i);
+    memset(junk, 0x5A, sizeof junk);
+
+    /* pre-auth: the fill loop must not report 'peer closed' on a full
+     * buffer, and the unparseable excess must be FAIL */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { CHECK(0); return; }
+    fcntl(sv[0], F_SETFL, O_NONBLOCK);
+    qn_transport_init(&t, sv[0], token, 1000);
+    n = qn_frame_write(hdr, sizeof hdr, QN_T_PING, 2, NULL, 0);
+    CHECK(n > 12);
+    hdr[12] = 0xff; hdr[13] = 0xff; /* declared 65535 either endianness */
+    CHECK(write(sv[1], hdr, n) == (ssize_t)n);
+    CHECK(write(sv[1], junk, sizeof junk) == (ssize_t)sizeof junk);
+    CHECK(qn_transport_poll(&t, 1000) == QN_TR_FAIL);
+    CHECK(t.reason && strcmp(t.reason, "frame malformed") == 0);
+    qn_transport_close(&t);
+    close(sv[1]);
+
+    /* post-auth: recv must terminate the transport, not wait forever */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { CHECK(0); return; }
+    fcntl(sv[0], F_SETFL, O_NONBLOCK);
+    qn_transport_init(&t, sv[0], token, 1000);
+    n = qn_frame_write(hdr, sizeof hdr, QN_T_AUTH, 1, token, QN_AUTH_TOKEN_LEN);
+    CHECK(n > 0);
+    CHECK(write(sv[1], hdr, n) == (ssize_t)n);
+    CHECK(qn_transport_poll(&t, 1001) == QN_TR_AUTHED);
+    n = qn_frame_write(hdr, sizeof hdr, QN_T_PING, 2, NULL, 0);
+    hdr[12] = 0xff; hdr[13] = 0xff;
+    CHECK(write(sv[1], hdr, n) == (ssize_t)n);
+    CHECK(write(sv[1], junk, sizeof junk) == (ssize_t)sizeof junk);
+    CHECK(qn_transport_poll(&t, 1002) == QN_TR_NEED); /* fills the buffer */
+    CHECK(qn_transport_recv(&t, &f) == -1);
+    CHECK(t.reason && strcmp(t.reason, "frame malformed") == 0);
+    qn_transport_close(&t);
+    close(sv[1]);
+}
+
 int qn_test_transport(int *checks_out)
 {
     qn_frame_init();
     test_auth_gate();
     test_post_auth();
+    test_coalesced_frames();
+    test_frame_overflow();
     test_sockets();
     *checks_out = checks;
     if (failures) {

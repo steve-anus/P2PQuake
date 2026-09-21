@@ -86,6 +86,11 @@ int qn_spawn_check(qn_spawn_t *s, uint64_t now_ms);
 /* 1 while a child is live and unreaped. */
 int qn_spawn_running(const qn_spawn_t *s);
 
+/* 1 only when the reaped child ended itself with status 0: it chose to
+ * leave. Signals, nonzero status, watchdog kills, and the already-reaped
+ * sentinel (-1) all answer 0, without the caller touching wait macros. */
+int qn_spawn_exited_cleanly(const qn_spawn_t *s);
+
 /* SIGKILL a child that has not authenticated within the watchdog window
  * (an authed child is never touched) and reap it best effort. A now_ms
  * behind boot_ms is treated as "not due". Returns 1 if this child was or

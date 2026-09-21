@@ -32,6 +32,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "SDL.h"
 #endif
 #include <stdio.h>
+
+#include "net_qn.h"	/* p2pquake landriver pump */
 #ifdef __EMSCRIPTEN__
 #include <gl4esinit.h>
 #endif
@@ -126,6 +128,7 @@ int main(int argc, char *argv[])
 				time = newtime - oldtime;
 			}
 
+			QN_Pump ((unsigned long long) (newtime * 1000.0));
 			Host_Frame (time);
 			oldtime = newtime;
 		}
@@ -151,6 +154,7 @@ int main(int argc, char *argv[])
 		newtime = Sys_DoubleTime ();
 		time = newtime - oldtime;
 
+		QN_Pump ((unsigned long long) (newtime * 1000.0));
 		Host_Frame (time);
 
 		if (time < sys_throttle.value && !cls.timedemo)

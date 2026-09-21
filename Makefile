@@ -12,7 +12,7 @@ NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node vectors-verify e2e smoke-dht clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback smoke-dht clean
 
 all: engine peer
 
@@ -31,20 +31,43 @@ engine-verify:
 	@CACHE=$${QN_ENGINE_CACHE:-$${XDG_CACHE_HOME:-$$HOME/.cache}/p2pquake/qs-engine}; \
 	[ -d "$$CACHE/.git" ] || { echo "engine-verify: NOT-READY — no engine cache at $$CACHE"; exit 1; }; \
 	R=$$(pwd); W=$$(mktemp -d); trap 'rm -rf "$$W"' EXIT; \
-	git -C "$$CACHE" archive "$$(sed -n 2p ENGINE.upstream)" \
-	  | tar -x -C "$$W" --exclude=MacOSX --exclude=Windows --exclude=Linux; \
+	Q="$$W/src/vendor/quakespasm"; mkdir -p "$$Q"; \
+	(cd "$$Q" && git -C "$$CACHE" archive "$$(sed -n 2p "$$R/ENGINE.upstream")" \
+	  | tar -x --exclude=MacOSX --exclude=Windows --exclude=Linux) \
+	  || { echo "engine-verify: FAIL — cannot stage pristine tree"; exit 1; }; \
+	ln -s "$$R/src/driver" "$$W/src/driver"; \
 	for p in qn-patches/*.patch; do \
-	  (cd "$$W" && patch -p1 -s -i "$$R/$$p") \
+	  (cd "$$Q" && patch -p1 -s -i "$$R/$$p") \
 	    || { echo "engine-verify: FAIL — $$p does not apply to the pin"; exit 1; }; \
 	done; \
-	diff -r -q -x '*.o' -x '*.d' -x quakespasm "$$W" src/vendor/quakespasm \
-	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series"
+	diff -r -q -x '*.o' -x '*.d' -x quakespasm "$$Q" src/vendor/quakespasm \
+	  && $(MAKE) --no-print-directory -s -C "$$Q/Quake" quakespasm \
+	       USE_SDL2=1 MP3LIB=mpg123 "CC=$(CC) -ffile-prefix-map=$(HOME)=." \
+	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series (applies, diffs, builds)"
 
 peer:
 	npm ci --ignore-scripts
 
 e2e:
 	$(NODE) tests/e2e-room.cjs
+
+loopback: engine
+	$(NODE) tests/qn_loopback.cjs
+
+# Fuzz target 3: hostile engine-plane bytes through the real driver path,
+# with the parsers under ASan+UBSan. Forces both rebuilds (the vendored
+# make cannot see the CC change); the leak gate proves the sanitised
+# binary carries no home path, with -ffile-prefix-map doing the work.
+fuzz-loopback:
+	@mkdir -p bin
+	$(MAKE) --no-print-directory -C $(QS_DIR)/Quake DEBUG=1 USE_SDL2=1 MP3LIB=mpg123 \
+	  "CC=$(CC) -fsanitize=address,undefined -static-libasan -static-libubsan -fno-omit-frame-pointer -ffile-prefix-map=$(HOME)=." -B
+	cp $(QS_DIR)/Quake/quakespasm bin/quakespasm-asan
+	@if strings bin/quakespasm-asan | grep -F -m1 -- "$(HOME)"; then \
+	  echo "fuzz-loopback: LEAK — home path present in sanitised binary"; exit 1; \
+	fi
+	$(MAKE) --no-print-directory engine -B
+	QN_ENGINE=bin/quakespasm-asan QN_FUZZ=1 $(NODE) tests/qn_loopback.cjs
 
 smoke-dht:
 	$(NODE) tests/smoke-dht.cjs
@@ -58,6 +81,7 @@ check:
 	./bin/qn_tests
 	$(if $(NODE_TEST_SRC),$(NODE) --test $(NODE_TEST_SRC),)
 	$(MAKE) --no-print-directory e2e
+	$(MAKE) --no-print-directory loopback
 
 asan:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi

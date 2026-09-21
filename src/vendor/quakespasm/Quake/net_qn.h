@@ -1,8 +1,17 @@
 #ifndef __net_qn_h
 #define __net_qn_h
 
+/* These three are the same preamble net_qn.c itself compiles under:
+ * net_sys.h branches on the platform macros arch_def.h provides. */
+#include "q_stdinc.h"
+#include "arch_def.h"
 #include "net_sys.h"
 struct qsockaddr;
+
+/* DATA-payload ceiling advertised to the datagram layer: the relay-body
+ * cap (protocol spec, plane B caps table) minus the 8-byte datagram
+ * header, so every datagram fits exactly one relay body end to end. */
+#define QN_DATAGRAM_MAX	1092
 
 typedef enum
 {
@@ -38,5 +47,11 @@ int  QN_SetSocketPort (struct qsockaddr *addr, int port);
  * statekeeping refuses unless RUNNING. */
 void QN_SetState (qn_state_t state);
 qn_state_t QN_GetState (void);
+
+/* Drive the Plane A session once per frame (called from main_sdl.c's
+ * host loops). Non-blocking: bounded frame budget, no sleeping, no
+ * spawning until a lane actually demands the daemon. now_ms is any
+ * monotonic millisecond clock. */
+void QN_Pump (unsigned long long now_ms);
 
 #endif	/* __net_qn_h */

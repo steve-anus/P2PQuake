@@ -199,6 +199,7 @@ static void test_token_stdin(void)
     CHECK(!qn_spawn_running(&s));
     CHECK(WIFEXITED(s.exit_status));
     CHECK(WEXITSTATUS(s.exit_status) == 0);
+    CHECK(qn_spawn_exited_cleanly(&s) == 1);
 
     char buf[4096];
     ssize_t n = read_file("cap", buf, sizeof buf);
@@ -259,6 +260,7 @@ static void test_early_exit(void)
     CHECK(wait_exit(&s));
     CHECK(WIFEXITED(s.exit_status));
     CHECK(WEXITSTATUS(s.exit_status) == 3);
+    CHECK(qn_spawn_exited_cleanly(&s) == 0);
     /* reaping is exactly once; a second check finds nothing */
     CHECK(qn_spawn_check(&s, 0) == 0);
 }
@@ -469,6 +471,7 @@ static void test_elf_from_descriptor(void)
     CHECK(wait_exit(&s));
     CHECK(WIFEXITED(s.exit_status));
     CHECK(WEXITSTATUS(s.exit_status) == 0);
+    CHECK(qn_spawn_exited_cleanly(&s) == 1);
     char buf[4096];
     ssize_t n = read_file("capelf", buf, sizeof buf);
     CHECK(n == (ssize_t)QN_SPAWN_TOKEN_LEN);

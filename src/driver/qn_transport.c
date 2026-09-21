@@ -182,6 +182,11 @@ static int head_frame(qn_transport_t *t, qn_frame_t *f)
         }
         return 0;
     }
+    /* Take ownership of the payload BEFORE the compaction below: the
+     * pointer qn_frame_parse left in f->payload aliases buf, and the
+     * memmove shifts any coalesced successor into that exact range. */
+    memcpy(t->frame_payload, f->payload, f->len);
+    f->payload = t->frame_payload;
     memmove(t->buf, t->buf + f->consumed, t->n - f->consumed);
     t->n -= f->consumed;
     return 1;
@@ -200,7 +205,14 @@ qn_tr_t qn_transport_poll(qn_transport_t *t, uint64_t now_ms)
         return QN_TR_FAIL;
     }
     for (;;) {
-        ssize_t r = read(t->fd, t->buf + t->n, sizeof t->buf - t->n);
+        size_t space = sizeof t->buf - t->n;
+        ssize_t r;
+        if (space == 0) {
+            break; /* full: the parse below decides whether this is a
+                    * frame or an overflow -- a count-0 read would
+                    * report the terminal as a graceful 'peer closed' */
+        }
+        r = read(t->fd, t->buf + t->n, space);
         if (r > 0) {
             t->n += (size_t)r;
             continue;
@@ -226,7 +238,8 @@ qn_tr_t qn_transport_poll(qn_transport_t *t, uint64_t now_ms)
         return QN_TR_FAIL;
     }
     if (k == 0) {
-        return QN_TR_NEED; /* no complete frame yet; deadline still guards */
+        return QN_TR_NEED; /* no complete frame yet; deadline still guards
+                            * (head_frame already fails a full buffer) */
     }
     if (f.type != QN_T_AUTH) {
         t->reason = "auth missing";
@@ -253,8 +266,11 @@ int qn_transport_recv(qn_transport_t *t, qn_frame_t *out)
         return 0;
     }
     k = head_frame(t, out);
-    if (k <= 0) {
+    if (k < 0) {
         return k;
+    }
+    if (k == 0) {
+        return 0; /* head_frame already fails a full buffer */
     }
     if (out->type == QN_T_AUTH) {
         t->reason = "auth replay"; /* §4.5: AUTH never passes twice */

@@ -382,6 +382,14 @@ int qn_spawn_running(const qn_spawn_t *s)
     return s->pid != -1 && !s->exited;
 }
 
+int qn_spawn_exited_cleanly(const qn_spawn_t *s)
+{
+    if (!s->exited || s->killed || s->exit_status == -1) {
+        return 0; /* unreaped, killed, or reaped elsewhere: not a choice */
+    }
+    return WIFEXITED(s->exit_status) && WEXITSTATUS(s->exit_status) == 0;
+}
+
 int qn_spawn_watchdog(qn_spawn_t *s, uint64_t now_ms)
 {
     if (s->pid == -1 || s->authed) {

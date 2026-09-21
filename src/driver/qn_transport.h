@@ -35,6 +35,12 @@ typedef struct {
     uint32_t seq_out;   /* last sent engine→peer sequence */
     uint64_t deadline_ms;
     uint8_t  buf[2 * QN_MAX_FRAME];
+    /* Owned copy of the delivered frame's payload: qn_frame_t.payload is a
+     * borrowed pointer into buf, and head_frame compacts buf after parsing,
+     * which would shift a coalesced successor's bytes into the payload's
+     * place. Callers legitimately read the payload after the call returns,
+     * so the frame outlives its position in the stream buffer. */
+    uint8_t  frame_payload[QN_MAX_PAYLOAD];
     size_t   n;
 } qn_transport_t;
 
