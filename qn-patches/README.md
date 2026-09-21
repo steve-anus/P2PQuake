@@ -13,6 +13,9 @@ failing hunk, rebase or retire the patch, never skip it.
 | `0003-host_cmd-path-traversal-filter.patch` | rejects `..`, absolute paths and drive prefixes (and argless calls) in map/save/view names accepted by server-influenced console commands |
 | `0004-common-msg-read-float-bounds.patch` | bounds-checks `MSG_ReadFloat` against the message size like its sibling readers, flagging a bad read instead of reading past the message |
 | `0005-sv-phys-entity-cap.patch` | upstream's entity-cap fix: `SV_Physics` re-reads the cap each iteration instead of looping on a stale count |
+| `0006-net-qn-landriver.patch` | new files `Quake/net_qn.c` / `Quake/net_qn.h`: the p2pquake landriver -- virtual socket table and address model for the local qn-peer transport; absent unless `-qn` is on the command line, standby (all data-plane ops refuse) until the Plane A lifecycle hooks report an authenticated daemon. Cosmetic note: while registered, the datagram layer prints its resolve-failure line once per landriver, so an unresolvable name shows one extra `Could not resolve` line than UDP-only builds |
+| `0007-net-bsd-qn-registration.patch` | registers the QN landriver in `net_landrivers[]` after UDP |
+| `0008-makefile-qn-object.patch` | adds `net_qn.o` to the engine's net objects |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,

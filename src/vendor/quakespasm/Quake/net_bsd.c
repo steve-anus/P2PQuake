@@ -66,6 +66,7 @@ net_driver_t net_drivers[] =
 const int net_numdrivers = Q_COUNTOF(net_drivers);
 
 #include "net_udp.h"
+#include "net_qn.h"
 
 net_landriver_t	net_landrivers[] =
 {
@@ -90,6 +91,29 @@ net_landriver_t	net_landrivers[] =
 		UDP_AddrCompare,
 		UDP_GetSocketPort,
 		UDP_SetSocketPort
+	},
+
+	{	"QN",
+		false,
+		0,
+		QN_Init,
+		QN_Shutdown,
+		QN_Listen,
+		QN_OpenSocket,
+		QN_CloseSocket,
+		QN_Connect,
+		QN_CheckNewConnections,
+		QN_Read,
+		QN_Write,
+		QN_Broadcast,
+		QN_AddrToString,
+		QN_StringToAddr,
+		QN_GetSocketAddr,
+		QN_GetNameFromAddr,
+		QN_GetAddrFromName,
+		QN_AddrCompare,
+		QN_GetSocketPort,
+		QN_SetSocketPort
 	}
 };
 
