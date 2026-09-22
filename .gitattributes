@@ -1,0 +1,2 @@
+# Game data blobs are opaque archives; keep diff/merge machinery away.
+gamedata/id1/*.pak binary

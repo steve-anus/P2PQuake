@@ -1,11 +1,8 @@
 bin/
 node_modules/
-gamedata/id1/
 *.o
 *.d
 *.dSYM
 .DS_Store
 # Compiled engine binary (build output).
 src/vendor/quakespasm/Quake/quakespasm
-# Game data is runtime-only, supplied per install; gamedata.sha256 records
-# the hashes for whatever sits in gamedata/id1/.
