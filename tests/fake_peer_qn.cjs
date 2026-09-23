@@ -295,6 +295,17 @@ class Peer {
       /* the chat echo comes back through the server's own progs */
       if (m[0] === SVC_PRINT && m.includes(Buffer.from('loopback-online', 'latin1'))) {
         step('chat-echo');
+        /* spec 6.4 stufftext gate: rejects first, the allowlisted
+         * phrase last. The engine's own QN: notes (deduped per fixed
+         * string) are the orchestrator's markers. */
+        this.send(T.STUFFTEXT, Buffer.from('quit\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('exec autoexec.cfg\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('reconnect\nquit\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('reconnect; quit\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('Reconnect\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('reconnect extra\0', 'latin1'));
+        this.send(T.STUFFTEXT, Buffer.from('reconnect'));	/* missing NUL */
+        this.send(T.STUFFTEXT, Buffer.from('reconnect\0', 'latin1'));
         this.state = 'done';
         step('done');
         if (process.env.QN_FATAL) {

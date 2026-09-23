@@ -1,0 +1,122 @@
+diff --git a/Quake/Makefile b/Quake/Makefile
+index da58b79..ff3d7a6 100644
+--- a/Quake/Makefile
++++ b/Quake/Makefile
+@@ -199,7 +199,8 @@ SYSOBJ_GL_VID= gl_vidsdl.o
+ QNDIR = ../../../driver
+ vpath %.c $(QNDIR)
+ CFLAGS += -I$(QNDIR)
+-SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o
++SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
++	qn_stext.o
+ SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o
+ SYSOBJ_MAIN= main_sdl.o
+ 
+diff --git a/Quake/cl_parse.c b/Quake/cl_parse.c
+index 43b673e..ea5564b 100644
+--- a/Quake/cl_parse.c
++++ b/Quake/cl_parse.c
+@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // cl_parse.c  -- parse a message received from the server
+ 
+ #include "quakedef.h"
++#include "net_qn.h"
+ #include "bgmusic.h"
+ 
+ const char *svc_strings[] =
+@@ -1108,7 +1109,7 @@ void CL_ParseServerMessage (void)
+ 			break;
+ 
+ 		case svc_stufftext:
+-			Cbuf_AddText (MSG_ReadString ());
++			QN_StufftextFromGame (MSG_ReadString ());
+ 			break;
+ 
+ 		case svc_damage:
+diff --git a/Quake/net_qn.c b/Quake/net_qn.c
+index d440d73..0c6cfe0 100644
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -40,6 +40,7 @@
+ 
+ #include "qn_frame.h"
+ #include "qn_spawn.h"
++#include "qn_stext.h"
+ #include "qn_transport.h"
+ 
+ #include "net_qn.h"
+@@ -178,6 +179,35 @@ static void qn_note (const char *fixed)
+ 	Con_SafePrintf ("QN: %s\n", fixed);
+ }
+ 
++static void qn_stext_exec (const char *line, size_t len)
++{
++	char	cmdbuf [QN_STEXT_MAXLINE + 2];
++	size_t	t = len;
++
++	while (t && (line[t - 1] == '\n' || line[t - 1] == '\r'))
++		t--;
++	memcpy (cmdbuf, line, t);
++	cmdbuf[t] = '\n';		/* exactly one terminator: an empty
++					   re-enter would replay the previous
++					   command into the line buffer */
++	cmdbuf[t + 1] = '\0';
++	Cbuf_AddText (cmdbuf);
++	qn_note ("stufftext allowlisted");
++}
++
++/* Game-protocol entry (cl_parse.c's svc_stufftext arm). Plane A drops
++ * feed the drop totals, game-protocol drops do not: the drop storm is a
++ * Plane A contract signal (spec 2.3). */
++void QN_StufftextFromGame (const char *line)
++{
++	size_t	len = strlen (line);
++
++	if (len >= 1 && len <= QN_STEXT_MAXLINE && QN_StextAllowed (line, len))
++		qn_stext_exec (line, len);
++	else
++		qn_note ("stufftext dropped (not allowlisted)");
++}
++
+ /* Only ever true from the RUNNING window, so no virtual socket can
+  * exist while the module stands by -- the data-plane refusals below are
+  * belt-and-braces, not reachable policy surfaces. */
+@@ -741,13 +771,18 @@ static void qn_dispatch (const qn_frame_t *f)
+ 		return;
+ 
+ 	case QN_T_STUFFTEXT:
+-		/* Required gate: remote-sourced console text is never
+-		 * dispatched until the engine-side allowlist from spec
+-		 * section 6.4 exists with its own test. Drop and report a
+-		 * fixed string; a known type is not part of the drop
+-		 * storm, which counts only unknown types (spec 2.3). */
+-		qn_drops_total++;
+-		qn_note ("stufftext dropped (not allowlisted)");
++		/* Spec 6.4: only the derived allowlist (src/driver/
++		 * qn_stext.c) reaches the console. A known type is not
++		 * part of the drop storm, which counts only unknown
++		 * types (spec 2.3). */
++		if (QN_StextFrameOk ((const char *) f->payload, f->len) &&
++		    QN_StextAllowed ((const char *) f->payload, f->len - 1))
++			qn_stext_exec ((const char *) f->payload, f->len - 1);
++		else
++		{
++			qn_drops_total++;
++			qn_note ("stufftext dropped (not allowlisted)");
++		}
+ 		return;
+ 
+ 	default:
+diff --git a/Quake/net_qn.h b/Quake/net_qn.h
+index 8259b34..de5790d 100644
+--- a/Quake/net_qn.h
++++ b/Quake/net_qn.h
+@@ -55,4 +55,8 @@ qn_state_t QN_GetState (void);
+  * monotonic millisecond clock. */
+ void QN_Pump (unsigned long long now_ms);
+ 
++/* Spec 6.4 dispatch: game-protocol svc_stufftext (cl_parse.c) reaches the
++ * console only through here; the allowlist predicate is qn_stext.h. */
++void QN_StufftextFromGame (const char *line);
++
+ #endif	/* __net_qn_h */

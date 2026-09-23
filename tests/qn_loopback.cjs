@@ -55,6 +55,8 @@ const want = [
   ['peer-signon2',   (l) => l === 'LBSTEP signon2 ok'],
   ['peer-signon3',   (l) => l === 'LBSTEP signon3 ok'],
   ['peer-chat-echo', (l) => l === 'LBSTEP chat-echo ok'],
+  ['stext-drop',     (l) => l === 'QN: stufftext dropped (not allowlisted)'],
+  ['stext-allow',    (l) => l === 'QN: stufftext allowlisted'],
   ['peer-done',      (l) => l === 'LBSTEP done ok'],
 ];
 if (process.env.QN_FUZZ) {

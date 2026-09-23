@@ -40,6 +40,7 @@
 
 #include "qn_frame.h"
 #include "qn_spawn.h"
+#include "qn_stext.h"
 #include "qn_transport.h"
 
 #include "net_qn.h"
@@ -176,6 +177,35 @@ static void qn_note (const char *fixed)
 		return;
 	qn_last_note = fixed;
 	Con_SafePrintf ("QN: %s\n", fixed);
+}
+
+static void qn_stext_exec (const char *line, size_t len)
+{
+	char	cmdbuf [QN_STEXT_MAXLINE + 2];
+	size_t	t = len;
+
+	while (t && (line[t - 1] == '\n' || line[t - 1] == '\r'))
+		t--;
+	memcpy (cmdbuf, line, t);
+	cmdbuf[t] = '\n';		/* exactly one terminator: an empty
+					   re-enter would replay the previous
+					   command into the line buffer */
+	cmdbuf[t + 1] = '\0';
+	Cbuf_AddText (cmdbuf);
+	qn_note ("stufftext allowlisted");
+}
+
+/* Game-protocol entry (cl_parse.c's svc_stufftext arm). Plane A drops
+ * feed the drop totals, game-protocol drops do not: the drop storm is a
+ * Plane A contract signal (spec 2.3). */
+void QN_StufftextFromGame (const char *line)
+{
+	size_t	len = strlen (line);
+
+	if (len >= 1 && len <= QN_STEXT_MAXLINE && QN_StextAllowed (line, len))
+		qn_stext_exec (line, len);
+	else
+		qn_note ("stufftext dropped (not allowlisted)");
 }
 
 /* Only ever true from the RUNNING window, so no virtual socket can
@@ -741,13 +771,18 @@ static void qn_dispatch (const qn_frame_t *f)
 		return;
 
 	case QN_T_STUFFTEXT:
-		/* Required gate: remote-sourced console text is never
-		 * dispatched until the engine-side allowlist from spec
-		 * section 6.4 exists with its own test. Drop and report a
-		 * fixed string; a known type is not part of the drop
-		 * storm, which counts only unknown types (spec 2.3). */
-		qn_drops_total++;
-		qn_note ("stufftext dropped (not allowlisted)");
+		/* Spec 6.4: only the derived allowlist (src/driver/
+		 * qn_stext.c) reaches the console. A known type is not
+		 * part of the drop storm, which counts only unknown
+		 * types (spec 2.3). */
+		if (QN_StextFrameOk ((const char *) f->payload, f->len) &&
+		    QN_StextAllowed ((const char *) f->payload, f->len - 1))
+			qn_stext_exec ((const char *) f->payload, f->len - 1);
+		else
+		{
+			qn_drops_total++;
+			qn_note ("stufftext dropped (not allowlisted)");
+		}
 		return;
 
 	default:

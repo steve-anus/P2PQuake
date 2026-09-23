@@ -55,4 +55,8 @@ qn_state_t QN_GetState (void);
  * monotonic millisecond clock. */
 void QN_Pump (unsigned long long now_ms);
 
+/* Spec 6.4 dispatch: game-protocol svc_stufftext (cl_parse.c) reaches the
+ * console only through here; the allowlist predicate is qn_stext.h. */
+void QN_StufftextFromGame (const char *line);
+
 #endif	/* __net_qn_h */
