@@ -12,7 +12,7 @@ NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback twoplayer smoke-dht clean
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback twoplayer relay smoke-dht clean
 
 all: engine peer
 
@@ -59,6 +59,9 @@ loopback: engine
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
 
+relay: engine
+	QN_RELAY=1 $(NODE) tests/qn_twoplayer.cjs
+
 # Fuzz target 3: hostile engine-plane bytes through the real driver path,
 # with the parsers under ASan+UBSan. Forces both rebuilds (the vendored
 # make cannot see the CC change); the leak gate proves the sanitised
@@ -88,6 +91,7 @@ check:
 	$(MAKE) --no-print-directory e2e
 	$(MAKE) --no-print-directory loopback
 	$(MAKE) --no-print-directory twoplayer
+	$(MAKE) --no-print-directory relay
 
 asan:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi

@@ -27,9 +27,11 @@ const ENGINE = process.env.QN_ENGINE ||
 const PEER = path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
 const GAMEDATA = process.env.QN_GAMEDATA || path.join(ROOT, 'gamedata');
 const createTestnet = require('hyperdht/testnet');
+const { makeRelayNode } = require('../src/peer/qn-relay.cjs');
 
 let procsRef = [];
 let baseRef = null;
+let relayNodeRef = null;
 
 const CROCK = new Set('0123456789ABCDEFGHJKMNPQRSTVWXYZ');
 
@@ -61,6 +63,8 @@ class Engine {
     this.name = name;
     this.dir = dir;
     this.log = [];
+    this.lineStamps = [];
+    this.t0 = Date.now();
     this.lines = [];
     this.procs = [];
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -83,6 +87,7 @@ class Engine {
     child.on('exit', (code, sig) => {
       this.exitInfo = { code, sig };
       this.log.push(`qn2p: engine-exit ${this.name} code=${String(code)} sig=${String(sig)}`);
+      this.lineStamps.push(Date.now());
       this.onLine(`qn2p: engine-exit ${this.name} code=${String(code)} sig=${String(sig)}`);
     });
     const absorb = (stream) => {
@@ -93,6 +98,7 @@ class Engine {
         carry = parts.pop();
         for (const l of parts) {
           this.log.push(l);
+          this.lineStamps.push(Date.now());
           try { fs.appendFileSync(this.logfile, l + '\n'); } catch (e) { /* tmp */ }
           this.onLine(l);
         }
@@ -147,15 +153,70 @@ class Engine {
     if (this.exitInfo) return;
     this.linesAtKill = this.lines.length;
     // detached pgid: kills stdbuf wrapper AND the engine it hides.
-    try { process.kill(-this.child.pid, 'SIGKILL'); }
-    catch (e) { try { this.child.kill('SIGKILL'); } catch (e2) { /* gone */ } }
+    // script(1) setsid's the engine into a NEW session, so the group kill
+    // cannot reach it: walk the child tree two levels (script -> engine
+    // -> qn-peer daemon) and SIGKILL each, then the group as backstop.
+    // A leaked host squatting UDP 26000 once starved the next lane's bind.
+    const fsx = require('node:fs');
+    const signal = (p) => { try { process.kill(p, 'SIGKILL'); } catch (e) { /* gone */ } };
+    const level = (pids) => {
+      const out = [];
+      for (const p of pids) {
+        try {
+          for (const task of fsx.readdirSync(`/proc/${p}/task`)) {
+            const kids = fsx.readFileSync(`/proc/${p}/task/${task}/children`, 'utf8');
+            for (const c of kids.split(/\s+/)) if (c) out.push(Number(c));
+          }
+        } catch (e) { /* gone */ }
+      }
+      return out;
+    };
+    const root = this.child.pid;
+    const kids = level([root]);
+    const grand = level(kids);
+    for (const p of grand) signal(p);
+    for (const p of kids) signal(p);
+    try { process.kill(-root, 'SIGKILL'); }
+    catch (e) { signal(root); }
   }
 
   dump(tail = 12) {
-    const keys = this.log.filter((l) =>
-      /qn-peer:|Join code|daemon|QN:|enter|Error|error/.test(l));
+    const ts = (i, l) => `[+${((this.lineStamps[i] - this.t0) / 1000).toFixed(1)}s] ${l}`;
+    const keys = [];
+    this.log.forEach((l, i) => {
+      if (/qn-peer:|Join code|daemon|QN:|enter|Error|error/.test(l)) keys.push(ts(i, l));
+    });
+    const from = Math.max(0, this.log.length - tail);
+    const tailLines = this.log.slice(from).map((l, j) => ts(from + j, l));
     return `---- ${this.name} key lines ----\n` + keys.join('\n') +
-      `\n---- ${this.name} log tail ----\n` + this.log.slice(-tail).join('\n');
+      `\n---- ${this.name} log tail ----\n` + tailLines.join('\n');
+  }
+}
+
+// Engine-level recovery: a plane-B connection stall (the first relay attempt
+// can burn its key-bind window before pairing lands) outlives the engine's
+// CL_Connect budget, and a GUI client parked at the menu never retries the
+// console path on its own. A player restarts the game; bounded to 2 respawns,
+// first at 30 s without the spawn line. Fresh-boot join is the same flow the
+// rejoin phase below already asserts, so the relay counters still carry it.
+async function waitSpawn (host, mk, name, client) {
+  const want = `${name} entered the game`;
+  const deadline = Date.now() + JOIN_TIMEOUT;
+  let nextCheck = Date.now() + 30000, respawns = 0;
+  for (;;) {
+    if (host.lines.some((l) => l.includes(want))) return client;
+    const now = Date.now();
+    if (now > deadline) {
+      throw new Error(`${host.name}: timeout waiting for ${name} spawn`);
+    }
+    if (now >= nextCheck && respawns < 2) {
+      respawns++;
+      nextCheck = now + 25000;
+      console.log(`qn2p: ${name} spawn stalled; engine respawn #${respawns}`);
+      try { client.kill(); } catch (e) { /* already gone */ }
+      client = mk();
+    }
+    await new Promise((r) => setTimeout(r, 300));
   }
 }
 
@@ -171,8 +232,22 @@ async function main() {
   }
   if (!tnet) throw new Error('no free port for the private testnet');
   const bootstrap = tnet.bootstrap.map((b) => `${b.host}:${b.port}`).join(',');
+  // Traffic proof: QN_RELAY=1 names the blind relay to every daemon and
+  // refuses direct hole-punching, so the match can ONLY ride the relay --
+  // and finish() fails the lane if the relay saw no traffic. A test, not
+  // a hope.
+  if (process.env.QN_RELAY && process.env.QN_RELAY !== '1') {
+    throw new Error('QN_RELAY malformed (want 1)');
+  }
+  let relayNode = null;
   const env = { QN_DHT_BOOTSTRAP: bootstrap };
-  console.log(`TWPLAYER: mode=dm bootstrap=${bootstrap}`);
+  if (process.env.QN_RELAY === '1') {
+    relayNode = await makeRelayNode({ bootstrap: tnet.bootstrap });
+    env.QN_RELAY_THROUGH = relayNode.publicKey.toString('hex');
+    env.QN_RELAY_ONLY = '1';
+  }
+  relayNodeRef = relayNode;
+  console.log(`TWPLAYER: mode=dm${relayNode ? ' relay' : ''} bootstrap=${bootstrap}`);
 
   const procs = [];
   procsRef = procs;
@@ -180,6 +255,16 @@ async function main() {
     for (const p of procs) { try { p.kill(); } catch (e) { /* gone */ } }
   };
   const finish = (code, msg) => {
+    if (relayNode) {
+      const s = relayNode.stats;
+      console.log(`TWPLAYER RELAY: sessions=${s.sessions.accepted}/${s.sessions.opened} pairings=${s.pairings.requested}req/${s.pairings.matched}matched/${s.pairings.pending}pending streams=${s.streams.opened} refused=${s.refused} dropped=${s.dropped}`);
+      if (code === 0 && (s.sessions.accepted < 4 || s.pairings.requested < 4 || s.pairings.matched < 2 ||
+          s.streams.opened < 4 || s.refused !== 0 || s.dropped !== 0)) {
+        console.log('TWPLAYER FAIL: the match did not ride the relay');
+        code = 1; msg = 'TWPLAYER FAIL (relay)';
+      }
+    }
+    if (relayNode) relayNode.close().catch(() => {});
     cleanup();
     if (code !== 0) for (const p of procs) if (p.dump) console.log(p.dump());
     if (code === 0) { try { fs.rmSync(base, { recursive: true, force: true }); } catch (e) { /* tmp */ } }
@@ -190,7 +275,6 @@ async function main() {
   };
 
   const guard = setTimeout(() => finish(1, 'TWPLAYER FAIL: global budget'), 420000);
-  guard.unref?.();
 
   const host = new Engine('host', path.join(base, 'host'),
     ['-qn', '-qn-peer', PEER, '-qn-dir', path.join(base, 'host'),
@@ -206,11 +290,21 @@ async function main() {
     ['-qn', '-qn-peer', PEER, '-qn-dir', dir, '-basedir', GAMEDATA,
      '+name', name, '+connect', `qn:${code}`];
 
-  const alice = new Engine('QnAlice', path.join(base, 'cl1'),
-    clientArgs('QnAlice', path.join(base, 'cl1')), env);
-  const bob = new Engine('QnBob', path.join(base, 'cl2'),
-    clientArgs('QnBob', path.join(base, 'cl2')), env);
-  procs.push(alice, bob);
+  // Respawn rotates the persistent identity (identity.key lives in the
+  // engine dir): the host's room keeps a stalled member until its ping
+  // loop GCs the dead lane, and a same-identity rejoin would be refused
+  // DUP_IDENTITY inside that window. The old lane's close still removes
+  // the stale member; the engine name (SV side) is unchanged.
+  const mkEngine = (label, gameName, dir, respawn) => {
+    if (respawn) { try { fs.rmSync(path.join(dir, 'identity.key'), { force: true }); } catch (e) { /* none */ } }
+    const e = new Engine(label, dir, clientArgs(gameName, dir), env);
+    procs.push(e);
+    return e;
+  };
+  const mkAlice = (respawn) => mkEngine('QnAlice', 'QnAlice', path.join(base, 'cl1'), respawn);
+  const mkBob = (respawn) => mkEngine('QnBob', 'QnBob', path.join(base, 'cl2'), respawn);
+  let alice = mkAlice(false);
+  let bob = mkBob(false);
 
   for (const c of [alice, bob]) {
     await c.expect((l) => l.includes('client: joined'), 'room join', JOIN_TIMEOUT);
@@ -219,10 +313,8 @@ async function main() {
     await c.expect((l) => l.trim() === 'qn-peer: client: roster v2',
       'roster v2', JOIN_TIMEOUT);
   }
-  await host.expect((l) => l.includes('QnAlice entered the game'),
-    'QnAlice spawn', JOIN_TIMEOUT);
-  await host.expect((l) => l.includes('QnBob entered the game'),
-    'QnBob spawn', JOIN_TIMEOUT);
+  alice = await waitSpawn(host, () => mkAlice(true), 'QnAlice', alice);
+  bob = await waitSpawn(host, () => mkBob(true), 'QnBob', bob);
 
   await new Promise((r) => setTimeout(r, 10000)); // soak: banned lines would land
 
@@ -266,12 +358,32 @@ async function main() {
     host.count((x) => x.includes('Client QnAlice removed')) > removedBefore,
     'host slot release after crash', 120000);
   const rejoinMin = enterCount('QnAlice') + 1;
-  const alice2 = new Engine('QnAlice#2', path.join(base, 'cl1'),
-    clientArgs('QnAlice', path.join(base, 'cl1')), env);
-  procs.push(alice2);
-  await alice2.expect((l) => l.includes('client: joined'), 'rejoin', REJOIN_TIMEOUT);
-  await host.expect((l) => l.includes('QnAlice entered the game') &&
-    enterCount('QnAlice') >= rejoinMin, 'QnAlice respawn #2', REJOIN_TIMEOUT);
+  let alice2 = mkEngine('QnAlice#2', 'QnAlice', path.join(base, 'cl1'), false);
+  {
+    // Same stall family as waitSpawn: a first-connection key-bind stall can
+    // outlive the engine's CL budget during alice2's boot; restart the
+    // engine (fresh identity to dodge the host's zombie-member window).
+    const deadline = Date.now() + REJOIN_TIMEOUT;
+    let nextCheck = Date.now() + 20000, respawns = 0;
+    for (;;) {
+      const joinedOk = alice2.lines.some((l) => l.includes('client: joined'));
+      const enteredOk = enterCount('QnAlice') >= rejoinMin;
+      if (enteredOk) break;
+      const now = Date.now();
+      if (now > deadline) {
+        throw new Error((joinedOk ? 'host' : 'QnAlice#2') + ': timeout waiting for '
+          + (joinedOk ? 'QnAlice respawn #2' : 'rejoin'));
+      }
+      if (now >= nextCheck && respawns < 2) {
+        respawns++;
+        nextCheck = now + 18000;
+        console.log(`qn2p: rejoin stalled; engine respawn #${respawns}`);
+        try { alice2.kill(); } catch (e) { /* already gone */ }
+        alice2 = mkEngine('QnAlice#2', 'QnAlice', path.join(base, 'cl1'), true);
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
 
   // Stale code after the host is gone must fail cleanly, never crash.
   // Residents go first: a resident re-dial meeting a dead host is a
@@ -320,6 +432,7 @@ async function main() {
 
 main().catch((e) => {
   console.log('TWPLAYER FAIL:', e.message);
+  if (relayNodeRef) { const s = relayNodeRef.stats; console.log(`TWPLAYER RELAY(at-fail): sessions=${s.sessions.accepted}/${s.sessions.opened} pairings=${s.pairings.requested}req/${s.pairings.matched}matched/${s.pairings.pending}pending streams=${s.streams.opened} refused=${s.refused} dropped=${s.dropped}`); }
   for (const p of procsRef) { try { p.kill(); } catch (err) { /* gone */ } }
   for (const p of procsRef) if (p.dump) console.log(p.dump());
   if (baseRef) console.log('BASE kept at ' + baseRef);
