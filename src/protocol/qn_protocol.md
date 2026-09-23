@@ -441,7 +441,7 @@ incomplete without it.
 | JOIN after KEY_BIND | 10 s |
 | ROSTER refresh (client side; else match is stale) | 30 s |
 | Plane B PING interval / dead peer | 2 s / 6 s |
-| Plane A PING interval / dead peer | 2 s / 6 s |
+| Plane A PING interval / dead peer | 2 s / 30 s |
 
 ---
 
