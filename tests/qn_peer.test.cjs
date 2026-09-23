@@ -312,3 +312,77 @@ test('terminal decision owns the exit: malformed input then close cannot resolve
     process.exit = realExit;
   }
 });
+
+/* ---- blind-relay env contract (transport fallback) ---- */
+const { spawnSync } = require('node:child_process');
+const ROOT_DIR = path.join(__dirname, '..');
+const peerRun = (env, code) => spawnSync(process.execPath, ['-e', code],
+  { env: { ...process.env, ...env }, cwd: ROOT_DIR, encoding: 'utf8' });
+
+test('QN_RELAY_THROUGH: valid keys yield the function form (hyperdht gates non-functions on dht.randomized)', () => {
+  const r = peerRun({ QN_RELAY_THROUGH: 'aa'.repeat(32) + ',' + 'bb'.repeat(32) },
+    `const q=require(${JSON.stringify(PEER)});
+     const f=q.relayThroughFromEnv();
+     if(typeof f!=='function')process.exit(7);
+     const k=f(); if(!Array.isArray(k)||k.length!==2||!k.every(x=>x.length===32))process.exit(8);`);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('QN_RELAY_THROUGH malformed key exits 1, loudly', () => {
+  const r = peerRun({ QN_RELAY_THROUGH: 'xyz' },
+    `require(${JSON.stringify(PEER)}).relayThroughFromEnv();`);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /QN_RELAY_THROUGH malformed/);
+});
+
+test('QN_RELAY_ONLY without a relay, or malformed, refuses to start', () => {
+  const a = peerRun({ QN_RELAY_ONLY: '1' },
+    `require(${JSON.stringify(PEER)}).relayThroughFromEnv();`);
+  assert.equal(a.status, 1);
+  assert.match(a.stderr, /QN_RELAY_ONLY requires QN_RELAY_THROUGH/);
+  const b = peerRun({ QN_RELAY_ONLY: 'yes', QN_RELAY_THROUGH: 'aa'.repeat(32) },
+    `require(${JSON.stringify(PEER)}).relayThroughFromEnv();`);
+  assert.equal(b.status, 1);
+  assert.match(b.stderr, /QN_RELAY_ONLY malformed/);
+});
+
+test('QN_RELAY_ONLY leaves NAT classification honest (no RANDOM pin)', () => {
+  const r = peerRun({ QN_RELAY_THROUGH: 'aa'.repeat(32), QN_RELAY_ONLY: '1' },
+    `const q=require(${JSON.stringify(PEER)});
+     const f=q.relayThroughFromEnv();
+     if(typeof f!=='function')process.exit(7);
+     const Nat=require('hyperdht/lib/nat');
+     if(Object.getOwnPropertyDescriptor(Nat.prototype,'firewall')!==undefined)process.exit(9);
+     const { FIREWALL } = require('hyperdht/lib/constants');
+     const n=new Nat({firewalled:false},{},null);
+     if(n.firewall!==FIREWALL.OPEN)process.exit(10);`);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('no relay env: lane stays exactly as before (undefined, no pin)', () => {
+  const r = peerRun({},
+    `const q=require(${JSON.stringify(PEER)});
+     if(q.relayThroughFromEnv()!==undefined)process.exit(7);
+     const Nat=require('hyperdht/lib/nat');
+     const { FIREWALL } = require('hyperdht/lib/constants');
+     if(new Nat({firewalled:false},{},null).firewall!==FIREWALL.OPEN)process.exit(9);`);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('QN_RELAY_ONLY installs the direct-plane forcing, idempotently', () => {
+  const r = peerRun({ QN_RELAY_THROUGH: 'aa'.repeat(32), QN_RELAY_ONLY: '1' },
+    `const q=require(${JSON.stringify(PEER)});
+     q.relayThroughFromEnv(); q.relayThroughFromEnv();
+     const s=q.relayForcingState();
+     if(!(s.applied&&s.remoteAddress&&s.punch&&s.addHandshake&&s.connect))process.exit(7);`);
+  assert.equal(r.status, 0, r.stderr);
+});
+
+test('no relay env: the forcing stack stays untouched', () => {
+  const r = peerRun({},
+    `const q=require(${JSON.stringify(PEER)});
+     if(q.relayThroughFromEnv()!==undefined)process.exit(7);
+     const s=q.relayForcingState();
+     if(s.applied||s.remoteAddress||s.punch||s.addHandshake||s.connect)process.exit(8);`);
+  assert.equal(r.status, 0, r.stderr);
+});

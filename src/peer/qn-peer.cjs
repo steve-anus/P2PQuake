@@ -56,7 +56,9 @@ function dhtBootstrap() {
       process.stderr.write('qn-peer: QN_DHT_BOOTSTRAP malformed\n');
       process.exit(1);
     }
-    list.push({ host: m[1], port });
+    let host = m[1];
+    if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1); // dns.lookup rejects brackets
+    list.push({ host, port });
   }
   return list;
 }
@@ -70,9 +72,126 @@ function dhtBootstrap() {
 // the flat network is theirs to declare, so the probe is overruled the
 // same way hyperdht's own testnet does; on the public bootstraps the
 // detection stands and WAN reality is measured, not assumed.
+// Named blind relays (transport fallback): QN_RELAY_THROUGH is a
+// comma-separated list of relay DHT public keys (64-hex). The keys travel
+// only inside each side's NOISE-ENCRYPTED handshake payload; a relay sees
+// ciphertext and flow metadata, never contents, and cannot read or forge
+// plane B (end-to-end Noise + envelope signatures). QN_RELAY_ONLY=1
+// structurally disables the direct data plane (applyRelayForcing): a join
+// either rides a named relay or fails closed. NAT-classification lies
+// alone do NOT force it on a flat testnet: both sides truthfully observe
+// a stable remote address and report OPEN from it (lib/server.js:281,378
+// and lib/connect.js:434,441, read 2026-09-23), so the forcing must kill
+// the direct paths where they actually fire.
+// relayThrough must be a FUNCTION: hyperswarm gates the non-function
+// forms on dht.randomized (index.js:684-688, read 2026-09-23) and a flat
+// LAN is never "randomized" — only the function is consulted every time.
+function relayThroughFromEnv() {
+  const only = (process.env.QN_RELAY_ONLY || '').trim();
+  if (only !== '' && only !== '1') {
+    process.stderr.write('qn-peer: QN_RELAY_ONLY malformed (want 1)\n');
+    process.exit(1);
+  }
+  const raw = (process.env.QN_RELAY_THROUGH || '').trim();
+  if (!raw) {
+    if (only === '1') { // relay-only without a relay dies silently: refuse
+      process.stderr.write('qn-peer: QN_RELAY_ONLY requires QN_RELAY_THROUGH\n');
+      process.exit(1);
+    }
+    return undefined;
+  }
+  const keys = [];
+  for (const part of raw.split(',')) {
+    const m = /^([0-9a-fA-F]{64})$/.exec(part.trim());
+    if (!m) {
+      process.stderr.write('qn-peer: QN_RELAY_THROUGH malformed (want 64-hex keys, comma-separated)\n');
+      process.exit(1);
+    }
+    keys.push(Buffer.from(m[1], 'hex'));
+  }
+  if (only === '1') applyRelayForcing(keys);
+  return () => keys; // hyperdht selectRelay random-picks arrays
+}
+
+// QN_RELAY_ONLY forcing: the direct data plane is disabled only where it
+// can actually fire, and only for match peers — dials to the named
+// relays stay fully direct (they carry the match, they must be dialable):
+//  - remoteAddress() -> null makes the client's handshake report UNKNOWN
+//    with no advertised self-address (lib/connect.js:434-445) and stops
+//    the server serving OPEN from observation (lib/server.js:281,378),
+//    which starves every direct shortcut that bypasses the relay branch;
+//  - the server's OPEN/direct fast path returns BEFORE its relay branch
+//    (lib/server.js:412 vs :419), so handshakes are treated as
+//    relay-arrived (direct=false) — exactly what a relay-forwarded
+//    handshake looks like in production;
+//  - _punch is pinned to upstream's own "nothing to punch" shape (the
+//    false early return in lib/holepuncher.js), mirroring the freeze
+//    hyperdht's relaying tests use (test/relaying.js pausePunching);
+//  - peer dials carry localConnection:false so the LAN ping shortcut
+//    (lib/connect.js:84,251) cannot dial the peer either.
+applyRelayForcing.sameKeys = (keys) => {
+  const prev = applyRelayForcing.keys || [];
+  return prev.length === keys.length && prev.every((k, i) => k.equals(keys[i]));
+};
+
+function applyRelayForcing(keys) {
+  if (applyRelayForcing.applied) {
+    // The daemon's env is static; different keys on a second call can only
+    // come from misuse of the exported test surface -- refuse loudly rather
+    // than keep a wrapper bound to the first caller's relays.
+    if (!applyRelayForcing.sameKeys(keys)) {
+      throw new Error('qn-peer: relay forcing already applied with different keys');
+    }
+    return;
+  }
+  applyRelayForcing.applied = true;
+  applyRelayForcing.keys = keys;
+  const Holepuncher = require('hyperdht/lib/holepuncher');
+  const Server = require('hyperdht/lib/server');
+  // No NAT-classification pin: a fabricated RANDOM makes the punch rounds
+  // abort the connection (HOLEPUNCH_DOUBLE_RANDOMIZED_NATS) before relay
+  // pairing completes, destroying first attempts mid-bind-delivery. The
+  // levers below are sufficient to force the relay path; classification
+  // stays honest so the rounds idle until pairing wins (isDone guards the
+  // destroy once the relayed stream is attached).
+  DHT.prototype.remoteAddress = function remoteAddress() { return null; };
+  Holepuncher.prototype._punch = function _punch() { return Promise.resolve(false); };
+  const origAdd = Server.prototype._addHandshake;
+  Server.prototype._addHandshake = function _addHandshake(k, noise, clientAddress, req, direct) {
+    return origAdd.call(this, k, noise, clientAddress, req, false);
+  };
+  const isRelayKey = (pk) => { // hot dial path: never throw out of the wrapper,
+    if (!pk || typeof pk.equals !== 'function') return false; // and fail toward forcing
+    try { return keys.some((k) => k.equals(pk)); } catch { return false; }
+  };
+  const origConnect = DHT.prototype.connect;
+  DHT.prototype.connect = function connect(publicKey, opts) {
+    if (isRelayKey(publicKey)) return origConnect.call(this, publicKey, opts);
+    return origConnect.call(this, publicKey, { ...opts, localConnection: false });
+  };
+  DHT.prototype.remoteAddress._qnForced = true;
+  Holepuncher.prototype._punch._qnForced = true;
+  Server.prototype._addHandshake._qnForced = true;
+  DHT.prototype.connect._qnForced = true;
+}
+
+function relayForcingState() {
+  const Holepuncher = require('hyperdht/lib/holepuncher');
+  const Server = require('hyperdht/lib/server');
+  return {
+    applied: applyRelayForcing.applied === true,
+    remoteAddress: DHT.prototype.remoteAddress._qnForced === true,
+    punch: Holepuncher.prototype._punch._qnForced === true,
+    addHandshake: Server.prototype._addHandshake._qnForced === true,
+    connect: DHT.prototype.connect._qnForced === true
+  };
+}
+
 function makeSwarm(extra) {
+  const relayThrough = relayThroughFromEnv();
+  const opts = relayThrough ? { ...extra, relayThrough } : extra;
   const bootstrap = dhtBootstrap();
-  if (!bootstrap) return new Hyperswarm(extra);
+  if (!bootstrap) return new Hyperswarm(opts);
   // A loopback bootstrap is the flat-network case hyperdht's own testnet
   // serves: bind loopback too, or the node announces an address its
   // peers cannot dial and every join dies with zero attempts. Outside
@@ -86,7 +205,7 @@ function makeSwarm(extra) {
     firewalled: false,
     ...(loopback ? { host: '127.0.0.1' } : {})
   });
-  return new Hyperswarm({ dht, ...extra });
+  return new Hyperswarm({ dht, ...opts });
 }
 function assertRuntime(major = NODE_MAJOR_TESTED) {
   const m = Number(process.versions.node.split('.')[0]);
@@ -572,4 +691,5 @@ if (require.main === module) {
 module.exports = {
   assertRuntime, readToken, dialAndAuth, usageExit, NODE_MAJOR_TESTED,
   ensureIdentity, makeEpochStore, computeIdentity, makeRedactor, PlaneA, parseFlags, run,
+  relayThroughFromEnv, applyRelayForcing, relayForcingState,
 };

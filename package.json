@@ -5,6 +5,7 @@
   "description": "p2pquake match peer: DHT discovery, Noise-authenticated transport, signed match envelopes for the game engine",
   "license": "GPL-2.0-or-later",
   "dependencies": {
+    "blind-relay": "1.6.1",
     "hyperswarm": "4.17.1",
     "hyperdht": "6.34.0"
   },
