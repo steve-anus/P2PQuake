@@ -40,6 +40,7 @@ int  QN_GetAddrFromName (const char *name, struct qsockaddr *addr);
 int  QN_AddrCompare (struct qsockaddr *addr1, struct qsockaddr *addr2);
 int  QN_GetSocketPort (struct qsockaddr *addr);
 int  QN_SetSocketPort (struct qsockaddr *addr, int port);
+int  QN_PollFd (sys_socket_t socketid);
 
 /* Module state. The state is driven by the Plane A lifecycle hooks in
  * main_sdl.c: STANDBY after the landriver initializes, RUNNING once the

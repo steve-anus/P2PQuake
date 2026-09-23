@@ -374,10 +374,13 @@ class HostRoom {
         [4, epochBuf], [5, Buffer.from(this.keys.pub)]]);
     }
   }
-  relayToClients(body) {
-    // Host is the sole RELAY source for clients (§3.4a); origin is the host key.
+  relayToClients(body, target) {
+    // Host is the sole RELAY source for clients (§3.4a); origin is the host
+    // key, target is the slot's bound peer: one frame, one recipient.
+    if (!target || target.length !== 32) return; // targeted delivery only
     for (const s of this.sessions.values()) {
       if (!s.joined || s.dead) continue;
+      if (!s.bound || !s.bound.equals(target)) continue;
       s.send(E.TYPES.RELAY, [[1, Buffer.from(this.keys.pub)], [2, body]]);
     }
   }
@@ -559,7 +562,7 @@ class ClientRoom {
     this.log('client: connection closed (' + why + ')');
     if (this.hostLane === session) {
       this.hostLane = null;
-      if (this.joined) this.cbs.onHostLaneLost();
+      if (this.joined && !this.closing) this.cbs.onHostLaneLost();
     }
   }
   sendClientCmd(body) {

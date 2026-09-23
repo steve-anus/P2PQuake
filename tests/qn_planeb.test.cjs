@@ -348,7 +348,11 @@ test('host relays engine output to joined members only, origin = host key', asyn
   conn.emit('data', joinBytes());
   await clock.advance(10);
   conn.written.length = 0;
-  room.relayToClients(Buffer.from('servmsg'));
+  room.relayToClients(Buffer.from('servmsg'), Buffer.from(KEYS.peer.pub));
+  // Targeted fan-out: a stranger's target or none at all delivers nothing
+  // (the datagram layer ACKs any DATA, so misdelivery poisons windows).
+  room.relayToClients(Buffer.from('noTarget'), Buffer.from(KEYS.host.pub));
+  room.relayToClients(Buffer.from('untargeted'));
   const outs = hostDecodes(conn).filter((o) => o.type === E.TYPES.RELAY);
   assert.equal(outs.length, 1);
   const t = new Map(F.decodeTLV(outs[0].payload).map((x) => [x.tag, x.value]));

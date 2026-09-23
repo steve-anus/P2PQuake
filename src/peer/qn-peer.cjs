@@ -27,6 +27,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Hyperswarm = require('hyperswarm');
+const DHT = require('hyperdht');
 
 const F = require('./qn_frame.cjs');
 const E = require('./qn_envelope.cjs');
@@ -36,6 +37,57 @@ const P = require('./qn_planeb.cjs');
 // The runtime this code is tested on. A drifted major is unsupported —
 // refuse loudly rather than run on untested TLS/crypto semantics.
 const NODE_MAJOR_TESTED = 24;
+
+// Operational knob for deterministic topologies (LAN-only play, and the
+// scripted two-machine gates): a comma-separated host:port list replaces
+// the public DHT entry points for BOTH plane-B roles. Unset means the
+// public bootstrap, exactly as before. Malformed input refuses the lane
+// loudly -- a test that silently fell back to the public DHT would be a
+// test that never ran. The bootstrap operator sees join-topic lookups
+// and nothing else: topic secrecy is unchanged from the public case.
+function dhtBootstrap() {
+  const raw = (process.env.QN_DHT_BOOTSTRAP || '').trim();
+  if (!raw) return undefined;
+  const list = [];
+  for (const part of raw.split(',')) {
+    const m = /^([A-Za-z0-9._.\-:[\]]+):(\d{1,5})$/.exec(part.trim());
+    const port = m ? Number(m[2]) : 0;
+    if (!m || port < 1 || port > 65535) {
+      process.stderr.write('qn-peer: QN_DHT_BOOTSTRAP malformed\n');
+      process.exit(1);
+    }
+    list.push({ host: m[1], port });
+  }
+  return list;
+}
+
+// The DHT hyperswarm builds for you is ephemeral, and an ephemeral node
+// fails hyperdht's firewall probe -- a firewalled node never stores an
+// announce at all, so a room opened by such a host is invisible: lookups
+// return zero records and joins cannot be refused because they cannot be
+// found. A HOST lane therefore owns a non-ephemeral DHT explicitly.
+// When the operator names their own bootstrap (LAN play, scripted gates)
+// the flat network is theirs to declare, so the probe is overruled the
+// same way hyperdht's own testnet does; on the public bootstraps the
+// detection stands and WAN reality is measured, not assumed.
+function makeSwarm(extra) {
+  const bootstrap = dhtBootstrap();
+  if (!bootstrap) return new Hyperswarm(extra);
+  // A loopback bootstrap is the flat-network case hyperdht's own testnet
+  // serves: bind loopback too, or the node announces an address its
+  // peers cannot dial and every join dies with zero attempts. Outside
+  // this opt-in mode the public bootstrap path stays exactly as
+  // hyperswarm configures it (firewall detection included).
+  const loopback = bootstrap.every((b) =>
+    /^127\.|^::1$|^\[::1\]$/.test(b.host));
+  const dht = new DHT({
+    bootstrap,
+    ephemeral: false,
+    firewalled: false,
+    ...(loopback ? { host: '127.0.0.1' } : {})
+  });
+  return new Hyperswarm({ dht, ...extra });
+}
 function assertRuntime(major = NODE_MAJOR_TESTED) {
   const m = Number(process.versions.node.split('.')[0]);
   if (m !== major) {
@@ -237,7 +289,9 @@ class PlaneA {
   schedulePing() {
     this.pingTimer = this.clock.setTimeout(() => {
       if (this.closed) return;
-      if (this.clock.now() - this.lastIn > 6000) { this.stop(); return this.onFatal('engine-dead'); }
+      // A hung engine (long map load) is the only case this catches;
+      // a dead one closes the plane-A socket and dies via EOF instantly.
+      if (this.clock.now() - this.lastIn > 30000) { this.stop(); return this.onFatal('engine-dead'); }
       const n = Buffer.alloc(4); n.writeUInt32LE((this.clock.now() >>> 0), 0);
       this.send(F.TYPES.PING, n);
       this.schedulePing();
@@ -256,12 +310,15 @@ async function run(opts) {
   const destroyLane = () => {
     if (!lane) return;
     const { swarm, room } = lane;
+    const role = lane.role;
     lane = null;
+    if (role === 'client' && room) room.closing = true; // intentional
     try { if (room && room.code) redactor.release(room.code); } catch { /* cosmetic */ }
     try { swarm.destroy(); } catch { /* best-effort teardown */ }
   };
 
   let exiting = false; // first terminal decision owns the exit, no racing resolvers
+  let joinedOnce = false; // refusals before the first join are expected outcomes
   const fatal = (cause) => {
     if (exiting) return;
     exiting = true;
@@ -332,7 +389,11 @@ async function run(opts) {
         if (!lane || lane.role !== 'host') return; // host engine server output → relay
         const t1 = new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value]));
         const body = t1.get(2);
-        if (body && body.length <= 1100) lane.room.relayToClients(Buffer.from(body));
+        const target = t1.get(1);
+        // Untargeted server output is a contract violation: fan-out to the
+        // whole room would poison every non-recipient's datagram window.
+        if (!body || body.length < 1 || body.length > 1100 || !target || target.length !== 32) return;
+        lane.room.relayToClients(Buffer.from(body), Buffer.from(target));
         return;
       }
       default: // known but not dispatchable here (RELIABLE and friends): drop
@@ -364,7 +425,7 @@ async function run(opts) {
           onFatal: fatal,
         },
       });
-      const swarm = new Hyperswarm({ firewall: (peerKey) => room.firewall(peerKey) });
+      const swarm = makeSwarm({ firewall: (peerKey) => room.firewall(peerKey) });
       room.swarm = swarm;
       swarm.on('connection', (conn) => room.accept(conn));
       lane = { role: 'host', swarm, room };
@@ -393,10 +454,25 @@ async function run(opts) {
         epochSave: (v) => opts.pinned && opts.epochs.save(opts.pinned.toString('hex'), topic.toString('hex'), v),
         cbs: {
           onJoined: ({ hostKey }) => {
+            joinedOnce = true;
             log('client: joined');
             a.send(F.TYPES.PEER_UP, F.encodeTLV([[1, hostKey], [2, Buffer.from('host')]]));
           },
-          onRefused: (cause) => { log('client: join refused, cause ' + cause); fatal(4); },
+          onRefused: (cause) => {
+            log('client: join refused, cause ' + cause);
+            // A refusal before the engine ever entered the match is the
+            // asserted outcome (stale code): hang up clean, exactly as if
+            // the engine had hung up first. Mid-match refusals are fatal.
+            if (!joinedOnce) {
+              if (exiting) return;
+              exiting = true;
+              destroyLane();
+              a.stop();
+              setTimeout(() => process.exit(0), 20);
+              return;
+            }
+            fatal(4);
+          },
           onRoster: (members) => {
             // Membership reaches the engine as deltas: refresh broadcasts must
             // not re-announce, and departures must not stay silently present.
@@ -427,7 +503,7 @@ async function run(opts) {
           onFatal: fatal,
         },
       });
-      const swarm = new Hyperswarm();
+        const swarm = makeSwarm();
       room.swarm = swarm;
       swarm.on('connection', (conn) => room.accept(conn));
       lane = { role: 'client', swarm, room };

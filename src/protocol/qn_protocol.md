@@ -93,7 +93,7 @@ zero seq → close.
 | 0x0022 JOIN_PIN | engine→peer | TLV: 0x01 host pubkey (32) — the invite's pinned host key (§4.1) |
 | 0x0030 PEER_UP  | peer→engine | TLV: 0x01 pubkey (32), 0x02 name (≤20 sanitized) |
 | 0x0031 PEER_DOWN| peer→engine | TLV: 0x01 pubkey (32), 0x03 cause u8 (§6.3)|
-| 0x0040 SV_DATA  | both        | TLV: 0x01 from pubkey (32), 0x02 body (opaque bytes for the engine's server-message parse) |
+| 0x0040 SV_DATA  | both        | TLV: 0x01 peer pubkey (32) — the target player on the engine->peer leg, the origin on the peer-delivered leg; 0x02 body (opaque bytes for the engine's server-message parse) |
 | 0x0041 CL_DATA  | peer→engine | TLV: 0x01 from pubkey (32), 0x02 body (opaque bytes for the engine's client-message parse, host side) |
 | 0x0050 STUFFTEXT| peer→engine | printable ASCII line ≤512, NUL-terminated; engine-side allowlist enforced independently (§6.4) |
 | 0x0060 CLIENT_CMD| engine→peer| TLV: 0x01 body (usercmd bytes from the local client) |
@@ -105,10 +105,16 @@ dropped-in-a-row → close (a version or code mismatch is spiralling).
 
 SV_DATA direction is contextual: the host engine sends it peer-ward to feed
 the relay of server output (Plane B RELAY, §3.4a); the client engine receives
-it peer-delivered. The `from` tag on any peer-delivered frame is filled by
-the daemon from the §3.5 connection binding — never from relayed payload
-text — and the engine only ever parses bytes its own local daemon placed on
-Plane A.
+it peer-delivered. On the engine->peer leg the 0x01 tag names the **target**
+player: the host engine stamps it from the datagram socket's bound peer key
+(the key the daemon announced for that session), and the daemon delivers the
+RELAY envelope to that one bound session alone. Server output is never
+broadcast to the whole room — the datagram layer acknowledges every DATA
+chunk the moment it arrives, so a chunk delivered to the wrong player would
+drain a stranger's reliable window. On the peer-delivered leg the 0x01 tag
+names the **origin**; the daemon fills it from the §3.5 connection binding —
+never from relayed payload text — and the engine only ever parses bytes its
+own local daemon placed on Plane A.
 
 ### 2.4 TLV encoding (Plane A payloads and Plane B payloads alike)
 

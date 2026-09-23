@@ -6,3 +6,5 @@ node_modules/
 .DS_Store
 # Compiled engine binary (build output).
 src/vendor/quakespasm/Quake/quakespasm
+gamedata/id1/config.cfg
+**/history.txt

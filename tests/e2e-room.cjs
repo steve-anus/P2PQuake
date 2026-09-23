@@ -338,7 +338,7 @@ async function main() {
   // bridge host→client: engine server output reaches the client engine tagged
   const body = Buffer.from('servmsg-' + Date.now());
   clientEngine.frames.length = 0;
-  hostEngine.send(F.TYPES.SV_DATA, F.encodeTLV([[2, body]]));
+  hostEngine.send(F.TYPES.SV_DATA, F.encodeTLV([[1, Buffer.from(clientPub)], [2, body]]));
   try {
     const f = await clientEngine.expect(F.TYPES.SV_DATA);
     const t = new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value]));
@@ -409,7 +409,7 @@ async function main() {
   // been closed while the real join stands (bridge once more to prove it)
   const body2 = Buffer.from('servmsg2-' + Date.now());
   clientEngine.frames.length = 0;
-  hostEngine.send(F.TYPES.SV_DATA, F.encodeTLV([[2, body2]]));
+  hostEngine.send(F.TYPES.SV_DATA, F.encodeTLV([[1, Buffer.from(clientPub)], [2, body2]]));
   try {
     await clientEngine.expect(F.TYPES.SV_DATA, 30000);
     rogue.tally.attacked >= 1 && rogue.tally.closedByPeer >= 1

@@ -115,7 +115,8 @@ net_landriver_t	net_landrivers[] =
 		QN_GetAddrFromName,
 		QN_AddrCompare,
 		QN_GetSocketPort,
-		QN_SetSocketPort
+		QN_SetSocketPort,
+		QN_PollFd
 	}
 };
 

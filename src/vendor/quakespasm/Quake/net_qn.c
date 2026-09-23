@@ -95,6 +95,15 @@ typedef struct
 				 * forward, not vanish) */
 	int		aliasof;
 	qnqsockaddr_t	addr;
+	qnqsockaddr_t	connect_addr;	/* the address this socket was
+					 * opened for: what the datagram
+					 * layer compares replies against.
+					 * PEER_UP stamps the live key onto
+					 * addr (membership sweeps match on
+					 * it); the handshake must keep the
+					 * identity the connect carried --
+					 * a join code cannot know the
+					 * host key before the lane is up */
 	unsigned char	q[QN_QDEPTH][QN_QCAP + 8];
 	size_t		qlen[QN_QDEPTH];
 	unsigned	qh, qt;
@@ -106,6 +115,8 @@ typedef struct
 	size_t		ccreq_n;
 	qboolean	ccreq_ready;
 	qboolean	ccreq_offer;
+	unsigned char	peer32[32];	/* SV_DATA fan-out target: the live
+					   peer key, stamped by PEER_UP */
 } qn_socket_t;
 
 static qn_socket_t	qn_sockets[MAX_QN_SOCKETS];
@@ -128,8 +139,11 @@ static char		qn_sockpath[512];
 static qboolean		qn_host_lane_up;
 static qboolean		qn_host_ready_shown;
 static qboolean		qn_client_lane_up;
+static qboolean		qn_client_was_connected;	/* the lane has served a
+						   live client session */
 static uint8_t		qn_join_code[10];
 static qboolean		qn_join_pending;
+static qboolean		qn_join_code_valid;	/* a code was parsed at least once this run */
 static uint8_t		qn_pin_key[32];
 static qboolean		qn_pin_set, qn_pin_malformed;
 
@@ -264,8 +278,8 @@ static void crockford_encode10 (const uint8_t in[10], char out[17])
 /* Build the daemon argv: program identity plus the socket path and an
  * optional display name. Flags are not secrets; the AUTH token is never
  * anywhere near argv, env, or any log line (spec section 4). */
-static void qn_paravec (const char *prog, const char *uds,
-                        const char *name, char *argv[6])
+static void qn_paravec (const char *prog, const char *uds, const char *dir,
+                        const char *name, char *argv[8])
 {
 	static char nm[32];
 	int i = 0;
@@ -273,6 +287,15 @@ static void qn_paravec (const char *prog, const char *uds,
 	argv[i++] = (char *) prog;
 	argv[i++] = "--uds";
 	argv[i++] = (char *) uds;
+	/* The daemon's state directory (identity key, pinning epochs) is
+	 * this process's p2p state: two engines sharing a socket dir share
+	 * nothing else, and two engines on one box must not share the
+	 * noise identity -- hyperswarm refuses a swarm that meets its own
+	 * public key, so a common identity.key would silently seal every
+	 * same-box join. The transport already enforces the 0700/ownership
+	 * posture on this dir that the daemon will write 0600 keys into. */
+	argv[i++] = "--dir";
+	argv[i++] = (char *) dir;
 	if (name != NULL && *name != '\0')
 	{
 		q_strlcpy (nm, name, sizeof (nm));
@@ -281,6 +304,9 @@ static void qn_paravec (const char *prog, const char *uds,
 	}
 	argv[i] = NULL;
 }
+
+static char qn_statedir[256];	/* resolved -qn-dir; also the daemon's
+				   --dir state root (identity, epochs) */
 
 static qboolean qn_open_socket_dir (void)
 {
@@ -316,6 +342,7 @@ static qboolean qn_open_socket_dir (void)
 		qn_note ("refused socket directory");
 		return false;
 	}
+	q_strlcpy (qn_statedir, dir, sizeof (qn_statedir));
 	q_snprintf (qn_sockpath, sizeof (qn_sockpath), "%s/engine.sock", dir);
 	qn_listenfd = qn_transport_listen (qn_sockpath, &reason);
 	if (qn_listenfd < 0)
@@ -356,7 +383,7 @@ static qboolean qn_ensure_daemon (void)
 	const char *reason = NULL;
 	const char *prog_over = NULL;
 	char prog[512];
-	char *argv[6];
+	char *argv[8];
 	const char *name = NULL;
 	int p;
 
@@ -391,7 +418,7 @@ static qboolean qn_ensure_daemon (void)
 		qn_note ("entropy failure; not spawning");
 		return false;
 	}
-	qn_paravec (prog, qn_sockpath, name, argv);
+	qn_paravec (prog, qn_sockpath, qn_statedir, name, argv);
 	/* The child inherits the engine's environment (it behaves as if the
 	 * user launched the daemon themselves): a node-backed peer must find
 	 * its interpreter via PATH. qn_spawn_start refuses if the AUTH token
@@ -507,6 +534,7 @@ static qn_socket_t *qn_introduce (const uint8_t pub32[32],
 			 * reader consumes CTL packets unheeding. Hold
 			 * it for the accept path alone; the newest
 			 * request wins (resends collapse). */
+			memcpy (qn_sockets[i].peer32, pub32, 32);
 			memcpy (qn_sockets[i].ccreq, pkt, pktn);
 			qn_sockets[i].ccreq_n = pktn;
 			qn_sockets[i].ccreq_ready = true;
@@ -527,6 +555,7 @@ static qn_socket_t *qn_introduce (const uint8_t pub32[32],
 			qn_sockets[i].addr.lane = (unsigned short) i;
 			qn_sockets[i].addr.port = (unsigned short) net_hostport;
 			memcpy (qn_sockets[i].addr.key, pub32, 8);
+			memcpy (qn_sockets[i].peer32, pub32, 32);
 			return &qn_sockets[i];
 		}
 	}
@@ -879,19 +908,24 @@ void QN_Pump (unsigned long long now_ms)
 	}
 	else if (!sv.active)
 	{
-		if (qn_host_lane_up)
-		{
-			if (qn_live () &&
-			    qn_transport_send (&qn_tr, QN_T_HOST_DOWN,
-			                       NULL, 0) != 1)
-				qn_teardown ("host_down send failed");
-			else
-				qn_host_lane_up = false;
-		}
+		/* No HOST_DOWN here: SV_ShutdownServer's sv.active window is a
+		 * map change, not a host leaving -- and this pump runs inside
+		 * that window (the connect/read paths self-service it), so an
+		 * edge here retired the lane mid-map and re-minted the room.
+		 * The host lane lives until the plane itself goes down. */
 		qn_sv_was_active = false;
 	}
 
-	if (qn_client_lane_up && cls.state == ca_disconnected)
+	/* ca_disconnected covers the connect attempt itself -- CL only
+	 * leaves it once NET_Connect returns -- so closing the lane on
+	 * that edge alone would tear down the join before the daemon's
+	 * lookup could land. Close only after the lane has actually
+	 * served an established session. */
+	if (cls.state == ca_connected)
+		qn_client_was_connected = true;	/* the lane has served an
+						   established session */
+	if (qn_client_lane_up && cls.state == ca_disconnected &&
+	    qn_client_was_connected)
 	{
 		if (qn_live () &&
 		    qn_transport_send (&qn_tr, QN_T_JOIN_CLOSE, NULL, 0) != 1)
@@ -934,6 +968,7 @@ void QN_Pump (unsigned long long now_ms)
 			return;
 		}
 		qn_client_lane_up = true;
+		qn_client_was_connected = false;
 		qn_join_pending = false;
 	}
 
@@ -998,6 +1033,7 @@ void QN_Shutdown (void)
 	qn_zero_secret ();
 	memset (qn_sockets, 0, sizeof (qn_sockets));
 	qn_host_lane_up = qn_client_lane_up = qn_join_pending = false;
+	qn_join_code_valid = false;
 	qn_sv_was_active = false;
 	qn_wantlisten = false;
 	qn_state = QN_OFF;
@@ -1014,8 +1050,9 @@ sys_socket_t QN_OpenSocket (int port)
 
 	/* A join-only boot must reach QN_Connect before any lane exists --
 	 * that call is what arms the daemon. A pending join code therefore
-	 * opens slots while the lane is down; QN_Connect fails fast until
-	 * the daemon authenticates, and the retry connects on a live lane. */
+	 * opens slots while the lane is down; the armed client's QN_Connect
+	 * succeeds on the daemon spawn and its handshake rides the lane up,
+	 * while any other caller fails fast until the lane is live. */
 	if (!qn_live () && !(qn_join_pending && !qn_daemon_retired))
 		return INVALID_SOCKET;
 
@@ -1055,6 +1092,7 @@ int QN_CloseSocket (sys_socket_t socketid)
 int QN_Connect (sys_socket_t socketid, struct qsockaddr *addr)
 {
 	qboolean isclient;
+	qboolean armed_join = false;
 
 	if (socketid < 0 || socketid >= MAX_QN_SOCKETS)
 		return SOCKET_ERROR;
@@ -1066,22 +1104,53 @@ int QN_Connect (sys_socket_t socketid, struct qsockaddr *addr)
 	 * put the horse before the cart. A process is host or client for a
 	 * session, decided by which lane frames the engine established. */
 	isclient = !(qn_host_lane_up || (qn_wantlisten && sv.active));
-	if (!qn_live ())
+	if (isclient && !qn_join_pending && qn_join_code_valid &&
+	    qn_client_was_connected)
+	{
+		/* Reconnect (classic 'reconnect' stufftext, CL budget retries):
+		 * the datagram layer reuses the cached address and skips the
+		 * string parse, so no fresh demand arrives by itself. Only an
+		 * engine that actually played can mean this: a Connect retry
+		 * of a still-pending join (lane armed, JOIN_OK not home) must
+		 * not retire the in-flight lane and re-join it in a storm. */
+		qn_join_pending = true;
+	}
+	if (isclient && qn_client_lane_up && qn_join_pending)
+	{
+		/* Reconnect: a fresh code parse while a client lane is
+		 * still marked up. CL_Disconnect and CL_Connect run in
+		 * one command buffer, so the pump-side disconnect edge
+		 * cannot fire; retire the lane here, synchronously, or
+		 * every reconnect rides a phantom lane whose daemon side
+		 * silently drops the handshake. */
+		(void) qn_transport_send (&qn_tr, QN_T_JOIN_CLOSE, NULL, 0);
+		qn_client_lane_up = false;
+		qn_client_was_connected = false;
+	}
+	if (!qn_live () || (isclient && !qn_client_lane_up && qn_join_pending))
 	{
 		/* Join bootstrap: a client connect against a parsed join
 		 * code is what summons the daemon -- arming cannot sit
 		 * behind a lane only the daemon can create. Every such
 		 * call still fails fast until the lane is live, so the
 		 * datagram layer's retry loop never spins a dead pipe
-		 * (QN_Pump re-checks join_pending once the daemon
-		 * authenticates). */
+		 * authenticates). A join-arm instead succeeds: the
+		 * datagram layer's connect handshake -- three CCREQ
+		 * rounds, 2.5 s apart -- is the retry vehicle, and
+		 * QN_Read services the lane while that loop spins (the
+		 * frame-loop pump cannot run from in there). A code
+		 * that never joins a room fails as the handshake's
+		 * honest "No Response" once its budget is spent. */
 		if (isclient && qn_join_pending && !qn_daemon_retired)
 		{
 			if (!qn_client_lane_up)
 				qn_demand++;	/* fresh demand: re-arm the latch */
-			(void) qn_ensure_daemon ();
+			if (!qn_ensure_daemon ())
+				return SOCKET_ERROR;	/* daemon impossible */
+			armed_join = true;	/* lane rides the handshake */
 		}
-		return SOCKET_ERROR;
+		else
+			return SOCKET_ERROR;
 	}
 	if (!isclient)
 	{
@@ -1114,19 +1183,24 @@ int QN_Connect (sys_socket_t socketid, struct qsockaddr *addr)
 		}
 	}
 	qn_sockets[socketid].addr = *(const qnqsockaddr_t *) addr;
+	qn_sockets[socketid].connect_addr = qn_sockets[socketid].addr;
 	qn_sockets[socketid].isclient = isclient;
-	if (!qn_client_lane_up)
-		qn_demand++;		/* fresh demand: re-arm the latch */
-	/* the datagram layer drives its own handshake; lane frames flow
-	 * from QN_Pump once the daemon is authenticated */
-	if (!qn_ensure_daemon ())
-		return SOCKET_ERROR;
-	if (!qn_live ())
-		return SOCKET_ERROR;	/* armed but not authenticated yet:
-					   fail fast -- the datagram connect
-					   loop would busy-wait and starve
-					   the pump that performs the auth
-					   exchange; the retry connects */
+	/* An armed join already spawned (or found living) its daemon
+	 * above; asking again would hit the demand latch's false verdict
+	 * and kill a connect that has its whole service model ahead. */
+	if (!armed_join)
+	{
+		if (!qn_client_lane_up)
+			qn_demand++;	/* fresh demand: re-arm the latch */
+		if (!qn_ensure_daemon ())
+			return SOCKET_ERROR;
+		if (!qn_live ())
+			return SOCKET_ERROR;	/* armed but not authenticated
+						   yet: a frame loop exists on
+						   this path, so the pump can
+						   raise the lane and the
+						   caller may retry */
+	}
 	return 0;
 }
 
@@ -1189,6 +1263,15 @@ int QN_Read (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 	qn_socket_t	*s;
 	size_t		n;
 
+	/* Service the transport on demand. The datagram layer's connect
+	 * handshake spins inside this read -- trying, still trying --
+	 * while the frame-loop pump hook cannot run from in there, so
+	 * auth, the join, and the connect reply would all starve behind
+	 * a lane nobody is feeding. A landriver that owns its daemon
+	 * feeds its own queues; the work is bounded per call by the
+	 * pump's budget and a no-op posture (QN_OFF, no child, retired
+	 * daemon) does nothing but return. */
+	QN_Pump ((unsigned long long) (Sys_DoubleTime () * 1000.0));
 	if (!qn_live ())
 		return 0;		/* no data, no verdict -- never claim a death */
 	if (socketid < 0 || socketid >= MAX_QN_SOCKETS)
@@ -1254,19 +1337,19 @@ int QN_Read (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 		n = (size_t) len;
 	memcpy (buf, s->q[s->qh], n);
 	s->qh = (s->qh + 1) % QN_QDEPTH;
-	memcpy (addr, &s->addr, sizeof (*addr));
+	memcpy (addr, &s->connect_addr, sizeof (*addr));
 	return (int) n;
 }
 
 int QN_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 {
 	const qn_socket_t	*s;
-	uint8_t			payload[4 + QN_WIRE_MAX + 8];
+	uint8_t			payload[4 + QN_WIRE_MAX + 40];
 	const uint16_t		tags_dat[1] = { 1 };
-	const uint16_t		tags_sv[1] = { 2 };
+	const uint16_t		tags_sv[2] = { 1, 2 };
 	const uint16_t		*tag;
-	const uint8_t		*vals[1];
-	uint16_t		lens[1];
+	const uint8_t		*vals[2];
+	uint16_t		lens[2];
 	uint16_t		type;
 	size_t			n;
 
@@ -1294,17 +1377,38 @@ int QN_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 		/* client datagrams ride CLIENT_CMD tag 0x0001 */
 		type = QN_T_CLIENT_CMD;
 		tag = tags_dat;
+		vals[0] = buf;
+		lens[0] = (uint16_t) len;
+		n = qn_tlv_write (payload, sizeof (payload), tag, vals, lens, 1);
 	}
 	else
 	{
-		/* host server output rides SV_DATA tag 0x0002 (the daemon
-		 * relays it to the room, origin filled on the peer) */
+		/* host server output rides SV_DATA tags {1,2}: the slot's
+		   peer key plus body. Broadcasting would let a stranger's
+		   DATA chunk drain another player's reliable window (every
+		   DATA is ACKed the moment it arrives). */
+		int j;
+		qboolean stamped = false;
+		for (j = 0; j < 32; j++)
+		{
+			if (s->peer32[j])
+			{
+				stamped = true;
+				break;
+			}
+		}
+		if (!stamped)
+		{
+			qn_queue_drops++;
+			return SOCKET_ERROR;
+		}
 		type = QN_T_SV_DATA;
-		tag = tags_sv;
+		vals[0] = s->peer32;
+		lens[0] = 32;
+		vals[1] = buf;
+		lens[1] = (uint16_t) len;
+		n = qn_tlv_write (payload, sizeof (payload), tags_sv, vals, lens, 2);
 	}
-	vals[0] = buf;
-	lens[0] = (uint16_t) len;
-	n = qn_tlv_write (payload, sizeof (payload), tag, vals, lens, 1);
 	if (n == 0)
 		return SOCKET_ERROR;
 	if (qn_transport_send (&qn_tr, type, payload, (uint16_t) n) != 1)
@@ -1382,6 +1486,7 @@ int QN_StringToAddr (const char *string, struct qsockaddr *addr)
 		if (!crockford_decode16 (body, bl, qn_join_code))
 			return -1;
 		qn_join_pending = true;
+		qn_join_code_valid = true;
 		a->port = (unsigned short) net_hostport;
 		return 0;
 	}
@@ -1479,15 +1584,16 @@ int QN_GetAddrFromName (const char *name, struct qsockaddr *addr)
 	 * "qn:XXXX-XXXX-XXXX-XXXX"; every other name stays with the UDP
 	 * landriver. The join code must be entered with the qn: prefix.
 	 *
-	 * Known datagram-layer interaction: the connect path splits the
-	 * name at its LAST colon before asking any landriver, so an
-	 * all-decimal key (e.g. "qn:1234567890123456") is cut at the
-	 * "qn:" colon itself: the remainder reaches UDP as a host named
-	 * "qn" and the decimal tail can overwrite net_hostport. Identity
-	 * keys are pubkey hashes -- sixteen digits with no hex letter a-f
-	 * is not a realistic key, but if one ever must be typed, enter
-	 * it with an explicit ":port". An out-of-range ":port" tail
-	 * likewise leaves net_hostport at its previous value here. */
+	 * The connect path once fed every name through Strip_Port before
+	 * consulting a landriver, which cut the qn: form at its own
+	 * prefix ("Could not resolve qn" -- the form this landriver is
+	 * named for could never arrive) and let a digit-started code's
+	 * leading run be adopted as net_hostport. Strip_Port now passes
+	 * qn: strings intact (see the guard in net_dgrm.c). The optional
+	 * ":port" tail belongs to the key form only -- the parsers below
+	 * own it, and an out-of-range port tail leaves net_hostport at
+	 * its previous value here; the hyphenated display form is exactly
+	 * 4-4-4-4 (spec 5.1) and carries no tail. */
 	qn_read_pin_parm ();
 	if (QN_StringToAddr (name, addr) != 0)
 		return -1;
@@ -1524,4 +1630,16 @@ int QN_SetSocketPort (struct qsockaddr *addr, int port)
 {
 	((qnqsockaddr_t *) addr)->port = (unsigned short) port;
 	return 0;
+}
+
+int QN_PollFd (sys_socket_t socketid)
+{
+	/* Readiness is the plane A fd: every queued byte this slot could
+	 * report arrives through that one pipe. The slot bounds check is
+	 * the contract; the fd itself is lane-global. */
+	if (socketid < 0 || socketid >= MAX_QN_SOCKETS)
+		return -1;
+	if (qn_state == QN_OFF || !qn_sockets[socketid].inuse)
+		return -1;
+	return qn_tr.fd;
 }

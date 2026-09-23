@@ -191,6 +191,14 @@ typedef struct
 	int		(*AddrCompare) (struct qsockaddr *addr1, struct qsockaddr *addr2);
 	int		(*GetSocketPort) (struct qsockaddr *addr);
 	int		(*SetSocketPort) (struct qsockaddr *addr, int port);
+	int		(*PollFd) (sys_socket_t socketid);
+					/* fd to poll() while waiting for
+					 * this landriver's next datagram,
+					 * or -1: landrivers that own a
+					 * daemon transport supply it so
+					 * handshake spins can yield instead
+					 * of starving the peer; raw UDP
+					 * readers leave it NULL */
 } net_landriver_t;
 
 #define	MAX_NET_DRIVERS		8

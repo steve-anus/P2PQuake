@@ -29,6 +29,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_defs.h"
 #include "net_dgrm.h"
 
+#ifndef _WIN32		/* the connect-spin yield is POSIX-only; the cross
+		 * builds carry no poll(2) and compile none of the qn
+		 * landriver files anyway */
+#include <poll.h>
+#endif
+
 // these two macros are to make the code more readable
 #define sfunc	net_landrivers[sock->landriver]
 
@@ -524,6 +530,14 @@ static const char *Strip_Port (const char *host)
 	int		port;
 
 	if (!host || !*host)
+		return host;
+	/* A qn: name is opaque identity text, not host:port: its colon
+	 * belongs to the qn landriver's parser and the tail is a join
+	 * code or key, never a port. Passing it on intact is also what
+	 * keeps net_hostport free of a digit-started code's leading run
+	 * (Q_atoi would otherwise adopt it as a port), and the qn parser
+	 * takes its own optional :port tail. */
+	if (q_strncasecmp (host, "qn:", 3) == 0)
 		return host;
 	q_strlcpy (noport, host, sizeof(noport));
 	if ((p = Q_strrchr(noport, ':')) == NULL)
@@ -1307,6 +1321,31 @@ static qsocket_t *_Datagram_Connect (const char *host)
 		do
 		{
 			ret = dfunc.Read (newsock, net_message.data, net_message.maxsize, &readaddr);
+			/* An empty read from a landriver that owns its transport
+			 * means the reply is the peer's to produce: a busy spin
+			 * here starves that peer (connect budget burned while the
+			 * other side never gets scheduled). Yield once per empty
+			 * poll; the 2.5 s budget keeps its wall-clock meaning.
+			 * Landrivers signal readiness with the poll fd; UDP has
+			 * none and is untouched. */
+#ifndef _WIN32
+			if (ret == 0 && dfunc.PollFd)
+			{
+				struct pollfd pfd;
+				int pfd_ms;
+				pfd.fd = dfunc.PollFd (newsock);
+				if (pfd.fd >= 0)
+				{
+					pfd.events = POLLIN;
+					pfd.revents = 0;
+					pfd_ms = (int)(2500 - 1000.0 * (SetNetTime() - start_time));
+					if (pfd_ms > 120)
+						pfd_ms = 120;
+					if (pfd_ms > 0)
+						poll (&pfd, 1, pfd_ms);
+				}
+			}
+#endif
 			// if we got something, validate it
 			if (ret > 0)
 			{
