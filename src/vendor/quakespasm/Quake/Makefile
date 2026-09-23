@@ -199,7 +199,8 @@ SYSOBJ_GL_VID= gl_vidsdl.o
 QNDIR = ../../../driver
 vpath %.c $(QNDIR)
 CFLAGS += -I$(QNDIR)
-SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o
+SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
+	qn_stext.o
 SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o
 SYSOBJ_MAIN= main_sdl.o
 

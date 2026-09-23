@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "quakedef.h"
+#include "net_qn.h"
 #include "bgmusic.h"
 
 const char *svc_strings[] =
@@ -1108,7 +1109,7 @@ void CL_ParseServerMessage (void)
 			break;
 
 		case svc_stufftext:
-			Cbuf_AddText (MSG_ReadString ());
+			QN_StufftextFromGame (MSG_ReadString ());
 			break;
 
 		case svc_damage:

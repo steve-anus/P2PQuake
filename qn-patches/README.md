@@ -21,6 +21,7 @@ failing hunk, rebase or retire the patch, never skip it.
 | `0011-net-defs-datagram-max.patch` | adds the `datagram_max` field to `net_landriver_t` that a landriver may advertise and the datagram layer honours (the p2p landriver does; UDP leaves it zero for the compile-time default) |
 | `0012-common-longswap-unsigned-shift.patch` | `LongSwap` composes its bytes in the unsigned domain: `(int)b1 << 24` overflows signed int for `b1 >= 128` — undefined behaviour, surfaced by `-fsanitize=undefined` on the net paths |
 | `0013-client-lane-join.patch` | the join lane: QN_PollFd in the landriver table plus the datagram layer's connect-spin yield (with the advertised `datagram_max` and the `qn:` name left intact through `Strip_Port`); the landriver's host-lane lifecycle (transient `!sv.active` windows no longer retire the lane or re-mint the room code), reconnect re-arm that re-sends the join only after a played match, and per-slot peer identity so server output reaches exactly its own player (the datagram layer acknowledges any DATA chunk, so fan-out must never be a room broadcast) |
+| `0014-stufftext-allowlist.patch` | the spec 6.4 remote-console gate: game-stream `svc_stufftext` and Plane A `STUFFTEXT` frames dispatch to the console only through the derived allowlist predicate (`src/driver/qn_stext.c`), which the vendored Makefile links from the driver directory |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,
