@@ -6,9 +6,9 @@
  *     SV_SendReconnect (Quake/sv_main.c: MSG_WriteChar (svc_stufftext)
  *     + "reconnect\n") and the Host_ClientCommands builtin path
  *     (Quake/host.c, driven from Quake/pr_cmds.c stuffcmd).
- *   - The shipped gamedata progs (gamedata/id1/pak0.pak progs.dat, string
- *     table scanned 2026-09-23) contain no console-command-shaped string,
- *     so the builtin path contributes nothing.
+ *   - The shipped gamedata progs (gamedata/id1/pak0.pak progs.dat string
+ *     table) contain no console-command-shaped string, so the builtin
+ *     path contributes nothing.
  *   - Chat is not in scope: SV_ClientPrintf delivers svc_print, not
  *     stufftext.
  * Anything added here must cite a shipping sender or a progs string. */

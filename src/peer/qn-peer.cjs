@@ -1,26 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 // qn-peer: the p2pquake networking daemon (spec §4, Plane A client).
-//
-// The engine spawns this process, writes a 32-byte one-shot token raw to
-// our stdin, and listens on its UDS. We read the token, dial the socket,
-// and send AUTH{token} as our first frame. The token never appears in
-// argv, the environment, logs, or any file, and no log line here echoes
-// remote or secret bytes — messages are fixed strings, plus locally derived
-// integers.
-//
-// After AUTH the daemon owns both lanes (spec §4.1):
-//   HOST_UP   → host lane: generate the join code, announce the topic,
-//               answer HOST_READY once, run the room (qn_planeb.HostRoom).
-//   JOIN_PIN? → client lane: an optional pinned host key from the invite,
-//   JOIN_OPEN → then the join code: run qn_planeb.ClientRoom.
-// Engine bytes cross to Plane B as RELAY bodies; verified remote bytes come
-// back as SV_DATA / CL_DATA with daemon-filled sender tags. Join codes are
-// secrets: they print nowhere except the HOST_READY payload for the engine's
-// display surface, and every composed log line passes the redactor.
-//
-// Exit codes: 0 clean (engine hung up after establishing), 1 failure,
-// 2 usage error.
+// Lanes (spec §4.1): HOST_UP -> qn_planeb.HostRoom; JOIN_PIN? then
+// JOIN_OPEN -> qn_planeb.ClientRoom. Engine bytes cross Plane B as RELAY.
+// Security posture: the one-shot 32-byte token arrives raw on stdin and
+// never enters argv, env, logs, or files; log lines are fixed strings plus
+// locally derived integers, all through the redactor; join codes print
+// only in the HOST_READY payload (their one display surface).
+// Exit codes: 0 clean, 1 failure, 2 usage error.
 const net = require('node:net');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -38,13 +25,11 @@ const P = require('./qn_planeb.cjs');
 // refuse loudly rather than run on untested TLS/crypto semantics.
 const NODE_MAJOR_TESTED = 24;
 
-// Operational knob for deterministic topologies (LAN-only play, and the
-// scripted two-machine gates): a comma-separated host:port list replaces
-// the public DHT entry points for BOTH plane-B roles. Unset means the
-// public bootstrap, exactly as before. Malformed input refuses the lane
-// loudly -- a test that silently fell back to the public DHT would be a
-// test that never ran. The bootstrap operator sees join-topic lookups
-// and nothing else: topic secrecy is unchanged from the public case.
+// QN_DHT_BOOTSTRAP: comma-separated host:port list replacing the public
+// DHT entry points for BOTH plane-B roles; unset means public bootstrap.
+// Malformed input refuses the lane loudly -- a silent fallback would make
+// LAN-only runs test the public DHT without saying so. The bootstrap sees
+// join-topic lookups only; topic secrecy is the same as the public case.
 function dhtBootstrap() {
   const raw = (process.env.QN_DHT_BOOTSTRAP || '').trim();
   if (!raw) return undefined;
@@ -63,14 +48,11 @@ function dhtBootstrap() {
   return list;
 }
 
-// The DHT hyperswarm builds for you is ephemeral, and an ephemeral node
-// fails hyperdht's firewall probe -- a firewalled node never stores an
-// announce at all, so a room opened by such a host is invisible: lookups
-// return zero records and joins cannot be refused because they cannot be
-// found. A HOST lane therefore owns a non-ephemeral DHT explicitly.
-// When the operator names their own bootstrap (LAN play, scripted gates)
-// the flat network is theirs to declare, so the probe is overruled the
-// same way hyperdht's own testnet does; on the public bootstraps the
+// The DHT hyperswarm builds is ephemeral, and an ephemeral node fails
+// hyperdht's firewall probe -- a firewalled node never stores an announce,
+// so its rooms are invisible to lookups. A HOST lane therefore owns a
+// non-ephemeral DHT explicitly. On an operator-named (flat) bootstrap the
+// probe is overruled, as in hyperdht's own testnet; on public bootstraps
 // detection stands and WAN reality is measured, not assumed.
 // Named blind relays (transport fallback): QN_RELAY_THROUGH is a
 // comma-separated list of relay DHT public keys (64-hex). The keys travel
@@ -81,11 +63,11 @@ function dhtBootstrap() {
 // either rides a named relay or fails closed. NAT-classification lies
 // alone do NOT force it on a flat testnet: both sides truthfully observe
 // a stable remote address and report OPEN from it (lib/server.js:281,378
-// and lib/connect.js:434,441, read 2026-09-23), so the forcing must kill
-// the direct paths where they actually fire.
+// and lib/connect.js:434,441), so the forcing must kill the direct paths
+// where they actually fire.
 // relayThrough must be a FUNCTION: hyperswarm gates the non-function
-// forms on dht.randomized (index.js:684-688, read 2026-09-23) and a flat
-// LAN is never "randomized" — only the function is consulted every time.
+// forms on dht.randomized (index.js:684-688) and a flat LAN is never
+// "randomized" — only the function is consulted every time.
 function relayThroughFromEnv() {
   const only = (process.env.QN_RELAY_ONLY || '').trim();
   if (only !== '' && only !== '1') {
@@ -136,9 +118,9 @@ applyRelayForcing.sameKeys = (keys) => {
 
 function applyRelayForcing(keys) {
   if (applyRelayForcing.applied) {
-    // The daemon's env is static; different keys on a second call can only
-    // come from misuse of the exported test surface -- refuse loudly rather
-    // than keep a wrapper bound to the first caller's relays.
+    // The daemon's env is static: different keys on a second call are
+    // caller misuse -- refuse rather than keep a wrapper bound to the
+    // first caller's relays.
     if (!applyRelayForcing.sameKeys(keys)) {
       throw new Error('qn-peer: relay forcing already applied with different keys');
     }
@@ -148,12 +130,9 @@ function applyRelayForcing(keys) {
   applyRelayForcing.keys = keys;
   const Holepuncher = require('hyperdht/lib/holepuncher');
   const Server = require('hyperdht/lib/server');
-  // No NAT-classification pin: a fabricated RANDOM makes the punch rounds
-  // abort the connection (HOLEPUNCH_DOUBLE_RANDOMIZED_NATS) before relay
-  // pairing completes, destroying first attempts mid-bind-delivery. The
-  // levers below are sufficient to force the relay path; classification
-  // stays honest so the rounds idle until pairing wins (isDone guards the
-  // destroy once the relayed stream is attached).
+  // No NAT-classification pin: a fabricated RANDOM aborts the punch
+  // (HOLEPUNCH_DOUBLE_RANDOMIZED_NATS) before relay pairing completes;
+  // the levers below suffice, so classification stays honest.
   DHT.prototype.remoteAddress = function remoteAddress() { return null; };
   Holepuncher.prototype._punch = function _punch() { return Promise.resolve(false); };
   const origAdd = Server.prototype._addHandshake;
@@ -192,10 +171,9 @@ function makeSwarm(extra) {
   const opts = relayThrough ? { ...extra, relayThrough } : extra;
   const bootstrap = dhtBootstrap();
   if (!bootstrap) return new Hyperswarm(opts);
-  // A loopback bootstrap is the flat-network case hyperdht's own testnet
-  // serves: bind loopback too, or the node announces an address its
-  // peers cannot dial and every join dies with zero attempts. Outside
-  // this opt-in mode the public bootstrap path stays exactly as
+  // A loopback bootstrap is hyperdht's own testnet case: bind loopback
+  // too, or the node announces an undialable address and joins die with
+  // zero attempts. Outside this opt-in the public path stays as
   // hyperswarm configures it (firewall detection included).
   const loopback = bootstrap.every((b) =>
     /^127\.|^::1$|^\[::1\]$/.test(b.host));
@@ -215,10 +193,8 @@ function assertRuntime(major = NODE_MAJOR_TESTED) {
 }
 
 // Exactly 32 bytes from stdin (the engine's token), fail-closed: early
-// EOF or a stalled stdin past the timeout is fatal, never a retry — a
-// half-read secret is a failure, not a warning. Extra bytes after the
-// token are drained and ignored (the engine keeps the pipe open for
-// teardown, writing nothing more).
+// EOF or timeout is fatal, never a retry — a half-read secret is a
+// failure. Extra bytes are drained (the engine keeps the pipe open).
 function readToken(stdin, timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const TOKEN_LEN = 32;
@@ -252,8 +228,7 @@ function readToken(stdin, timeoutMs = 5000) {
   });
 }
 
-// Dial the engine's UDS and send AUTH as the first frame (seq 1 per the
-// §2.1 per-direction sequence). Resolves with the live socket.
+// Dial the engine's UDS; AUTH{token} is the first frame (seq 1, §2.1).
 function dialAndAuth(udsPath, token) {
   if (!Buffer.isBuffer(token) || token.length !== 32) {
     return Promise.reject(new Error('internal: bad token length'));
@@ -277,8 +252,8 @@ function usageExit() {
 const shaBuf = (b) => crypto.createHash('sha256').update(b).digest();
 
 // --- long-term identity (spec §5.2) ---
-// One Ed25519 keypair per player, under a private state dir (0700), key
-// file 0600. A key file readable by anyone else is refused, never used.
+// State dir 0700, key file 0600; a key file readable by anyone else is
+// refused, never used.
 function ensureIdentity(dir) {
   fs.mkdirSync(dir, { mode: 0o700, recursive: true });
   const st = fs.statSync(dir);
@@ -352,9 +327,8 @@ function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
     binarySha: shaBuf(image) };
 }
 
-// Join codes are secrets: any string we compose for the console passes
-// through here, stripping both the raw-hex and display forms of every
-// currently live code (belt and braces — lanes log fixed strings only).
+// Join codes are secrets: composed console strings pass through here,
+// stripping the raw-hex and display forms of every live code.
 function makeRedactor() {
   const live = new Set();
   return {
@@ -374,9 +348,8 @@ function makeRedactor() {
   };
 }
 
-// Plane A pump: per-direction sequence numbers, PING keepalives, and the
-// unknown-type drop-storm rule (§2.2, §2.3, §6.5). AUTH already travelled
-// as seq 1; everything else continues strictly upward.
+// Plane A pump: seq per direction, PING keepalives, unknown-type
+// drop-storm (§2.2, §2.3, §6.5). AUTH took seq 1; upward only.
 class PlaneA {
   constructor(sock, { clock = P.realClock, onFrame, onFatal }) {
     this.sock = sock;
@@ -615,9 +588,8 @@ async function run(opts) {
           },
           onRefused: (cause) => {
             log('client: join refused, cause ' + cause);
-            // A refusal before the engine ever entered the match is the
-            // asserted outcome (stale code): hang up clean, exactly as if
-            // the engine had hung up first. Mid-match refusals are fatal.
+            // A pre-join refusal (stale code) hangs up clean, exactly as
+            // if the engine had hung up first; mid-match refusals are fatal.
             if (!joinedOnce) {
               if (exiting) return;
               exiting = true;

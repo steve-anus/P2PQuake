@@ -295,7 +295,7 @@ test('roster slot frees on connection close and is reused by the next join', asy
   assert.equal(room.roster.length, 1);
   conn.destroy();
   await clock.advance(10);
-  assert.equal(room.roster.length, 0); // M2: close frees the slot
+  assert.equal(room.roster.length, 0);
   const conn2 = new FakeConn();
   room.accept(conn2);
   conn2.emit('data', bindFrom(KEYS.peer));
@@ -352,7 +352,6 @@ test('client lane: host-signed message from a non-pinned peer closes it and no p
   await clock.advance(10);
   assert.equal(connEvil.destroyed, true);
   assert.ok(events.some((e) => e[0] === 'rogue-closed'));
-  // only our KEY_BIND ever left this connection — the proof never went out:
   const outs = connEvil.written.map((raw) =>
     E.decodeEnvelope(raw, KEYS.peer.pub, { expectedMatchId: MATCH }));
   assert.deepEqual(outs.map((o) => o.type), [E.TYPES.KEY_BIND]);

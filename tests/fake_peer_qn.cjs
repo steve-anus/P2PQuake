@@ -1,20 +1,12 @@
 #!/usr/bin/env node
 'use strict';
-/* fake_peer_qn.cjs — a scripted stand-in for qn-peer on Plane A, spawned
- * BY THE ENGINE (via -qn-peer) for the loopback test. It proves the
- * engine-side data path — spawn, token-on-stdin, AUTH gate, lane framing,
- * virtual sockets, and the datagram/server layers behind them — without
- * needing a second machine or the DHT.
- *
- * It speaks the same frame grammar as src/peer/qn-peer.cjs (reusing its
- * codec module, so the codec is not being re-implemented here), and plays
- * one scripted remote player: CCREQ_CONNECT, then the signon dance
- * (spawn / begin), then a chat line whose echo back through the server's
- * own progs is the strongest end-to-end assertion this harness makes.
- *
- * Progress is announced on stderr as `LBSTEP <name> ok` lines (the engine
- * inherits its child's stderr, so they land in the engine's own capture);
- * the orchestrator in tests/qn_loopback.cjs asserts the full set.
+/* fake_peer_qn.cjs — scripted stand-in for qn-peer on Plane A, spawned BY
+ * THE ENGINE (via -qn-peer) for the loopback test: proves spawn,
+ * token-on-stdin, AUTH gate, lane framing and virtual sockets without a
+ * second machine or the DHT. Speaks the same frame grammar as
+ * src/peer/qn-peer.cjs, reusing its codec module. Announces progress on
+ * stderr as `LBSTEP <name> ok` lines (the engine inherits the child's
+ * stderr into its own capture); tests/qn_loopback.cjs asserts the set.
  * Exit codes: 0 success, 1 protocol violation, 2 bad token, 3 socket
  * error, 4 watchdog. */
 
@@ -168,8 +160,6 @@ class Peer {
     this.send(T.HOST_READY, F.encodeTLV([[1, HOST_CODE]]));
     this.send(T.PEER_UP, F.encodeTLV([[1, PLAYER_PUB], [2, Buffer.from('LoopbackPlayer')]]));
     step('host-ready');
-    /* the player's connect request, exactly the bytes Datagram_Connect
-     * builds (net_dgrm.c): CTL header, CCREQ_CONNECT, "QUAKE", version */
     this.sendConnect();
   }
   sendConnect() {
@@ -234,7 +224,6 @@ class Peer {
       return;
     }
     if (flags & F_ACK) {
-      /* the host acknowledged our stop-and-wait message */
       this.lastAckAt = Date.now();
       const aseq = body.readUInt32BE(4);
       if (this.pending && aseq === this.pending.seq) {

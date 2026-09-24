@@ -64,7 +64,7 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
        * stream is told to connect to (this node's socket, this leg's
        * stream id, port, host) once pairing completes — the same
        * construction hyperdht uses for holepunched raw streams
-       * (lib/server.js, lib/connect.js read 2026-09-23). */
+       * (lib/server.js, lib/connect.js). */
       return dht.createRawStream({ framed: true, firewall });
     }
   });
@@ -76,7 +76,7 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
      * ADMISSION only -- blind-relay's wire protocol lets one accepted
      * session stream raw pair frames, so pending fan-out and even matched
      * actives are bounded by the sweep below (blind-relay index.js
-     * _onpair/_onclose, read 2026-09-23). */
+     * _onpair/_onclose). */
     let active = 0;
     for (const _s of relay.sessions) active++;
     if (active >= MAX_SESSIONS || relay.stats.pairings.active >= MAX_ACTIVE_PAIRINGS ||
@@ -89,7 +89,7 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
      * relay Client opens the 'blind-relay' protomux channel with
      * (lib/connect.js:811, lib/server.js:684). A null id never matches,
      * the channel never opens, and _onpair never fires
-     * (hyperdht test/relaying.js, read 2026-09-23). */
+     * (hyperdht test/relaying.js). */
     const session = relay.accept(conn, { id: conn.remotePublicKey });
     /* A half-vanished leg surfaces as an 'error' on the blind-relay session
      * (index.js:105-107 _onerror emits it; hyperdht's own relay test attaches

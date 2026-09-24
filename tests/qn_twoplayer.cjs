@@ -9,8 +9,8 @@
  * through the real DHT, and both player slots live in the same server.
  *
  * Client-side console input cannot be scripted (the +cmd chain caps at
- * 256 chars and wait is one frame), so chat/kill attribution stays pinned
- * in the loopback harness until the engine-side stufftext allowlist exists.
+ * 256 chars and wait is one frame), so chat/kill attribution lives in the
+ * loopback harness.
  *
  * Exit 0 = every marker arrived, no banned line, within budget.
  */
@@ -156,7 +156,7 @@ class Engine {
     // script(1) setsid's the engine into a NEW session, so the group kill
     // cannot reach it: walk the child tree two levels (script -> engine
     // -> qn-peer daemon) and SIGKILL each, then the group as backstop.
-    // A leaked host squatting UDP 26000 once starved the next lane's bind.
+    // A leaked host squats UDP 26000 and starves the next lane's bind.
     const fsx = require('node:fs');
     const signal = (p) => { try { process.kill(p, 'SIGKILL'); } catch (e) { /* gone */ } };
     const level = (pids) => {
@@ -193,12 +193,12 @@ class Engine {
   }
 }
 
-// Engine-level recovery: a plane-B connection stall (the first relay attempt
-// can burn its key-bind window before pairing lands) outlives the engine's
-// CL_Connect budget, and a GUI client parked at the menu never retries the
-// console path on its own. A player restarts the game; bounded to 2 respawns,
-// first at 30 s without the spawn line. Fresh-boot join is the same flow the
-// rejoin phase below already asserts, so the relay counters still carry it.
+// Engine-level recovery: a plane-B stall (the first relay attempt can burn
+// its key-bind window before pairing lands) outlives the engine's
+// CL_Connect budget, and a menu-parked client never retries on its own:
+// restart the engine, bounded to 2 respawns, first at 30 s without the
+// spawn line. Fresh-boot join keeps the relay-counter coverage the
+// rejoin phase asserts.
 async function waitSpawn (host, mk, name, client) {
   const want = `${name} entered the game`;
   const deadline = Date.now() + JOIN_TIMEOUT;
@@ -331,9 +331,9 @@ async function main() {
   await host.send('status');
   await host.expect((l) => l.includes('map:') && l.includes('lqdm2'),
     'host running lqdm2', JOIN_TIMEOUT);
-  // A server-console say (src_command on a dedicated host) broadcasts only
-  // to clients the server itself sees as active && spawned, so each
-  // receipt is server-side attestation of re-entry on the new map.
+  // A server-console say broadcasts only to clients the server sees as
+  // active && spawned, so each receipt is server-side attestation of
+  // re-entry on the new map.
   await host.send('say postmap');
   await alice.expect((l) => l.includes('<UNNAMED> postmap'),
     'Alice in-game on lqdm2', REJOIN_TIMEOUT);
@@ -350,7 +350,7 @@ async function main() {
   // Crash-style rejoin with the same qn-dir keeps the same identity: the
   // transport must accept the returning peer (epoch guard covers replays).
   // Solo shape: crash-rejoin with a resident second player trips a
-  // server-side freed-edict defect (repro and status in the project log).
+  // server-side freed-edict defect.
   const removedBefore = host.count(
     (l) => l.includes('Client QnAlice removed'));
   alice.kill();

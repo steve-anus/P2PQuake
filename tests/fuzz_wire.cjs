@@ -1,9 +1,8 @@
 'use strict';
-// Randomized mutation fuzzer for qn-peer's wire parsing (no clang needed): randomized
-// mutation of valid Plane B envelopes and Plane A frames, run through the
-// real readers. Legal outcomes: known error types only (EnvelopeError,
-// FrameError, TLVError) — anything else (TypeError etc) or a
-// hang is a bug. Usage: make fuzz-node [QN_RUNS=n]
+// Randomized mutation fuzzer for qn-peer's wire parsing: valid Plane B
+// envelopes and Plane A frames mutated and run through the real readers.
+// Legal outcomes: EnvelopeError, FrameError, TLVError — anything else or
+// a hang is a bug. Usage: make fuzz-node [QN_RUNS=n]
 const crypto = require('node:crypto');
 const F = require('../src/peer/qn_frame.cjs');
 const E = require('../src/peer/qn_envelope.cjs');
@@ -40,7 +39,6 @@ function mutate(buf) {
   return b;
 }
 
-// Anything else (TypeError, RangeError, ...) escaping the parsers is a bug.
 const LEGAL = [E.EnvelopeError, F.FrameError, F.TLVError];
 let survived = 0, rejected = 0;
 const t0 = Date.now();
