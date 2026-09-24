@@ -1,0 +1,83 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -143,6 +143,9 @@
+ /* lane bookkeeping */
+ static qboolean		qn_host_lane_up;
+ static qboolean		qn_host_ready_shown;
++/* Host-page display copy of the minted code in grouped form (spec 5.1
++ * display surface: the console line and the in-game host page). */
++static char			qn_join_code_text[24];
+ static qboolean		qn_client_lane_up;
+ static qboolean		qn_client_was_connected;	/* the lane has served a
+ 						   live client session */
+@@ -398,6 +401,7 @@
+ 	qn_zero_secret ();
+ 	qn_host_lane_up = false;
+ 	qn_host_ready_shown = false;
++	qn_join_code_text[0] = '\0';
+ 	qn_client_lane_up = false;
+ 	qn_join_pending = false;
+ 	qn_drops_run = 0;
+@@ -655,6 +659,7 @@
+ 		c += 4;
+ 	}
+ 	grouped[c] = '\0';
++	q_strlcpy (qn_join_code_text, grouped, sizeof (qn_join_code_text));
+ 	/* The join code is minted by the daemon for local display only
+ 	 * (spec 5.1 display surface); it is not attacker content. */
+ 	q_snprintf (line, sizeof (line), "Join code: %s\n", grouped);
+@@ -943,6 +948,8 @@
+ 			}
+ 			qn_host_lane_up = true;
+ 			qn_host_ready_shown = false;
++			qn_join_code_text[0] = '\0';	/* stale code never
++							   outlives its room */
+ 		}
+ 	}
+ 	else if (sv.active && !qn_wantlisten && !qn_host_lane_up)
+@@ -1083,6 +1090,23 @@
+ void QN_Listen (qboolean state)
+ {
+ 	qn_wantlisten = state;
++	if (!state && qn_host_lane_up && qn_live ())
++	{
++		if (qn_transport_send (&qn_tr, QN_T_HOST_DOWN, NULL, 0) != 1)
++			qn_teardown ("host_down send failed");
++		else
++		{
++			qn_host_lane_up = false;
++			qn_host_ready_shown = false;
++			qn_join_code_text[0] = '\0';
++			qn_sv_was_active = false;
++		}
++	}
++}
++
++const char *QN_JoinCodeText (void)
++{
++	return qn_join_code_text;
+ }
+ 
+ sys_socket_t QN_OpenSocket (int port)
+--- a/Quake/net_qn.h
++++ b/Quake/net_qn.h
+@@ -15,7 +15,7 @@
+ 
+ typedef enum
+ {
+-	QN_OFF = 0,		/* landriver not initialized (no -qn on the command line) */
++	QN_OFF = 0,		/* landriver not initialized (-no-qn on the command line) */
+ 	QN_STANDBY,		/* registered; no authenticated local peer yet:
+ 			   every data-plane operation refuses */
+ 	QN_RUNNING		/* local qn-peer authenticated on Plane A;
+@@ -25,6 +25,10 @@
+ sys_socket_t  QN_Init (void);
+ void QN_Shutdown (void);
+ void QN_Listen (qboolean state);
++
++/* Grouped join code for the host page (spec 5.1 display surface), or ""
++ * when no room is currently announced. */
++const char *QN_JoinCodeText (void);
+ sys_socket_t  QN_OpenSocket (int port);
+ int  QN_CloseSocket (sys_socket_t socketid);
+ int  QN_Connect (sys_socket_t socketid, struct qsockaddr *addr);
