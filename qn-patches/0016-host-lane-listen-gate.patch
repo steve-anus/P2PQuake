@@ -1,0 +1,20 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -896,7 +896,7 @@
+ 	/* lane edges: the server going up/down drives HOST_UP/HOST_DOWN,
+ 	 * the client connect/disconnect drives JOIN_OPEN/JOIN_CLOSE; the
+ 	 * daemon itself is spawned on the first demand */
+-	if (sv.active && !qn_host_lane_up)
++	if (sv.active && qn_wantlisten && !qn_host_lane_up)
+ 	{
+ 		if (!qn_sv_was_active)
+ 		{
+@@ -941,6 +941,8 @@
+ 			qn_host_ready_shown = false;
+ 		}
+ 	}
++	else if (sv.active && !qn_wantlisten && !qn_host_lane_up)
++		qn_note ("server not listening: no join code");
+ 	else if (!sv.active)
+ 	{
+ 		/* No HOST_DOWN here: SV_ShutdownServer's sv.active window is a
