@@ -1,7 +1,6 @@
-/* qn_transport.c — engine-side Plane A endpoint (spec §2, §4, §8).
- * See qn_transport.h for the contract. No clock reads, no allocations
- * after init, failure reasons are always fixed strings: raw bytes from a
- * remote side must never reach log or console output. */
+/* qn_transport.c — engine-side Plane A endpoint (spec §2, §4, §8);
+ * contract in qn_transport.h. No clock reads, no allocations after init;
+ * reasons are fixed strings: remote bytes must never reach log output. */
 #define _GNU_SOURCE
 #include "qn_transport.h"
 

@@ -1,13 +1,9 @@
 'use strict';
-// Two machines compressed onto one: two real qn-peer daemons (spawned
-// binaries, Plane A clients) bridged by fake engines over owned UDS
-// sockets, meeting over the live DHT. Covers the whole join path —
-// HOST_UP→HOST_READY code issuance, KEY_BIND channel binding, JOIN with
-// proof + asset identity, three-way host-key equality against the invite
-// pin, RELAY bridging both directions — plus refusal lanes (bad proof,
-// below-minimum version, tampered identity, non-printable name) and a
-// rogue announcer playing host at the joined client. Malicious lanes are
-// raw protocol speakers: an attacker does not run our code.
+// Two machines on one: real qn-peer daemons + fake engines over owned UDS
+// sockets, meeting on the live DHT. Covers the join path, the refusal
+// lanes (bad proof, low version, tampered identity, non-printable name),
+// and a rogue announcer playing host at the joined client. Malicious
+// lanes are raw protocol speakers: an attacker does not run our code.
 // Exit 0 = every assertion held.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -292,7 +288,6 @@ const guard = setTimeout(() => {
 const spawned = [];
 let hostEngine = null, clientEngine = null;
 async function main() {
-  // host daemon: fake engine hosts, daemon announces and returns the code
   hostEngine = new FakeEngine('host-engine');
   await hostEngine.start();
   const hostDaemon = spawnDaemon(hostEngine.sockPath, hostDir);
@@ -337,7 +332,6 @@ async function main() {
       e.message + ' || host:[' + tail(hostDaemon) + '] client:[' + tail(clientDaemon) + ']');
   }
 
-  // no PEER_UP may ever carry the client's own identity key back to it
   const selfUps = clientEngine.frames.filter((f) => f.type === F.TYPES.PEER_UP)
     .map((f) => new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value])))
     .filter((t) => t.get(1) && t.get(1).equals(clientPub));
@@ -345,7 +339,6 @@ async function main() {
     ? note('the engine is never told it is its own remote peer')
     : failNote('the engine is never told it is its own remote peer', selfUps.length + ' self PEER_UPs');
 
-  // bridge host→client: engine server output reaches the client engine tagged
   const body = Buffer.from('servmsg-' + Date.now());
   clientEngine.frames.length = 0;
   hostEngine.send(F.TYPES.SV_DATA, F.encodeTLV([[1, Buffer.from(clientPub)], [2, body]]));
@@ -359,7 +352,6 @@ async function main() {
     failNote('server output bridges host→client engine', e.message);
   }
 
-  // bridge client→host: local user input reaches the host engine tagged
   const cmd = Buffer.from('usercmd-' + Date.now());
   hostEngine.frames.length = 0;
   clientEngine.send(F.TYPES.CLIENT_CMD, F.encodeTLV([[1, cmd]]));
@@ -402,8 +394,6 @@ async function main() {
     : failNote('non-printable name kills the connection at parse',
         String(nameVerdict) + ' logged-rule:' + logged);
 
-  // honest raw member: experimental TLV skipped; signed chat received once
-  // despite the byte-identical duplicate (window counts it, nothing executes)
   const member = rawClient('member', topic, matchId, code);
   const memberVerdict = await member.done;
   memberVerdict === 'joined'

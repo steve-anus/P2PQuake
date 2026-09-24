@@ -1,7 +1,6 @@
-/* qn_spawn.c — see qn_spawn.h. Every path decision here is a refusal,
- * never a fallback: PATH lookups, token-in-argv/env, and reused tokens
- * all abort the spawn before the child can exist. Validation and exec
- * share one open descriptor, so a swapped path cannot race the check. */
+/* qn_spawn.c — see qn_spawn.h. Every path decision is a refusal, never a
+ * fallback; validation and exec share one open descriptor, so a swapped
+ * path cannot race the check. */
 #define _GNU_SOURCE
 #include "qn_spawn.h"
 
@@ -238,12 +237,10 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
         return -1;
     }
     if (prog_fd < 3) {
-        /* An engine running with stdio closed could land the validated
-         * descriptor on 0..2, where the child's dup2 would clobber it
-         * and the descriptor fast path would silently fall back to a
-         * path exec. Relocate; the freed low slot then trips the
-         * low-descriptor guard below — a clean refusal by design for
-         * that posture (an engine must keep 0..2 occupied at init). */
+        /* A validated fd on 0..2 (closed-stdio engine) would be clobbered
+         * by the child's dup2, silently degrading to a path exec:
+         * relocate; the freed low slot then trips the guard below — a
+         * refusal by design (an engine must keep 0..2 occupied). */
         int high = fcntl(prog_fd, F_DUPFD_CLOEXEC, 3);
         close(prog_fd);
         prog_fd = high;
@@ -295,11 +292,10 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
          * into the child. */
         child_close_high_fds(prog_fd);
         execveat(prog_fd, "", argv, envp, AT_EMPTY_PATH);
-        /* ELF images exec from the validated descriptor. The kernel's
-         * script loader cannot (it reports ENOENT for an empty path),
-         * so any descriptor-exec failure falls back to the path exec,
-         * which re-resolves — fine for shebang test fakes; production
-         * peers are ELF binaries riding the fast path above. */
+        /* ELF images exec from the validated descriptor; the kernel's
+         * script loader cannot (ENOENT on empty path), so descriptor-exec
+         * failure falls back to the path exec — fine for shebang test
+         * fakes; production peers ride the fast path. */
         execve(program, argv, envp);
         _exit(127); /* only reachable if both execs failed */
     }
@@ -307,11 +303,9 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     close(fds[0]);
     close(prog_fd); /* the child holds its own copy; ours is spent */
     /* A pipe write with every reader gone raises SIGPIPE before write()
-     * returns EPIPE. MASKING IS NOT ENOUGH: the standard signal stays
-     * pending and is delivered the instant the mask is restored — death
-     * one line later, inside sigprocmask itself (observed under load).
-     * The disposition must be SIG_IGN at raise time, which discards the
-     * signal outright; restore the saved action on every exit. */
+     * returns EPIPE. MASKING IS NOT ENOUGH: the pending signal is
+     * delivered on restore. SIG_IGN at raise time discards it outright;
+     * restore the saved action on every exit. */
     struct sigaction ign;
     struct sigaction old_act;
     memset(&ign, 0, sizeof ign);

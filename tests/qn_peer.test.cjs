@@ -1,10 +1,8 @@
 'use strict';
 // qn-peer Plane A handshake tests (spec §4). The fake-engine server
-// encodes the engine's side of §4 — AUTH must be the first frame, the
-// token compares in constant time, mismatch or malformed closes the
-// connection, and AUTH passes at most once. Child processes are the real
-// qn-peer binary: this tests the daemon shape, not a re-implementation.
-// Temp sockets live under a 0700 mkdtemp dir this test owns and cleans.
+// enforces the engine side: AUTH first frame at seq 1, constant-time
+// token compare, mismatch/malformed closes, AUTH at most once. Children
+// are the real qn-peer binary. Temp sockets live in a 0700 mkdtemp dir.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -179,9 +177,8 @@ test('dialAndAuth refuses a wrong-length token before touching the wire', async 
 });
 
 // ---- identity, persistence, redaction, and the plane A pump ----
-// The security-critical helpers of the daemon, exercised directly (spec
-// §3.4a, §5.2, §2.3): key-file modes, epoch store, code scrubbing, and the
-// terminal-cause doctrine for engine misbehavior.
+// Security-critical daemon helpers, exercised directly (spec §3.4a,
+// §5.2, §2.3).
 
 function tmp0700(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpeer-id-'));

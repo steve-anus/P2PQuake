@@ -1,11 +1,9 @@
 'use strict';
 // Plane B session machinery for qn-peer, per src/protocol/qn_protocol.md §3.
-// One connection = one session object; the room classes own the shared
-// state (roster, slots, epoch, lockouts). All timing goes through an
-// injected clock so the stage timers can be driven deterministically in
-// tests. Every log/callback value is a locally produced fixed string or
-// integer: bytes from the wire are never echoed, only verified and
-// forwarded.
+// One connection = one session; rooms own the shared state. Timing goes
+// through the injected clock (deterministic stage timers in tests).
+// Log/callback values are locally produced fixed strings or integers:
+// wire bytes are never echoed, only verified and forwarded.
 const E = require('./qn_envelope.cjs');
 const F = require('./qn_frame.cjs');
 const R = require('./qn_room.cjs');
@@ -64,10 +62,9 @@ function checkTagSizes(env) {
   }
 }
 
-// §2.4/§3.5b: only the assigned experimental range may ride along unknown.
-// Any other tag a known type does not define makes the envelope counted
-// and dropped — never silently accepted, which would be a counting-exempt
-// spam channel.
+// §2.4/§3.5b: only the experimental range may ride along unknown; any
+// other undefined tag is counted and dropped (else: a counting-exempt
+// spam channel).
 function hasIllegalTags(env) {
   const spec = TAG_SIZES[env.type];
   if (spec === undefined) return false; // unknown types: the caller counts those

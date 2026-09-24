@@ -1,8 +1,8 @@
 'use strict';
 // Plane A (engine <-> qn-peer) frame codec per src/protocol/qn_protocol.md §2.
 // Terminal-error doctrine: a malformed stream kills the connection; there is
-// no rescan-for-magic. decodeFrame throws FrameError with code 'bad' (close)
-// or returns null when more bytes are needed.
+// no rescan-for-magic. decodeFrame throws a terminal FrameError or returns
+// null when more bytes are needed.
 
 const MAGIC = 0x514e4631;
 const VERSION = 0x0001; // major 0, minor 1

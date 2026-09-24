@@ -104,9 +104,9 @@ test('idle sweep reaps a pending-holding squatter', { timeout: 60000 }, async ()
     conns.push(a);
     const ca = BlindRelayClient.from(a, { id: a.publicKey });
     await clientReady(ca);
-    // One unfinished pairing (isInitiator only): the old idle rule
-    // required _pairing.size === 0, so this squatted the session — and a
-    // MAX_SESSIONS slot — forever.
+    // One unfinished pairing (isInitiator only): _pairing stays non-empty
+    // while _links stays 0 — the session (and its MAX_SESSIONS slot) must
+    // still be reaped, not squat forever.
     floodPair(ca, true, [crypto.randomBytes(32)], 1000);
     await sleep(1200); // idleMs 400 + sweep headroom
     const st = relay.stats;
