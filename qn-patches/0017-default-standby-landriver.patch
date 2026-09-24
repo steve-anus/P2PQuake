@@ -1,0 +1,40 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -6,18 +6,22 @@
+  * byte.
+  *
+  * Postures:
+- *  - Absent (default): without -qn on the command line QN_Init returns
+- *    INVALID_SOCKET and the datagram layer skips the driver entirely.
+- *  - Standby: with -qn the driver registers but refuses every data-plane
+- *    operation; no daemon is spawned until a lane actually needs one
+- *    (the server goes active, or the console connects to a qn: name).
++ *  - Standby (default): QN_Init registers the driver, which refuses every
++ *    data-plane operation; no daemon is spawned until a lane actually
++ *    needs one (the listen-gated server goes active, or the console or
++ *    menu connects to a qn: name).
++ *  - Absent: with -no-qn on the command line QN_Init returns
++ *    INVALID_SOCKET and the datagram layer skips the driver entirely
++ *    (offline development and test isolation only).
+  *  - Running: reached only when the engine's own spawned child passes
+  *    the AUTH gate (spec section 4). Only then do virtual sockets exist
+  *    and frames move.
+  *
+  * Command-line surface (no secrets -- the AUTH token is handed to the
+  * child on stdin and never appears here):
+- *   -qn                    register the landriver
++ *   (default)              landriver registers in standby; -qn remains
++ *                          accepted as an explicit no-op
++ *   -no-qn                 do not register the landriver at all
+  *   -qn-peer <abspath>     peer program (default: "qn-peer" beside the
+  *                          engine binary; never a PATH search)
+  *   -qn-dir <abspath>      socket directory (default: $XDG_RUNTIME_DIR/
+@@ -1036,7 +1040,7 @@
+ 
+ sys_socket_t QN_Init (void)
+ {
+-	if (!COM_CheckParm ("-qn"))
++	if (COM_CheckParm ("-no-qn"))
+ 		return INVALID_SOCKET;
+ 
+ 	memset (qn_sockets, 0, sizeof (qn_sockets));
