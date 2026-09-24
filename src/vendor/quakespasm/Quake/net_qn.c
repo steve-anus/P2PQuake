@@ -143,6 +143,9 @@ static char		qn_sockpath[512];
 /* lane bookkeeping */
 static qboolean		qn_host_lane_up;
 static qboolean		qn_host_ready_shown;
+/* Host-page display copy of the minted code in grouped form (spec 5.1
+ * display surface: the console line and the in-game host page). */
+static char			qn_join_code_text[24];
 static qboolean		qn_client_lane_up;
 static qboolean		qn_client_was_connected;	/* the lane has served a
 						   live client session */
@@ -398,6 +401,7 @@ static void qn_teardown (const char *why)
 	qn_zero_secret ();
 	qn_host_lane_up = false;
 	qn_host_ready_shown = false;
+	qn_join_code_text[0] = '\0';
 	qn_client_lane_up = false;
 	qn_join_pending = false;
 	qn_drops_run = 0;
@@ -655,6 +659,7 @@ static void qn_show_join_code (const uint8_t code[10])
 		c += 4;
 	}
 	grouped[c] = '\0';
+	q_strlcpy (qn_join_code_text, grouped, sizeof (qn_join_code_text));
 	/* The join code is minted by the daemon for local display only
 	 * (spec 5.1 display surface); it is not attacker content. */
 	q_snprintf (line, sizeof (line), "Join code: %s\n", grouped);
@@ -943,6 +948,8 @@ void QN_Pump (unsigned long long now_ms)
 			}
 			qn_host_lane_up = true;
 			qn_host_ready_shown = false;
+			qn_join_code_text[0] = '\0';	/* stale code never
+							   outlives its room */
 		}
 	}
 	else if (sv.active && !qn_wantlisten && !qn_host_lane_up)
@@ -1083,6 +1090,23 @@ void QN_Shutdown (void)
 void QN_Listen (qboolean state)
 {
 	qn_wantlisten = state;
+	if (!state && qn_host_lane_up && qn_live ())
+	{
+		if (qn_transport_send (&qn_tr, QN_T_HOST_DOWN, NULL, 0) != 1)
+			qn_teardown ("host_down send failed");
+		else
+		{
+			qn_host_lane_up = false;
+			qn_host_ready_shown = false;
+			qn_join_code_text[0] = '\0';
+			qn_sv_was_active = false;
+		}
+	}
+}
+
+const char *QN_JoinCodeText (void)
+{
+	return qn_join_code_text;
 }
 
 sys_socket_t QN_OpenSocket (int port)

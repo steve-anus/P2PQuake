@@ -15,7 +15,7 @@ struct qsockaddr;
 
 typedef enum
 {
-	QN_OFF = 0,		/* landriver not initialized (no -qn on the command line) */
+	QN_OFF = 0,		/* landriver not initialized (-no-qn on the command line) */
 	QN_STANDBY,		/* registered; no authenticated local peer yet:
 			   every data-plane operation refuses */
 	QN_RUNNING		/* local qn-peer authenticated on Plane A;
@@ -25,6 +25,10 @@ typedef enum
 sys_socket_t  QN_Init (void);
 void QN_Shutdown (void);
 void QN_Listen (qboolean state);
+
+/* Grouped join code for the host page (spec 5.1 display surface), or ""
+ * when no room is currently announced. */
+const char *QN_JoinCodeText (void);
 sys_socket_t  QN_OpenSocket (int port);
 int  QN_CloseSocket (sys_socket_t socketid);
 int  QN_Connect (sys_socket_t socketid, struct qsockaddr *addr);

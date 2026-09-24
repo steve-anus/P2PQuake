@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "bgmusic.h"
+#include "qn_menu.h"
 
 void (*vid_menucmdfn)(void); //johnfitz
 void (*vid_menudrawfn)(void);
@@ -602,7 +603,7 @@ void M_Save_Key (int k)
 /* MULTIPLAYER MENU */
 
 int	m_multiplayer_cursor;
-#define	MULTIPLAYER_ITEMS	3
+#define	MULTIPLAYER_ITEMS	4
 
 
 void M_Menu_MultiPlayer_f (void)
@@ -627,6 +628,8 @@ void M_MultiPlayer_Draw (void)
 	f = (int)(realtime * 10)%6;
 
 	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+
+	M_Print (90, 92, "Host p2pquake");
 
 	if (ipxAvailable || tcpipAvailable)
 		return;
@@ -673,6 +676,14 @@ void M_MultiPlayer_Key (int key)
 
 		case 2:
 			M_Menu_Setup_f ();
+			break;
+
+		case 3:
+			IN_Deactivate(modestate == MS_WINDOWED);
+			key_dest = key_menu;
+			m_state = m_qn_host;
+			m_entersound = true;
+			QN_Menu_HostInit ();
 			break;
 		}
 	}
@@ -2655,6 +2666,10 @@ void M_Draw (void)
 		M_GameOptions_Draw ();
 		break;
 
+	case m_qn_host:
+		QN_Menu_HostDraw ();
+		break;
+
 	case m_search:
 		M_Search_Draw ();
 		break;
@@ -2743,6 +2758,10 @@ void M_Keydown (int key)
 
 	case m_slist:
 		M_ServerList_Key (key);
+		return;
+
+	case m_qn_host:
+		QN_Menu_HostKey (key);
 		return;
 	}
 }
