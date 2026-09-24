@@ -320,21 +320,36 @@ function makeEpochStore(dir) {
   };
 }
 
-// Asset & build identity (spec §3.4a), computed from bytes, never asserted.
-// engine_id binds to the parent's running image by fd (hash-by-fd).
-function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid }) {
+const BUILD_ID_MAGIC = Buffer.from('QNBID:', 'utf8');
+const BUILD_ID_RE = /^[A-Za-z0-9._+-]{1,64}$/;
+function extractBuildId(image) {
+  const at = image.lastIndexOf(BUILD_ID_MAGIC);
+  if (at < 0) return null;
+  let end = image.indexOf(0, at + BUILD_ID_MAGIC.length);
+  if (end < 0) end = image.length;
+  const s = image.subarray(at + BUILD_ID_MAGIC.length, end).toString('latin1');
+  return BUILD_ID_RE.test(s) ? Buffer.from(s, 'utf8') : null;
+}
+
+function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
+  exePath = undefined }) {
   const manifest = shaBuf(fs.readFileSync(gamedataPath));
-  const fd = fs.openSync(`/proc/${ppid}/exe`, 'r');
+  const fd = fs.openSync(exePath ?? `/proc/${ppid}/exe`, 'r');
+  const parts = [];
   try {
-    const h = crypto.createHash('sha256');
     const chunk = Buffer.alloc(1 << 20);
     for (;;) {
       const n = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (n <= 0) break;
-      h.update(chunk.subarray(0, n));
+      parts.push(Buffer.from(chunk.subarray(0, n)));
     }
-    return { manifest, gamedir: Buffer.from(gamedir), engineId: h.digest() };
   } finally { fs.closeSync(fd); }
+  const image = Buffer.concat(parts);
+  const buildId = extractBuildId(image);
+  if (!buildId) throw new Error('no engine build marker in parent image (§3.4a)');
+  return { manifest, gamedir: Buffer.from(gamedir), buildId,
+    platform: Buffer.from(`${process.platform}-${process.arch}`, 'utf8'),
+    binarySha: shaBuf(image) };
 }
 
 // Join codes are secrets: any string we compose for the console passes
@@ -525,6 +540,7 @@ async function run(opts) {
       const code = R.randomJoinCode();
       redactor.register(code);
       const topic = R.topicOf(code);
+      const memberShas = new Map(); // binary_sha per member: log-only watch
       const room = new P.HostRoom({
         swarm: null, matchId: R.matchIdOf(code), code, keys: opts.keys,
         identity: opts.identity, map, maxPeers: maxPlayers,
@@ -533,10 +549,27 @@ async function run(opts) {
         epochStart: (() => { const v = opts.epochs.load('host', topic.toString('hex')); return v < 0n ? 0n : v; })(),
         epochSave: (v) => opts.epochs.save('host', topic.toString('hex'), v),
         cbs: {
-          onPeerUp: (pub, name) => a.send(F.TYPES.PEER_UP,
-            F.encodeTLV([[1, pub], [2, name]])),
-          onPeerDown: (pub) => a.send(F.TYPES.PEER_DOWN,
-            F.encodeTLV([[1, pub], [3, Buffer.from([0])]])),
+          onPeerUp: (pub, name, info) => {
+            if (info) {
+              const sh = info.binarySha.toString('hex');
+              log('host: member ' + pub.subarray(0, 4).toString('hex')
+                + ' platform='
+                + (P.isPrintable(info.platform) ? info.platform.toString('latin1') : '<invalid>')
+                + ' binary_sha=' + sh);
+              for (const v of memberShas.values()) {
+                if (v !== sh) {
+                  log('host: member binary_sha divergence (diagnostic only)');
+                  break;
+                }
+              }
+              memberShas.set(pub.toString('hex'), sh);
+            }
+            a.send(F.TYPES.PEER_UP, F.encodeTLV([[1, pub], [2, name]]));
+          },
+          onPeerDown: (pub) => {
+            memberShas.delete(pub.toString('hex'));
+            a.send(F.TYPES.PEER_DOWN, F.encodeTLV([[1, pub], [3, Buffer.from([0])]]));
+          },
           onClData: (from, body) => a.send(F.TYPES.CL_DATA,
             F.encodeTLV([[1, from], [2, body]])),
           onChat: () => log('host: chat received'),
@@ -572,8 +605,11 @@ async function run(opts) {
           : -1n,
         epochSave: (v) => opts.pinned && opts.epochs.save(opts.pinned.toString('hex'), topic.toString('hex'), v),
         cbs: {
-          onJoined: ({ hostKey }) => {
+          onJoined: ({ hostKey, hostPlatform, hostBinarySha }) => {
             joinedOnce = true;
+            log('client: host build platform='
+              + (P.isPrintable(hostPlatform) ? hostPlatform.toString('latin1') : '<invalid>')
+              + ' binary_sha=' + hostBinarySha.toString('hex'));
             log('client: joined');
             a.send(F.TYPES.PEER_UP, F.encodeTLV([[1, hostKey], [2, Buffer.from('host')]]));
           },
@@ -671,10 +707,16 @@ async function main(argv) {
   assertRuntime();
   const o = parseFlags(argv);
   if (!o) return usageExit();
+  let identity;
+  try {
+    identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir });
+  } catch {
+    process.stderr.write('qn-peer: no engine build marker in parent image; not joining (\u00a73.4a)\n');
+    throw new Error('local identity');
+  }
   const token = await readToken(process.stdin, o.tokenTimeoutMs);
   const sock = await dialAndAuth(o.uds, token);
   const keys = ensureIdentity(o.dir);
-  const identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir });
   const redactor = makeRedactor();
   const epochs = makeEpochStore(o.dir);
   return run({ sock, keys, identity, name: Buffer.from(o.name), pinned: null,
@@ -690,6 +732,7 @@ if (require.main === module) {
 
 module.exports = {
   assertRuntime, readToken, dialAndAuth, usageExit, NODE_MAJOR_TESTED,
-  ensureIdentity, makeEpochStore, computeIdentity, makeRedactor, PlaneA, parseFlags, run,
+  ensureIdentity, makeEpochStore, computeIdentity, extractBuildId, makeRedactor,
+  PlaneA, parseFlags, run,
   relayThroughFromEnv, applyRelayForcing, relayForcingState,
 };

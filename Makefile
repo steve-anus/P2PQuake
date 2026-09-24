@@ -4,7 +4,7 @@
 
 QS_DIR   := src/vendor/quakespasm
 DRIVER_SRC := $(wildcard src/driver/*.c)
-TEST_SRC   := $(wildcard tests/*.c)
+TEST_SRC   := $(filter-out tests/fake-engine.c,$(wildcard tests/*.c))
 CC ?= gcc
 NODE ?= node
 NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
@@ -12,7 +12,20 @@ NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback twoplayer relay smoke-dht clean
+# Source-level build identity (spec §3.4a): commit + digest over the ordered
+# qn-patch series. The engine embeds it as the magic-framed marker the daemon
+# proves from the parent image before joining; changing a patch changes it.
+QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
+QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
+QN_PSERIES := $(shell cat $(sort $(wildcard qn-patches/*.patch)) 2>/dev/null | sha256sum | cut -c1-16)
+QN_BUILD_ID ?= $(QN_COMMIT)p$(QN_PSERIES)$(QN_DIRTY)
+
+src/driver/qn_buildid.h: FORCE
+	@printf '#define QN_BUILD_ID "%s"\n' '$(QN_BUILD_ID)' > $@.new
+	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
+FORCE:
+
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback twoplayer relay smoke-dht clean fake-engine
 
 all: engine peer
 
@@ -21,13 +34,13 @@ all: engine peer
 # MP3LIB=mpg123: the vendored engine defaults to libmad (Quake/Makefile:26)
 # which is not installed here; the mpg123 backend uses the system library.
 # Both build cleanly; flip this back if libmad ever becomes the preference.
-engine:
+engine: src/driver/qn_buildid.h
 	$(MAKE) -C $(QS_DIR)/Quake DEBUG=$(DEBUG) USE_SDL2=1 MP3LIB=mpg123 \
 	  "CC=$(CC) -ffile-prefix-map=$(HOME)=."
 
 # Check for the qn-patches/README claim: the vendored tree must equal the
 # pinned upstream bytes plus the ordered patch series, byte for byte.
-engine-verify:
+engine-verify: src/driver/qn_buildid.h
 	@CACHE=$${QN_ENGINE_CACHE:-$${XDG_CACHE_HOME:-$$HOME/.cache}/p2pquake/qs-engine}; \
 	[ -d "$$CACHE/.git" ] || { echo "engine-verify: NOT-READY — no engine cache at $$CACHE"; exit 1; }; \
 	R=$$(pwd); W=$$(mktemp -d); trap 'rm -rf "$$W"' EXIT; \
@@ -48,7 +61,11 @@ engine-verify:
 peer:
 	npm ci --ignore-scripts
 
-e2e:
+fake-engine: src/driver/qn_buildid.h
+	@mkdir -p bin
+	$(CC) $(QN_CFLAGS) -Isrc/driver tests/fake-engine.c -o bin/fake-engine
+
+e2e: fake-engine
 	$(NODE) tests/e2e-room.cjs
 
 loopback: engine
@@ -66,7 +83,7 @@ relay: engine
 # with the parsers under ASan+UBSan. Forces both rebuilds (the vendored
 # make cannot see the CC change); the leak gate proves the sanitised
 # binary carries no home path, with -ffile-prefix-map doing the work.
-fuzz-loopback:
+fuzz-loopback: src/driver/qn_buildid.h
 	@mkdir -p bin
 	$(MAKE) --no-print-directory -C $(QS_DIR)/Quake DEBUG=1 USE_SDL2=1 MP3LIB=mpg123 \
 	  "CC=$(CC) -fsanitize=address,undefined -static-libasan -static-libubsan -fno-omit-frame-pointer -ffile-prefix-map=$(HOME)=." -B
@@ -87,6 +104,7 @@ check:
 	@mkdir -p bin
 	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
 	./bin/qn_tests
+	$(MAKE) --no-print-directory fake-engine
 	$(if $(NODE_TEST_SRC),$(NODE) --test $(NODE_TEST_SRC),)
 	$(MAKE) --no-print-directory e2e
 	$(MAKE) --no-print-directory loopback

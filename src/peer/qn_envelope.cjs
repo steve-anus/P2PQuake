@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 
 const MAGIC = 0x514e; // "QN"
 const MAJOR = 0;
-const MINOR = 1;
+const MINOR = 2;
 const MAX_PAYLOAD = 1200;
 const SIG_LEN = 64;
 const HEAD_LEN = 28; // magic(2) major(1) minor(1) type(2) matchId(16) seq(4) len(2)
