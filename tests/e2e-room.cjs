@@ -107,9 +107,14 @@ class FakeEngine {
   }
 }
 
+const FAKE_ENGINE = path.join(__dirname, '..', 'bin', 'fake-engine');
+
 function spawnDaemon(sockPath, dir, extra = []) {
-  const child = spawn(process.execPath, [PEER, '--uds', sockPath, '--dir', dir, ...extra],
-    { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(FAKE_ENGINE, ['--uds', sockPath, '--dir', dir, ...extra], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, QN_FAKE_ENGINE_NODE: process.execPath,
+      QN_FAKE_ENGINE_SCRIPT: PEER },
+  });
   const err = [];
   child.stderr.on('data', (c) => err.push(c));
   return {
@@ -128,9 +133,14 @@ fs.writeFileSync(path.join(hostDir, 'identity.key'), HOST_SEED.toString('hex') +
 fs.writeFileSync(path.join(clientDir, 'identity.key'), CLIENT_SEED.toString('hex') + '\n', { mode: 0o600 });
 const hostPub = Buffer.from(E.publicRaw(E.publicKeyFromSeed(HOST_SEED)));
 const clientPub = Buffer.from(E.publicRaw(E.publicKeyFromSeed(CLIENT_SEED)));
-const ENGINE_ID = shaBuf(fs.readFileSync(process.execPath)); // the spawned daemons
-// hash /proc/<ppid>/exe — their parent is this test process, so their engine
-// identity is the sha256 of this runtime's image, nothing asserted about it.
+// The spawned daemons hash /proc/<ppid>/exe: their parent is the
+// marker-carrying bin/fake-engine image, so these bytes are what the join
+// lane proves, nothing asserted about them.
+const ENGINE_IMAGE = fs.readFileSync(FAKE_ENGINE);
+const ENGINE_ID = shaBuf(ENGINE_IMAGE);
+const { extractBuildId } = require('../src/peer/qn-peer.cjs');
+const BUILD_ID = extractBuildId(ENGINE_IMAGE);
+const PLATFORM = Buffer.from(`${process.platform}-${process.arch}`, 'utf8');
 
 // ---------------- raw attacker lanes (malicious peers don't run our code) ----
 function rawClient(role, topic, matchId, code, opts = {}) {
@@ -176,7 +186,7 @@ function rawClient(role, topic, matchId, code, opts = {}) {
             const fields = [[1, Buffer.from(pub)], [2, Buffer.from(proof)],
               [3, Buffer.from(role)], [4, Buffer.from([E.MAJOR])],
               [5, Buffer.from([minor])], [6, manifest], [7, Buffer.from('id1')],
-              [8, Buffer.from(ENGINE_ID)]];
+              [10, BUILD_ID], [11, PLATFORM], [12, Buffer.from(ENGINE_ID)]];
             if (role === 'badname') fields[2][1] = Buffer.from([0x07, 0x1b, 0x5b, 0x33, 0x31, 0x6d]);
             if (role === 'member') fields.push([0x8123, Buffer.from([7])]); // skipped, not fatal
             send(E.TYPES.JOIN, fields);
@@ -250,8 +260,8 @@ function runRogue(topic, matchId) {
               st.attacked = true; tally.attacked++;
               send(E.TYPES.JOIN_OK, [[1, sha('rogue-roster')], [2, Buffer.from('e1m1')],
                 [3, Buffer.from([9])], [6, Buffer.from(MANIFEST_ID)],
-                [7, Buffer.from('id1')], [8, Buffer.from(ENGINE_ID)],
-                [9, Buffer.from(pub)]]);
+                [7, Buffer.from('id1')], [9, Buffer.from(pub)],
+                [10, BUILD_ID], [11, PLATFORM], [12, Buffer.from(ENGINE_ID)]]);
               epoch++;
               const ep = Buffer.alloc(8); ep.writeBigUInt64LE(epoch);
               send(E.TYPES.ROSTER, [[1, Buffer.concat([Buffer.from([1]), pub])],
@@ -425,12 +435,12 @@ main().then(async () => {
   const allPass = [...results.values()].every(Boolean);
   console.log(allPass ? 'E2E OK:' : 'E2E FAILED:', results.size, 'assertions');
   clearTimeout(guard);
-  for (const d of spawned) if (d.child.exitCode === null) d.child.kill('SIGKILL');
+  for (const d of spawned) if (d.child.exitCode === null) d.child.kill('SIGTERM');
   await Promise.allSettled([hostEngine?.destroy(), clientEngine?.destroy()]);
   process.exit(allPass ? 0 : 1);
 }).catch(async (e) => {
   clearTimeout(guard);
   console.log('E2E CRASH:', e.stack || e);
-  for (const d of spawned) if (d.child.exitCode === null) d.child.kill('SIGKILL');
+  for (const d of spawned) if (d.child.exitCode === null) d.child.kill('SIGTERM');
   process.exit(1);
 });

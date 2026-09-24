@@ -105,21 +105,6 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
     for (const s of relay.sessions) {
       const links = s._links.size;
       const pending = s._pairing.size;
-      /* Matched pairs move out of _pairing into _links (blind-relay
-       * index.js:302-315), so the per-session cap must count both:
-       * self-pairing legs would otherwise grow links unbounded.
-       * Idle (never successfully paired) sessions are reaped on links
-       * alone: a pending frame has no TTL upstream, and hyperdht's own
-       * relay-pairing deadline is 15 s (lib/server.js:685, read
-       * so any honestly pairing session has either linked
-       * or been torn down long before IDLE_MS. The global overrun fuse
-       * only kills pending-holding squat sessions (links 0): honestly
-       * paired sessions are evicted by nothing short of their own
-       * close. s.destroy() is the public session API (blind-relay
-       * index.js:255) -> channel close -> _onclose reaps links and
-       * pending entries (index.js:130-152). The try/catch keeps one
-       * failing reap from killing the relay (the process hosting it);
-       * the next tick retries. */
       const idle = links === 0 && now - s._qnAdmittedAt > idleMs;
       const over = pending + links > MAX_PAIRS_PER_SESSION;
       const offender = overrun && pending > 0 && links === 0;

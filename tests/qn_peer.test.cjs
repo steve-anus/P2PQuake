@@ -64,11 +64,16 @@ function fakeEngine(t, expected) {
     reject: (e) => rejectFrame(e) };
 }
 
+const FAKE_ENGINE = path.join(__dirname, '..', 'bin', 'fake-engine');
+
 function spawnPeer(t, sockPath, extra = []) {
-  const child = spawn(process.execPath, [PEER, '--uds', sockPath, ...extra],
-    { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(FAKE_ENGINE, ['--uds', sockPath, ...extra], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, QN_FAKE_ENGINE_NODE: process.execPath,
+      QN_FAKE_ENGINE_SCRIPT: PEER },
+  });
   t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     await exits;
   });
   const exits = new Promise((res) => {
@@ -225,15 +230,31 @@ test('redactor scrubs live join codes in raw-hex and display form', () => {
   assert.equal(rd.redact(hexLine), hexLine, 'released codes stop masking unrelated text');
 });
 
-test('computeIdentity hashes the parent running image by fd (§3.4a)', () => {
+test('computeIdentity binds build_id and binary_sha to the parent image bytes (§3.4a)', () => {
   const gm = path.join(__dirname, '..', 'gamedata.sha256');
-  const idn = Q.computeIdentity({ gamedataPath: gm, gamedir: 'id1', ppid: process.pid });
-  assert.deepEqual(idn.engineId,
-    crypto.createHash('sha256').update(fs.readFileSync(process.execPath)).digest(),
-    'engine_id binds to the bytes actually executed');
-  assert.deepEqual(idn.manifest,
-    crypto.createHash('sha256').update(fs.readFileSync(gm)).digest());
-  assert.equal(idn.gamedir.toString(), 'id1');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qn-idn-'));
+  const img = Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+    Buffer.from('QNBID:beef01.p0123456789abcdef'), Buffer.from([0]),
+    Buffer.from('trailing')]);
+  const imgFile = path.join(dir, 'engine');
+  fs.writeFileSync(imgFile, img);
+  try {
+    const idn = Q.computeIdentity({ gamedataPath: gm, gamedir: 'id1', exePath: imgFile });
+    assert.equal(idn.buildId.toString(), 'beef01.p0123456789abcdef');
+    assert.deepEqual(idn.binarySha,
+      crypto.createHash('sha256').update(img).digest(),
+      'binary_sha binds to the bytes actually read through the fd');
+    assert.deepEqual(idn.manifest,
+      crypto.createHash('sha256').update(fs.readFileSync(gm)).digest());
+    assert.equal(idn.gamedir.toString(), 'id1');
+    assert.match(idn.platform.toString(), /^[a-z0-9]+-[a-z0-9_]+$/);
+    // an image without the marker is a local fail-closed, never a silent join:
+    assert.throws(() => Q.computeIdentity({ gamedataPath: gm, gamedir: 'id1',
+      exePath: process.execPath }), /build marker/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true }); // our own temp dir only
+  }
 });
 
 class FakeSock {
@@ -298,7 +319,9 @@ test('terminal decision owns the exit: malformed input then close cannot resolve
     let settled = 'pending';
     Q.run({
       sock, keys: { priv: null, pub: Buffer.alloc(32) },
-      identity: { manifest: Buffer.alloc(32), gamedir: Buffer.from('id1'), engineId: Buffer.alloc(32) },
+      identity: { manifest: Buffer.alloc(32), gamedir: Buffer.from('id1'),
+        buildId: Buffer.alloc(8, 0x61), platform: Buffer.from('linux-x64'),
+        binarySha: Buffer.alloc(32) },
       name: Buffer.from('t'), pinned: null, clock, redactor: Q.makeRedactor(),
       epochs: { load: () => -1n, save: () => {} },
     }).then((c) => { settled = 'resolved:' + c; });
@@ -311,6 +334,17 @@ test('terminal decision owns the exit: malformed input then close cannot resolve
   } finally {
     process.exit = realExit;
   }
+});
+
+test('no marker in the parent image: daemon exits fail-closed and never joins (§3.4a)', async () => {
+  const child = spawn(process.execPath, [PEER, '--uds', '/nonexistent/qn.sock'],
+    { stdio: ['pipe', 'pipe', 'pipe'] }); // parent is this node runtime: no marker
+  const err = [];
+  child.stderr.on('data', (c) => err.push(c));
+  const { code } = await new Promise((res) =>
+    child.once('exit', (c, s) => res({ code: c, sig: s })));
+  assert.equal(code, 1);
+  assert.match(Buffer.concat(err).toString('utf8'), /not joining/);
 });
 
 /* ---- blind-relay env contract (transport fallback) ---- */

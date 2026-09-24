@@ -18,9 +18,10 @@ const isPrintable = (buf) => {
 // Required tag sizes from the wire table (§3.4); a wrong size closes.
 const TAG_SIZES = {
   [E.TYPES.JOIN]: { 1: [32, 32], 2: [16, 16], 3: [1, 20], 4: [1, 1], 5: [1, 1],
-    6: [32, 32], 7: [1, 32], 8: [32, 32] },
+    6: [32, 32], 7: [1, 32], 10: [1, 64], 11: [1, 32], 12: [32, 32] },
   [E.TYPES.JOIN_OK]: { 1: [32, 32], 2: [1, 16], 3: [1, 1],
-    6: [32, 32], 7: [1, 32], 8: [32, 32], 9: [32, 32] },
+    6: [32, 32], 7: [1, 32], 9: [32, 32], 10: [1, 64], 11: [1, 32],
+    12: [32, 32] },
   [E.TYPES.JOIN_NO]: { 1: [1, 1] },
   [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8], 5: [32, 32] },
   [E.TYPES.RELAY]: { 1: [32, 32], 2: [1, 1100] },
@@ -56,6 +57,11 @@ function checkTagSizes(env) {
     throw new F.TLVError('chat not printable');
   if (env.type === E.TYPES.JOIN && !isPrintable(tagMap(env.payload, [3]).get(3)))
     throw new F.TLVError('name not printable');
+  if (env.type === E.TYPES.JOIN || env.type === E.TYPES.JOIN_OK) {
+    const tt = tagMap(env.payload, [10, 11]);
+    if (!isPrintable(tt.get(10))) throw new F.TLVError('build_id not printable');
+    if (!isPrintable(tt.get(11))) throw new F.TLVError('platform not printable');
+  }
 }
 
 // §2.4/§3.5b: only the assigned experimental range may ride along unknown.
@@ -215,7 +221,7 @@ class HostSession extends Session {
       case E.TYPES.JOIN: {
         if (this.joined) throw new E.EnvelopeError('second JOIN on bound conn');
         checkTagSizes(env);
-        const t = tagMap(env.payload, [1, 2, 3, 4, 5, 6, 7, 8]);
+        const t = tagMap(env.payload, [1, 2, 3, 4, 5, 6, 7, 10, 11, 12]);
         const who = t.get(1);
         if (!who.equals(this.bound)) throw new E.EnvelopeError('identity mismatch');
         if (t.get(4)[0] !== this.room.minVersion.major ||
@@ -225,9 +231,10 @@ class HostSession extends Session {
           this.room.lockout(this.conn.remotePublicKey, 'bad proof');
           return this.refuse(E.CAUSES.BAD_PROOF);
         }
+        // §3.4a: 11/12 are info-only; never compared here.
         if (!t.get(6).equals(this.room.identity.manifest) ||
             !t.get(7).equals(this.room.identity.gamedir) ||
-            !t.get(8).equals(this.room.identity.engineId))
+            !t.get(10).equals(this.room.identity.buildId))
           return this.refuse(E.CAUSES.ASSET_MISMATCH);
         if (this.room.peerCount() >= this.room.maxPeers)
           return this.refuse(E.CAUSES.MATCH_FULL);
@@ -237,13 +244,16 @@ class HostSession extends Session {
         this.joined = true;
         this.unknownRun = 0;
         this.room.clock.clearTimeout(this.joinTimer);
-        this.room.cbs.onPeerUp(who, t.get(3));
+        this.room.cbs.onPeerUp(who, t.get(3),
+          { platform: t.get(11), binarySha: t.get(12) });
         this.send(E.TYPES.JOIN_OK, [[1, this.room.rosterHash()],
           [2, this.room.mapTag()], [3, Buffer.from([slot])],
           [6, Buffer.from(this.room.identity.manifest)],
           [7, Buffer.from(this.room.identity.gamedir)],
-          [8, Buffer.from(this.room.identity.engineId)],
-          [9, Buffer.from(this.room.keys.pub)]]);
+          [9, Buffer.from(this.room.keys.pub)],
+          [10, Buffer.from(this.room.identity.buildId)],
+          [11, Buffer.from(this.room.identity.platform)],
+          [12, Buffer.from(this.room.identity.binarySha)]]);
         this.room.broadcastRoster();
         return;
       }
@@ -283,7 +293,8 @@ class HostSession extends Session {
 }
 
 class HostRoom {
-  // {swarm, matchId, code, keys:{priv,pub}, identity:{manifest,gamedir,engineId},
+  // {swarm, matchId, code, keys:{priv,pub},
+  //  identity:{manifest,gamedir,buildId,platform,binarySha},
   //  map: Buffer, maxPeers, clock, log, cbs:{onPeerUp,onPeerDown,onClData,onChat,onFatal}}
   constructor(opts) {
     Object.assign(this, opts);
@@ -416,7 +427,9 @@ class ClientSession extends Session {
       [4, Buffer.from([E.MAJOR])], [5, Buffer.from([E.MINOR])],
       [6, Buffer.from(room.identity.manifest)],
       [7, Buffer.from(room.identity.gamedir)],
-      [8, Buffer.from(room.identity.engineId)]]);
+      [10, Buffer.from(room.identity.buildId)],
+      [11, Buffer.from(room.identity.platform)],
+      [12, Buffer.from(room.identity.binarySha)]]);
   }
   onBoundEnvelope(raw) {
     const { env, replayed } = inbound(raw, this.bound, this.win, this.room.matchId);
@@ -435,13 +448,14 @@ class ClientSession extends Session {
     switch (env.type) {
       case E.TYPES.JOIN_OK: {
         checkTagSizes(env);
-        const t = tagMap(env.payload, [1, 2, 3, 6, 7, 8, 9]);
+        const t = tagMap(env.payload, [1, 2, 3, 6, 7, 9, 10, 11, 12]);
         if (!t.get(9).equals(this.bound)) throw new E.EnvelopeError('host key claim != bound key');
         if (this.room.pinned && !this.bound.equals(this.room.pinned))
           throw new E.EnvelopeError('bound key != pinned host key');
+        // §3.4a: host platform/binary_sha are info-only; never compared.
         if (!t.get(6).equals(this.room.identity.manifest) ||
             !t.get(7).equals(this.room.identity.gamedir) ||
-            !t.get(8).equals(this.room.identity.engineId))
+            !t.get(10).equals(this.room.identity.buildId))
           throw new E.EnvelopeError('host assets differ from this install (§3.4a)');
         this.unknownRun = 0;
         this.room.clock.clearTimeout(this.joinTimer);
@@ -450,7 +464,8 @@ class ClientSession extends Session {
         this.room.lastRosterAt = this.room.clock.now(); // §6.5 staleness baseline
         this.room.armRosterWatch();
         this.room.cbs.onJoined({ slot: t.get(3)[0], map: Buffer.from(t.get(2)),
-          hostKey: Buffer.from(t.get(9)) });
+          hostKey: Buffer.from(t.get(9)),
+          hostPlatform: Buffer.from(t.get(11)), hostBinarySha: Buffer.from(t.get(12)) });
         return;
       }
       case E.TYPES.JOIN_NO: {
@@ -509,7 +524,8 @@ class ClientSession extends Session {
 }
 
 class ClientRoom {
-  // {swarm, matchId, code, keys:{priv,pub}, identity:{manifest,gamedir,engineId},
+  // {swarm, matchId, code, keys:{priv,pub},
+  //  identity:{manifest,gamedir,buildId,platform,binarySha},
   //  name, pinned|null, clock, log, cbs:{onJoined,onRefused,onRoster,onSvData,
   //  onChat,onBye,onHostLaneLost,onReplay,onRogueClosed,onFatal}}
   constructor(opts) {

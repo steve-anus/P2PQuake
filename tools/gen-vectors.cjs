@@ -53,13 +53,15 @@ addE('E-V2', env({ type: E.TYPES.JOIN, seq: 1, payload:
     [5, Buffer.from([E.MINOR])],
     [6, sha('p2pquake-manifest')],
     [7, Buffer.from('id1')],
-    [8, sha('p2pquake-engine')],
+    [10, Buffer.from('beef01.p0123456789abcdef')],
+    [11, Buffer.from('linux-x64')],
+    [12, sha('p2pquake-engine')],
     [0x8123, Buffer.from([0xaa])]]) }, privB), true); // experimental tag skipped
 addE('E-V3', env({ type: E.TYPES.JOIN_NO, seq: 1, payload:
   F.encodeTLV([[1, Buffer.from([E.CAUSES.VERSION_TOO_OLD])]]) }, privA), true);
 addE('E-V4', env({ type: E.TYPES.ROSTER, seq: 2, payload:
   F.encodeTLV([[1, Buffer.concat([Buffer.from([1]), pubBRaw])],
-    [2, Buffer.from([0])], [3, Buffer.from([1])],
+    [2, Buffer.from([E.MAJOR])], [3, Buffer.from([E.MINOR])],
     [4, Buffer.from([7, 0, 0, 0, 0, 0, 0, 0])],
     [5, Buffer.from(pubARaw)]]) }, privA), true); // epoch = 7; host key claim
 addE('E-V5', env({ type: E.TYPES.RELAY, seq: 3, payload:
@@ -74,10 +76,16 @@ addE('E-V9', flip(chat, 2 + E.HEAD_LEN + 4), false); // chat TEXT (payload value
 const joinOk = env({ type: E.TYPES.JOIN_OK, seq: 5, payload:
   F.encodeTLV([[1, sha('p2pquake-roster-hash')], [2, Buffer.from('e1m1')],
     [3, Buffer.from([1])], [6, sha('p2pquake-manifest')],
-    [7, Buffer.from('id1')], [8, sha('p2pquake-engine')],
-    [9, Buffer.from(pubARaw)]]) }, privA);
+    [7, Buffer.from('id1')], [9, Buffer.from(pubARaw)],
+    [10, Buffer.from('beef01.p0123456789abcdef')],
+    [11, Buffer.from('linux-x64')],
+    [12, sha('p2pquake-engine')]]) }, privA);
 addE('E-V10', joinOk, true); // host identity + claimed host key
-addE('E-V11', flip(joinOk, 2 + E.HEAD_LEN + 140), false); // host_pubkey value corrupted -> signature mismatch
+{ // host_pubkey value corrupted -> signature mismatch
+  const at = joinOk.indexOf(Buffer.from(pubARaw));
+  if (at < 2 + E.HEAD_LEN || at + 32 > joinOk.length - 64) throw new Error('E-V11 anchor');
+  addE('E-V11', flip(joinOk, at + 5), false);
+}
 
 // --- self-check ---
 let bad = 0;
@@ -124,7 +132,8 @@ for (const v of vectors) {
 { // E-V4 must carry min version and a roster entry per spec §3.4
   const d = E.decodeEnvelope(vectors.find((v) => v.id === 'E-V4').buf, pubARaw);
   const f = Object.fromEntries(F.decodeTLV(d.payload).map((x) => [x.tag, x.value]));
-  if (f[1].length !== 1 + 32 || f[2][0] !== 0 || f[3][0] !== 1) fail('E-V4', 'fields');
+  if (f[1].length !== 1 + 32 || f[2][0] !== E.MAJOR || f[3][0] !== E.MINOR)
+    fail('E-V4', 'fields');
   if (!f[5] || f[5].length !== 32 || !f[5].equals(Buffer.from(pubARaw)))
     fail('E-V4', 'host key claim');
 }

@@ -58,7 +58,9 @@ const KEYS = {
 };
 const CODE = sha('pb-code').subarray(0, 10);
 const MATCH = R.matchIdOf(CODE);
-const IDN = { manifest: sha('pb-manifest'), gamedir: Buffer.from('id1'), engineId: sha('pb-engine') };
+const IDN = { manifest: sha('pb-manifest'), gamedir: Buffer.from('id1'),
+  buildId: Buffer.from('deadbeef.p0123456789abcdef'),
+  platform: Buffer.from('linux-x64'), binarySha: sha('pb-engine') };
 const noiseKey = sha('pb-swarm-noise');
 
 function hostRoom(overrides = {}) {
@@ -120,10 +122,39 @@ const joinBytes = (opts = {}) => envBytes(E.TYPES.JOIN, 2,
    [3, Buffer.from(opts.name ?? 'bob')],
    [4, Buffer.from([opts.major ?? E.MAJOR])], [5, Buffer.from([opts.minor ?? E.MINOR])],
    [6, Buffer.from(opts.manifest ?? IDN.manifest)],
-   [7, Buffer.from(IDN.gamedir)], [8, Buffer.from(IDN.engineId)]], KEYS.peer.priv);
+   [7, Buffer.from(IDN.gamedir)],
+   [10, Buffer.from(opts.buildId ?? IDN.buildId)],
+   [11, Buffer.from(opts.platform ?? IDN.platform)],
+   [12, Buffer.from(opts.binarySha ?? IDN.binarySha)]], KEYS.peer.priv);
 
 const hostDecodes = (conn) =>
   conn.written.map((raw) => E.decodeEnvelope(raw, KEYS.host.pub, { expectedMatchId: MATCH }));
+
+test('info-only identity fields: divergent binary_sha/platform still join (§3.4a)', async () => {
+  const { clock, room } = hostRoom();
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  const otherSha = Buffer.from(IDN.binarySha); otherSha[31] ^= 0xff;
+  conn.emit('data', joinBytes({ binarySha: otherSha, platform: Buffer.from('win32-x64') }));
+  await clock.advance(60);
+  const outs = hostDecodes(conn);
+  assert.ok(outs.some((o) => o.type === E.TYPES.JOIN_OK), 'info-only fields never refuse');
+  assert.ok(!outs.some((o) => o.type === E.TYPES.JOIN_NO));
+  assert.equal(conn.destroyed, false);
+});
+
+test('build_id mismatch: refused with cause 7', async () => {
+  const { clock, room } = hostRoom();
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes({ buildId: Buffer.from('deadbee0.p0123456789abcdef') }));
+  await clock.advance(60);
+  const no = hostDecodes(conn).find((o) => o.type === E.TYPES.JOIN_NO);
+  assert.equal(new Map(F.decodeTLV(no.payload).map((x) => [x.tag, x.value])).get(1)[0],
+    E.CAUSES.ASSET_MISMATCH);
+});
 
 test('key-bind timeout: a silent transport connection dies at the stage timer', async () => {
   const { clock, room, logs } = hostRoom();
@@ -150,7 +181,7 @@ test('bind then JOIN at the host: slot, JOIN_OK identity fields, roster broadcas
   const t = new Map(F.decodeTLV(joinOk.payload).map((x) => [x.tag, x.value]));
   assert.equal(t.get(3)[0], 0); // first free slot
   assert.ok(t.get(9).equals(KEYS.host.pub)); // host key claim
-  assert.ok(t.get(6).equals(IDN.manifest) && t.get(8).equals(IDN.engineId));
+  assert.ok(t.get(6).equals(IDN.manifest) && t.get(10).equals(IDN.buildId));
   const rt = new Map(F.decodeTLV(roster.payload).map((x) => [x.tag, x.value]));
   assert.equal(rt.get(1)[0], 1); // one member
   assert.equal(rt.get(4).readBigUInt64LE(0), 1n); // persisted store saw the advance
@@ -275,6 +306,39 @@ test('roster slot frees on connection close and is reused by the next join', asy
   assert.equal(room.firewall(conn2.remotePublicKey), false); // plain close is not an offence
 });
 
+test('client: host binary_sha/platform divergence never ends the join (§3.4a)', async () => {
+  const { clock, room, events } = clientRoom({ pinned: Buffer.from(KEYS.host.pub) });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.host));
+  await clock.advance(10);
+  const otherSha = Buffer.from(IDN.binarySha); otherSha[0] ^= 0xff;
+  conn.emit('data', envBytes(E.TYPES.JOIN_OK, 2,
+    [[1, sha('roster')], [2, Buffer.from('e1m1')], [3, Buffer.from([0])],
+     [6, Buffer.from(IDN.manifest)], [7, Buffer.from(IDN.gamedir)],
+     [9, Buffer.from(KEYS.host.pub)], [10, Buffer.from(IDN.buildId)],
+     [11, Buffer.from('plan9-x64')], [12, Buffer.from(otherSha)]], KEYS.host.priv));
+  await clock.advance(10);
+  assert.ok(events.some((e) => e[0] === 'joined'));
+  assert.equal(conn.destroyed, false);
+});
+
+test('client: host build_id mismatch closes (§3.4a)', async () => {
+  const { clock, room, events } = clientRoom({ pinned: Buffer.from(KEYS.host.pub) });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.host));
+  await clock.advance(10);
+  conn.emit('data', envBytes(E.TYPES.JOIN_OK, 2,
+    [[1, sha('roster')], [2, Buffer.from('e1m1')], [3, Buffer.from([0])],
+     [6, Buffer.from(IDN.manifest)], [7, Buffer.from(IDN.gamedir)],
+     [9, Buffer.from(KEYS.host.pub)], [10, Buffer.from('deadbee0.p0123456789abcdef')],
+     [11, Buffer.from('linux-x64')], [12, Buffer.from(IDN.binarySha)]], KEYS.host.priv));
+  await clock.advance(10);
+  assert.equal(conn.destroyed, true);
+  assert.ok(!events.some((e) => e[0] === 'joined'));
+});
+
 test('client lane: host-signed message from a non-pinned peer closes it and no proof ever leaves', async () => {
   const { clock, room, events } = clientRoom({ pinned: Buffer.from(KEYS.host.pub) });
   const connEvil = new FakeConn();
@@ -283,7 +347,8 @@ test('client lane: host-signed message from a non-pinned peer closes it and no p
   connEvil.emit('data', envBytes(E.TYPES.JOIN_OK, 2,
     [[1, sha('x')], [2, Buffer.from('e1m1')], [3, Buffer.from([0])],
      [6, Buffer.from(IDN.manifest)], [7, Buffer.from(IDN.gamedir)],
-     [8, Buffer.from(IDN.engineId)], [9, Buffer.from(KEYS.evil.pub)]], KEYS.evil.priv));
+     [9, Buffer.from(KEYS.evil.pub)], [10, Buffer.from(IDN.buildId)],
+     [11, Buffer.from(IDN.platform)], [12, Buffer.from(IDN.binarySha)]], KEYS.evil.priv));
   await clock.advance(10);
   assert.equal(connEvil.destroyed, true);
   assert.ok(events.some((e) => e[0] === 'rogue-closed'));
@@ -442,7 +507,8 @@ test('a host silent past the roster-refresh bound is a dead host (§6.5)', async
   conn.emit('data', envBytes(E.TYPES.JOIN_OK, 2,
     [[1, sha('roster')], [2, Buffer.from('e1m1')], [3, Buffer.from([0])],
      [6, Buffer.from(IDN.manifest)], [7, Buffer.from(IDN.gamedir)],
-     [8, Buffer.from(IDN.engineId)], [9, Buffer.from(KEYS.host.pub)]], KEYS.host.priv));
+     [9, Buffer.from(KEYS.host.pub)], [10, Buffer.from(IDN.buildId)],
+     [11, Buffer.from(IDN.platform)], [12, Buffer.from(IDN.binarySha)]], KEYS.host.priv));
   await clock.advance(10);
   assert.ok(events.some((e) => e[0] === 'joined'));
   for (let s = 3; s <= 26; s++) { // traffic flows ~37.5 s, but no ROSTER ever arrives
