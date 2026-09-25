@@ -397,8 +397,8 @@ async function main() {
   const ghost = new Engine('ghost', path.join(base, 'cl3'),
     clientArgs('QnGhost', path.join(base, 'cl3')), env);
   procs.push(ghost);
-  await ghost.expect((l) => l.includes('connect failed') ||
-    l.includes('not found') || l.includes('Can\'t connect'),
+  await ghost.expect((l) => l.includes(
+    'join refused (cause 2): wrong or stale join code'),
     'stale-code refusal', JOIN_TIMEOUT);
 
 

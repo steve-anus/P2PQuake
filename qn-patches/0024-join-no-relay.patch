@@ -1,0 +1,94 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -765,7 +765,7 @@
+ 		{
+ 			unsigned int cause =
+ 			    (unsigned int) (f->len >= 1 ? f->payload[0] : 255);
+-			if (qn_client_lane_up)
++			if (qn_client_lane_up && !qn_join_cause_text)
+ 				qn_join_cause_text = QN_CauseText (cause);
+ 			Con_SafePrintf ("QN: daemon FATAL (cause %u): %s\n",
+ 			                cause, QN_CauseText (cause));
+@@ -773,6 +773,22 @@
+ 		qn_teardown ("daemon sent FATAL");
+ 		return;
+ 
++	case QN_T_JOIN_NO:
++		if (f->len != 1)
++		{
++			qn_teardown ("malformed join_no");
++			return;
++		}
++		{
++			unsigned int cause = f->payload[0];
++			const char *text = QN_JoinNoText (cause);
++			if (qn_client_lane_up || qn_join_pending)
++				qn_join_cause_text = text;
++			Con_SafePrintf ("QN: join refused (cause %u): %s\n",
++			                    cause, text);
++		}
++		return;
++
+ 	case QN_T_HOST_READY:
+ 		if (qn_host_ready_shown ||
+ 		    qn_tlv_find (f->payload, f->len, 1, &t) != 1 || t.len != 10)
+@@ -919,6 +935,9 @@
+ 		{
+ 			qn_demand++;		/* fresh demand: re-arm the latch */
+ 			qn_sv_was_active = true;
++			/* starting a server is explicit host intent: it revives
++			 * a lane retired by an earlier clean joiner hangup */
++			qn_daemon_retired = false;
+ 		}
+ 		if (!qn_ensure_daemon ())
+ 			return;
+@@ -1594,6 +1613,7 @@
+ 			return -1;
+ 		qn_join_pending = true;
+ 		qn_join_code_valid = true;
++		qn_daemon_retired = false;	/* only a validated code revives the lane */
+ 		a->port = (unsigned short) net_hostport;
+ 		return 0;
+ 	}
+--- a/Quake/qn_menu.c
++++ b/Quake/qn_menu.c
+@@ -436,6 +436,30 @@
+ 	m_entersound = true;		/* only an accepted dial clicks */
+ }
+ 
++static void QN_DrawCause (void)
++{
++	const char	*t = QN_JoinCauseText ();
++	int	i, split = 0;
++
++	if (!t)
++		return;
++	for (i = 0; i < 32 && t[i]; i++)
++		if (t[i] == ' ')
++			split = i + 1;
++	if (t[i] && split)
++	{
++		char	head[33];
++
++		for (i = 0; i < split - 1; i++)
++			head[i] = t[i];
++		head[i] = '\0';
++		M_PrintWhite (40, 80, head);
++		M_PrintWhite (40, 92, t + split);
++	}
++	else
++		M_PrintWhite (40, 80, t);
++}
++
+ void QN_Menu_JoinDraw (void)
+ {
+ 	qpic_t	*p;
+@@ -463,7 +487,7 @@
+ 	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
+ 
+ 	if (QN_JoinCauseText ())
+-		M_PrintWhite (40, 80, QN_JoinCauseText ());
++		QN_DrawCause ();
+ 	else if (m_return_reason[0])
+ 		M_PrintWhite (64, 80, m_return_reason);
+ 	else if (qn_join_note && realtime - qn_join_note_time < 4.0)

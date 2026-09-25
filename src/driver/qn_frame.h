@@ -42,6 +42,7 @@ enum {
     QN_T_JOIN_OPEN   = 0x0020,
     QN_T_JOIN_CLOSE  = 0x0021,
     QN_T_JOIN_PIN    = 0x0022,
+    QN_T_JOIN_NO     = 0x0023,
     QN_T_PEER_UP     = 0x0030,
     QN_T_PEER_DOWN   = 0x0031,
     QN_T_SV_DATA     = 0x0040,

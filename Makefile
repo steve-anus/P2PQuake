@@ -80,6 +80,10 @@ loopback-fatal: engine
 	  echo "loopback-fatal cause $$c:"; \
 	  QN_FATAL=1 QN_FATAL_CAUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
 	done
+	@for c in 1 2 3 4 5 6 7; do \
+	  echo "loopback-refuse cause $$c:"; \
+	  QN_REFUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
+	done
 
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs

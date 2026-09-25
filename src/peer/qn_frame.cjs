@@ -20,6 +20,7 @@ const TYPES = Object.freeze({
   JOIN_OPEN: 0x0020,
   JOIN_CLOSE: 0x0021,
   JOIN_PIN: 0x0022,
+  JOIN_NO: 0x0023,
   PEER_UP: 0x0030,
   PEER_DOWN: 0x0031,
   SV_DATA: 0x0040,

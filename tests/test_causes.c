@@ -39,6 +39,24 @@ int qn_test_causes(int *checks_out)
 	expect_text(6, "suspected interference; session reset");
 	expect_text(7, "session ended unexpectedly");
 
+	{
+		const char *g2 = QN_JoinNoText(0);
+		CHECK(QN_JoinNoText(8) == g2);
+		CHECK(QN_JoinNoText(4294967295u) == g2);
+		CHECK(strcmp(g2, "host refused the join") == 0);
+		CHECK(QN_JoinNoText(1) == QN_JoinNoText(1));
+		CHECK(strcmp(QN_JoinNoText(1), "update p2pquake") == 0);
+		CHECK(strcmp(QN_JoinNoText(2), "wrong or stale join code") == 0);
+		CHECK(strcmp(QN_JoinNoText(3), "match is full") == 0);
+		CHECK(strcmp(QN_JoinNoText(4), "match no longer accepting") == 0);
+		CHECK(strcmp(QN_JoinNoText(5), "already playing") == 0);
+		CHECK(strcmp(QN_JoinNoText(6), "slow down and retry") == 0);
+		CHECK(strcmp(QN_JoinNoText(7),
+			"game files or engine build differ from the host") == 0);
+		CHECK(QN_JoinNoKnown(1) && QN_JoinNoKnown(7));
+		CHECK(!QN_JoinNoKnown(0) && !QN_JoinNoKnown(8));
+	}
+
 	for (i = 7; i < 4103; i++)			/* anything past the table */
 		CHECK(QN_CauseText((unsigned int)i) == generic);
 	CHECK(QN_CauseText(4294967295u) == generic);

@@ -765,12 +765,28 @@ static void qn_dispatch (const qn_frame_t *f)
 		{
 			unsigned int cause =
 			    (unsigned int) (f->len >= 1 ? f->payload[0] : 255);
-			if (qn_client_lane_up)
+			if (qn_client_lane_up && !qn_join_cause_text)
 				qn_join_cause_text = QN_CauseText (cause);
 			Con_SafePrintf ("QN: daemon FATAL (cause %u): %s\n",
 			                cause, QN_CauseText (cause));
 		}
 		qn_teardown ("daemon sent FATAL");
+		return;
+
+	case QN_T_JOIN_NO:
+		if (f->len != 1)
+		{
+			qn_teardown ("malformed join_no");
+			return;
+		}
+		{
+			unsigned int cause = f->payload[0];
+			const char *text = QN_JoinNoText (cause);
+			if (qn_client_lane_up || qn_join_pending)
+				qn_join_cause_text = text;
+			Con_SafePrintf ("QN: join refused (cause %u): %s\n",
+			                    cause, text);
+		}
 		return;
 
 	case QN_T_HOST_READY:
@@ -919,6 +935,9 @@ void QN_Pump (unsigned long long now_ms)
 		{
 			qn_demand++;		/* fresh demand: re-arm the latch */
 			qn_sv_was_active = true;
+			/* starting a server is explicit host intent: it revives
+			 * a lane retired by an earlier clean joiner hangup */
+			qn_daemon_retired = false;
 		}
 		if (!qn_ensure_daemon ())
 			return;
@@ -1594,6 +1613,7 @@ int QN_StringToAddr (const char *string, struct qsockaddr *addr)
 			return -1;
 		qn_join_pending = true;
 		qn_join_code_valid = true;
+		qn_daemon_retired = false;	/* only a validated code revives the lane */
 		a->port = (unsigned short) net_hostport;
 		return 0;
 	}
