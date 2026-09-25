@@ -429,6 +429,10 @@ int UDP_GetAddrFromName (const char *name, struct qsockaddr *addr)
 {
 	struct hostent *hostentry;
 
+	/* qn: names belong to the QN landriver: no resolver call, no echo */
+	if (!q_strncasecmp (name, "qn:", 3))
+		return -1;
+
 	if (name[0] >= '0' && name[0] <= '9')
 		return PartialIPAddress (name, addr);
 

@@ -165,7 +165,8 @@ void CL_EstablishConnection (const char *host)
 	cls.netcon = NET_Connect (host);
 	if (!cls.netcon)
 		Host_Error ("CL_Connect: connect failed");
-	Con_DPrintf ("CL_EstablishConnection: connected to %s\n", host);
+	if (host && q_strncasecmp (host, "qn:", 3))	/* join codes are bearer secrets */
+		Con_DPrintf ("CL_EstablishConnection: connected to %s\n", host);
 
 	cls.demonum = -1;			// not in the demo loop now
 	cls.state = ca_connected;
