@@ -34,6 +34,7 @@ failing hunk, rebase or retire the patch, never skip it.
 | `0024-join-no-relay.patch` | the joiner's daemon relays why a join failed before hanging up clean (Plane-A JOIN_NO carrying the spec 6.2 cause): fixed player-facing literals on the Join page (long classes wrap to two lines), an engine console line, and the status surface; only a fully parsed join code revives a retired lane after a clean hang-up |
 | `0025-menu-layout.patch` | the Multiplayer selection band (the 256px `gfx/menudot` graphic) centers under the centered rows instead of a left-anchored slot; the Host page puts labels left at one column, all values and actions at a second, the blinking cursor at a third, and truncates long map names so rows never print on top of each other |
 | `0026-menu-selection-dot.patch` | the Multiplayer page marks the selected row with a centered bullet (conchars tile 7) left of the label instead of the bracket band graphic, and the rows sit lower on the page |
+| `0027-daemon-name-sanitizer.patch` | daemon argv hardening: the `-qn-name` value handed to the daemon as `--name` is masked to the printable ASCII band (out-of-band bytes to `.`, the roster display's own convention) and capped at 20 bytes, so a name violating the daemon's printable-≤20 exec contract degrades to a dotted display string instead of killing the daemon at exec |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,

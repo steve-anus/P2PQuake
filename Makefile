@@ -84,6 +84,8 @@ loopback-fatal: engine
 	  echo "loopback-refuse cause $$c:"; \
 	  QN_REFUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
 	done
+	@echo "loopback-badname:"
+	@QN_BADNAME=1 $(NODE) tests/qn_loopback.cjs || exit 1
 
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
