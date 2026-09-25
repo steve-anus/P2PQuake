@@ -297,7 +297,12 @@ class Peer {
         this.send(T.STUFFTEXT, Buffer.from('reconnect\0', 'latin1'));
         this.state = 'done';
         step('done');
-        if (process.env.QN_FATAL) {
+        if (process.env.QN_REFUSE) {
+          /* §6.2 relay: the joiner must see the fixed reason (the real
+           * daemon's onRefused shape; stay alive so the engine catches
+           * the frame, as the fatal mode does) */
+          this.send(T.JOIN_NO, Buffer.from([parseInt(process.env.QN_REFUSE, 10)]));
+        } else if (process.env.QN_FATAL) {
           /* spec 2.3: a peer→engine FATAL must tear the match down; the
            * orchestrator asserts on the engine's reported cause */
           this.send(T.FATAL, Buffer.from([parseInt(process.env.QN_FATAL_CAUSE || '4', 10)]));

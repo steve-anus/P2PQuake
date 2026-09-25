@@ -66,6 +66,21 @@ if (process.env.QN_FUZZ) {
   want.push(['srvinfo-probe', (l) => l === 'LBSTEP srvinfo-probe ok']);
   want.push(['playerinfo-probe', (l) => l === 'LBSTEP playerinfo-probe ok']);
 }
+if (process.env.QN_REFUSE) {
+  const refuseCause = parseInt(process.env.QN_REFUSE, 10);
+  const JOIN_TEXT = {
+    1: 'update p2pquake',
+    2: 'wrong or stale join code',
+    3: 'match is full',
+    4: 'match no longer accepting',
+    5: 'already playing',
+    6: 'slow down and retry',
+    7: 'game files or engine build differ from the host',
+  };
+  want.push(['join-refused', (l) => l.includes(
+    `join refused (cause ${refuseCause}): ` +
+    (JOIN_TEXT[refuseCause] ?? 'host refused the join'))]);
+}
 if (process.env.QN_FATAL) {
   const fatalCause = parseInt(process.env.QN_FATAL_CAUSE || '4', 10);
   const FATAL_TEXT = {
@@ -179,7 +194,8 @@ function main() {
        * (fresh accepted sessions / supervisor respawn cycles): the
        * duplicate gate covers the single-boot flows only */
       const dupeCheck = want.filter(([n]) =>
-        !(process.env.QN_REDIAL_CHURN) && !(process.env.QN_FATAL));
+        !(process.env.QN_REDIAL_CHURN) && !(process.env.QN_FATAL) &&
+        !(process.env.QN_REFUSE));
       const dupes = dupeCheck.map(([n]) => n).filter((n) => (seen.get(n) || 0) > 1);
       let rc = code;
       if (rc === 0 && missing.length) { rc = 1; }

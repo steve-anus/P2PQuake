@@ -456,6 +456,7 @@ class ClientSession extends Session {
           throw new E.EnvelopeError('host assets differ from this install (§3.4a)');
         this.unknownRun = 0;
         this.room.clock.clearTimeout(this.joinTimer);
+        this.room.clock.clearTimeout(this.joinDeadlineTimer);
         this.room.joined = true;
         this.room.slot = t.get(3)[0];
         this.room.lastRosterAt = this.room.clock.now(); // §6.5 staleness baseline
@@ -468,6 +469,7 @@ class ClientSession extends Session {
       case E.TYPES.JOIN_NO: {
         checkTagSizes(env);
         const cause = tagMap(env.payload, [1]).get(1)[0];
+        this.room.refused = true;
         this.room.cbs.onRefused(cause);
         return this.close('refused ' + cause);
       }
@@ -535,13 +537,21 @@ class ClientRoom {
     this.epoch = opts.epochStart ?? -1n;
     this.maxSessions = opts.maxSessions ?? 12; // star needs one lane; the rest is noise
     this.timeouts = { keyBindMs: 5000, joinOkMs: 10000, pingMs: 2000, deadMs: 6000,
-      idleMs: 15000, rosterMs: 30000 }; // §6.5 (+ non-lane idle bound)
+      idleMs: 15000, rosterMs: 30000, lookupMs: 6500 }; // §6.5 (+ non-lane idle bound)
     this.lastRosterAt = 0;
     this.rosterWatch = null;
     this.nonceBuf = () => {
       const b = Buffer.alloc(4); b.writeUInt32LE(this.clock.now() >>> 0, 0); return b;
     };
     this.openInviteWarned = false;
+    this.refused = false;
+    // the engine's own connect budget is shorter than joinOkMs; without
+    // this the player sees only an anonymous connect failure (§6.2/2)
+    this.joinDeadlineTimer = this.clock.setTimeout(() => {
+      if (!this.joined && !this.refused && !this.closing &&
+          this.hostLane === null && this.cbs.onJoinFailed)
+        this.cbs.onJoinFailed();
+    }, this.timeouts.lookupMs);
   }
   warnOpenInvite() {
     if (this.openInviteWarned) return;
@@ -576,6 +586,9 @@ class ClientRoom {
     if (this.hostLane === session) {
       this.hostLane = null;
       if (this.joined && !this.closing) this.cbs.onHostLaneLost();
+      else if (!this.joined && !this.closing && !this.refused &&
+               this.cbs.onJoinFailed)
+        this.cbs.onJoinFailed();
     }
   }
   sendClientCmd(body) {

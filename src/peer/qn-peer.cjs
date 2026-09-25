@@ -420,6 +420,7 @@ async function run(opts) {
     const role = lane.role;
     lane = null;
     if (role === 'client' && room) room.closing = true; // intentional
+    try { if (room) room.clock.clearTimeout(room.joinDeadlineTimer); } catch { /* cosmetic */ }
     try { if (room && room.code) redactor.release(room.code); } catch { /* cosmetic */ }
     try { swarm.destroy(); } catch { /* best-effort teardown */ }
   };
@@ -593,6 +594,8 @@ async function run(opts) {
             if (!joinedOnce) {
               if (exiting) return;
               exiting = true;
+              // relay the reason to the player before the hangup (§6.2):
+              try { a.send(F.TYPES.JOIN_NO, Buffer.from([cause])); } catch { /* gone */ }
               destroyLane();
               a.stop();
               setTimeout(() => process.exit(0), 20);
@@ -625,6 +628,17 @@ async function run(opts) {
           onChat: () => log('client: chat received'),
           onBye: () => log('client: bye from host'),
           onHostLaneLost: () => { log('client: host connection lost'); fatal(4); },
+          onJoinFailed: () => {
+            // no host ever surfaced for this code: hang up clean exactly as
+            // a pre-join refusal does -- the relayed cause is the verdict
+            if (exiting) return;
+            exiting = true;
+            log('client: no host found for this code');
+            try { a.send(F.TYPES.JOIN_NO, Buffer.from([2])); } catch { /* gone */ }
+            destroyLane();
+            a.stop();
+            setTimeout(() => process.exit(0), 20);
+          },
           onReplay: () => log('client: replay envelope dropped'),
           onRogueClosed: () => log('client: host-signed message off the host lane, connection closed'),
           onFatal: fatal,
@@ -640,7 +654,14 @@ async function run(opts) {
       log('client: looking up the room');
     } catch (e) {
       log('client: lane open failed (' + e.name + ')');
-      fatal(4);
+      // an unresolvable topic is overwhelmingly a wrong or stale code (§6.2/2);
+      // hang up clean so the engine is not left respawning a doomed daemon
+      if (exiting) return;
+      exiting = true;
+      try { a.send(F.TYPES.JOIN_NO, Buffer.from([2])); } catch { /* gone */ }
+      destroyLane();
+      a.stop();
+      setTimeout(() => process.exit(0), 20);
     }
   };
 

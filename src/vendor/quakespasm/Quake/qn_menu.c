@@ -436,6 +436,30 @@ static void QN_JoinDial (void)
 	m_entersound = true;		/* only an accepted dial clicks */
 }
 
+static void QN_DrawCause (void)
+{
+	const char	*t = QN_JoinCauseText ();
+	int	i, split = 0;
+
+	if (!t)
+		return;
+	for (i = 0; i < 32 && t[i]; i++)
+		if (t[i] == ' ')
+			split = i + 1;
+	if (t[i] && split)
+	{
+		char	head[33];
+
+		for (i = 0; i < split - 1; i++)
+			head[i] = t[i];
+		head[i] = '\0';
+		M_PrintWhite (40, 80, head);
+		M_PrintWhite (40, 92, t + split);
+	}
+	else
+		M_PrintWhite (40, 80, t);
+}
+
 void QN_Menu_JoinDraw (void)
 {
 	qpic_t	*p;
@@ -463,7 +487,7 @@ void QN_Menu_JoinDraw (void)
 	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
 
 	if (QN_JoinCauseText ())
-		M_PrintWhite (40, 80, QN_JoinCauseText ());
+		QN_DrawCause ();
 	else if (m_return_reason[0])
 		M_PrintWhite (64, 80, m_return_reason);
 	else if (qn_join_note && realtime - qn_join_note_time < 4.0)

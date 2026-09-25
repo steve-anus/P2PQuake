@@ -91,6 +91,7 @@ zero seq → close.
 | 0x0020 JOIN_OPEN| engine→peer | 10-byte join code (§5.1)                  |
 | 0x0021 JOIN_CLOSE| engine→peer| (empty)                                  |
 | 0x0022 JOIN_PIN | engine→peer | TLV: 0x01 host pubkey (32) — the invite's pinned host key (§4.1) |
+| 0x0023 JOIN_NO  | peer→engine | u8 cause (§6.2); the joiner's daemon relays a refusal or a stale-code lookup miss before hanging up clean |
 | 0x0030 PEER_UP  | peer→engine | TLV: 0x01 pubkey (32), 0x02 name (≤20 sanitized) |
 | 0x0031 PEER_DOWN| peer→engine | TLV: 0x01 pubkey (32), 0x03 cause u8 (§6.3)|
 | 0x0040 SV_DATA  | both        | TLV: 0x01 peer pubkey (32) — the target player on the engine->peer leg, the origin on the peer-delivered leg; 0x02 body (opaque bytes for the engine's server-message parse) |
