@@ -212,9 +212,27 @@ static void test_order(void)
                         if (QN_MapCompareStory(s2[a], s2[b]) < 0 &&
                             QN_MapCompareStory(s2[b], s2[c]) < 0)
                             CHECK(QN_MapCompareStory(s2[a], s2[c]) < 0);
-                        if (QN_MapCompareDm(s2[a], s2[b]) < 0 &&
-                            QN_MapCompareDm(s2[b], s2[c]) < 0)
-                            CHECK(QN_MapCompareDm(s2[a], s2[c]) < 0);
+                        if (QN_MapCompareStory(s2[a], s2[b]) == 0 &&
+                            QN_MapCompareStory(s2[b], s2[c]) == 0)
+                            CHECK(QN_MapCompareStory(s2[a], s2[c]) == 0);
+                    }
+        }
+        {
+            static const char *const dmtr[] = {
+                "lqdm1", "lqdm10", "lqdmX", "lqdm", "lqdm0", "lqdm01",
+                "lqdm123456789", "lqdm12345678", "lqdm_1", "junk"
+            };
+            int dn2 = (int)(sizeof(dmtr)/sizeof(dmtr[0]));
+            int a, b, c;
+            for (a = 0; a < dn2; a++)
+                for (b = 0; b < dn2; b++)
+                    for (c = 0; c < dn2; c++) {
+                        if (QN_MapCompareDm(dmtr[a], dmtr[b]) < 0 &&
+                            QN_MapCompareDm(dmtr[b], dmtr[c]) < 0)
+                            CHECK(QN_MapCompareDm(dmtr[a], dmtr[c]) < 0);
+                        if (QN_MapCompareDm(dmtr[a], dmtr[b]) == 0 &&
+                            QN_MapCompareDm(dmtr[b], dmtr[c]) == 0)
+                            CHECK(QN_MapCompareDm(dmtr[a], dmtr[c]) == 0);
                     }
         }
     }

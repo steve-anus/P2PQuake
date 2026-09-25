@@ -9,7 +9,6 @@
 
 #define QN_MAP_PREFIX "lq_e"
 #define QN_MAP_DM_PREFIX "lqdm"
-#define QN_MAP_PREFIX_LEN 4
 
 static int
 qn_tol (int c)
@@ -83,7 +82,7 @@ qn_camp_rank (const char *name, long *major, long *minor)
 		return 3;
 	if (!qn_iprefix (name, QN_MAP_PREFIX))
 		return 4;
-	p = qn_digits (name + QN_MAP_PREFIX_LEN, major);
+	p = qn_digits (name + (sizeof QN_MAP_PREFIX - 1), major);
 	if (!p || qn_tol ((unsigned char) *p) != 'm')
 		return 4;
 	p = qn_digits (p + 1, minor);
@@ -122,7 +121,7 @@ QN_MapInPool (const char *name, qn_map_pool_t pool)
 	if (pool == QN_POOL_COOP)
 		return qn_camp_rank (name, &maj, &min) != 4 ? 1 : 0;
 	if (pool == QN_POOL_DM)
-		return qn_iprefix (name, "lqdm");
+		return qn_iprefix (name, QN_MAP_DM_PREFIX);
 	return 0;
 }
 
@@ -155,7 +154,7 @@ qn_dm_num (const char *name)
 
 	if (!name || !qn_iprefix (name, QN_MAP_DM_PREFIX))
 		return -1;
-	p = qn_digits (name + QN_MAP_PREFIX_LEN, &v);
+	p = qn_digits (name + (sizeof QN_MAP_DM_PREFIX - 1), &v);
 	if (!p || *p != '\0')
 		return -1;
 	return v;
