@@ -603,7 +603,7 @@ void M_Save_Key (int k)
 /* MULTIPLAYER MENU */
 
 int	m_multiplayer_cursor;
-#define	MULTIPLAYER_ITEMS	4
+#define	MULTIPLAYER_ITEMS	5
 
 
 void M_Menu_MultiPlayer_f (void)
@@ -630,6 +630,7 @@ void M_MultiPlayer_Draw (void)
 	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
 
 	M_Print (90, 92, "Host p2pquake");
+	M_Print (90, 112, "Join p2pquake");
 
 	if (ipxAvailable || tcpipAvailable)
 		return;
@@ -684,6 +685,14 @@ void M_MultiPlayer_Key (int key)
 			m_state = m_qn_host;
 			m_entersound = true;
 			QN_Menu_HostInit ();
+			break;
+
+		case 4:
+			IN_Deactivate(modestate == MS_WINDOWED);
+			key_dest = key_menu;
+			m_state = m_qn_join;
+			m_entersound = true;
+			QN_Menu_JoinInit ();
 			break;
 		}
 	}
@@ -2670,6 +2679,10 @@ void M_Draw (void)
 		QN_Menu_HostDraw ();
 		break;
 
+	case m_qn_join:
+		QN_Menu_JoinDraw ();
+		break;
+
 	case m_search:
 		M_Search_Draw ();
 		break;
@@ -2763,6 +2776,10 @@ void M_Keydown (int key)
 	case m_qn_host:
 		QN_Menu_HostKey (key);
 		return;
+
+	case m_qn_join:
+		QN_Menu_JoinKey (key);
+		return;
 	}
 }
 
@@ -2780,6 +2797,9 @@ void M_Charinput (int key)
 	case m_lanconfig:
 		M_LanConfig_Char (key);
 		return;
+	case m_qn_join:
+		QN_Menu_JoinChar (key);
+		return;
 	default:
 		return;
 	}
@@ -2796,6 +2816,8 @@ qboolean M_TextEntry (void)
 		return M_Quit_TextEntry ();
 	case m_lanconfig:
 		return M_LanConfig_TextEntry ();
+	case m_qn_join:
+		return true;
 	default:
 		return false;
 	}

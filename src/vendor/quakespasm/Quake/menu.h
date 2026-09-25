@@ -41,7 +41,8 @@ enum m_state_e {
 	m_gameoptions,
 	m_search,
 	m_slist,
-	m_qn_host
+	m_qn_host,
+	m_qn_join
 };
 
 extern enum m_state_e m_state;

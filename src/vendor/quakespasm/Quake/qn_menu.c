@@ -15,8 +15,15 @@
 #include "quakedef.h"
 #include "draw.h"
 #include "menu.h"
+#include <SDL.h>		/* clipboard for the paste key only */
+
 #include "net_qn.h"
 #include "qn_menu.h"
+#include "qn_pad.h"
+
+extern void IN_Activate (void);
+extern qboolean m_return_onerror;
+extern char m_return_reason[32];
 
 #define QN_HOST_MAX_MAPS	64
 #define QN_HOST_MAPNAME_LEN	16
@@ -210,11 +217,11 @@ void QN_Menu_HostDraw (void)
 	M_Print (160, 136, "back");
 
 	if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
-		M_DrawCharacter (144, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 12 + ((int)(realtime*4)&1));
+		M_DrawCharacter (144, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ACTION)
-		M_DrawCharacter (144, 116, 12 + ((int)(realtime*4)&1));
+		M_DrawCharacter (144, 116, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_BACK)
-		M_DrawCharacter (144, 136, 12 + ((int)(realtime*4)&1));
+		M_DrawCharacter (144, 136, 10 + ((int)(realtime*4)&1));
 
 	if (sv.active)
 	{
@@ -301,4 +308,131 @@ void QN_Menu_HostKey (int key)
 	default:
 		return;
 	}
+}
+
+//=============================================================================
+/* JOIN PAGE — code entry through qn_pad; this page is the code's only
+ * client-side display surface. */
+
+static qn_pad_t	qn_join_pad;
+static const char	*qn_join_note;
+static double	qn_join_note_time;
+
+static void QN_JoinNote (const char *fixed)
+{
+	qn_join_note = fixed;
+	qn_join_note_time = realtime;
+}
+
+void QN_Menu_JoinInit (void)
+{
+	QN_PadReset (&qn_join_pad);
+	qn_join_note = NULL;
+	m_return_reason[0] = 0;
+}
+
+static void QN_JoinDial (void)
+{
+	char	grouped[QN_PAD_CODE_LEN + 3 + 1];
+	char	cmd[8 + 3 + sizeof (grouped) + 4];
+
+	if (!QN_PadGrouped (&qn_join_pad, grouped, sizeof (grouped)))
+	{
+		QN_JoinNote ("code incomplete");
+		return;
+	}
+	if (q_snprintf (cmd, sizeof (cmd), "connect \"qn:%s\"\n",
+	                grouped) >= (int) sizeof (cmd))
+		return;
+	m_return_state = m_qn_join;
+	m_return_onerror = true;
+	IN_Activate ();
+	key_dest = key_game;
+	m_state = m_none;
+	Cbuf_AddText (cmd);
+	memset (cmd, 0, sizeof (cmd));
+	memset (grouped, 0, sizeof (grouped));
+	QN_PadReset (&qn_join_pad);	/* the secret leaves this page */
+	m_entersound = true;		/* only an accepted dial clicks */
+}
+
+void QN_Menu_JoinDraw (void)
+{
+	qpic_t	*p;
+	char	shown[QN_PAD_CODE_LEN + 3 + 1];
+	int	n = qn_join_pad.n;
+	int	i, c = 0, cx;
+
+	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp"));
+	p = Draw_CachePic ("gfx/p_multi.lmp");
+	M_DrawPic ((320 - p->width) / 2, 4, p);
+
+	M_Print (48, 56, "   join code");
+	M_DrawTextBox (144, 48, QN_PAD_CODE_LEN + 4, 1);
+	/* grouped echo of the typed code; nothing here reaches the console */
+	for (i = 0; i < n; i++)
+	{
+		if (i && (i % 4) == 0)
+			shown[c++] = '-';
+		shown[c++] = qn_join_pad.code[i];
+	}
+	shown[c] = '\0';
+	if (c)
+		M_PrintWhite (152, 56, shown);
+	cx = 152 + (n + (n ? (n - 1) / 4 : 0)) * 8;
+	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
+
+	if (m_return_reason[0])
+		M_PrintWhite (64, 80, m_return_reason);
+	else if (qn_join_note && realtime - qn_join_note_time < 4.0)
+		M_PrintWhite (64, 80, qn_join_note);
+
+	M_Print (48, 176, "type code  L paste  Del clear");
+}
+
+void QN_Menu_JoinKey (int key)
+{
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+		M_Menu_MultiPlayer_f ();
+		return;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		QN_JoinDial ();
+		return;
+
+	case K_BACKSPACE:
+		QN_PadBack (&qn_join_pad);
+		return;
+
+	case K_DEL:
+		QN_PadReset (&qn_join_pad);
+		QN_JoinNote ("cleared");
+		return;
+
+	default:
+		return;
+	}
+}
+
+void QN_Menu_JoinChar (int key)
+{
+	if (key == 'l' || key == 'L')	/* L: excluded from the code alphabet */
+	{
+		/* explicit paste keystroke; clipboard untrusted, never echoed */
+		char	*clip = SDL_GetClipboardText ();
+		int	ok;
+
+		ok = clip ? QN_PadPaste (&qn_join_pad, clip) : 0;
+		if (clip)
+			SDL_free (clip);
+		if (!ok)
+			QN_JoinNote ("paste not a code");	/* keep what was typed */
+		return;
+	}
+	QN_PadFeed (&qn_join_pad, (char)key);
 }

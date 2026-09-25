@@ -1,0 +1,312 @@
+--- a/Quake/menu.c
++++ b/Quake/menu.c
+@@ -603,7 +603,7 @@
+ /* MULTIPLAYER MENU */
+ 
+ int	m_multiplayer_cursor;
+-#define	MULTIPLAYER_ITEMS	4
++#define	MULTIPLAYER_ITEMS	5
+ 
+ 
+ void M_Menu_MultiPlayer_f (void)
+@@ -630,6 +630,7 @@
+ 	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+ 
+ 	M_Print (90, 92, "Host p2pquake");
++	M_Print (90, 112, "Join p2pquake");
+ 
+ 	if (ipxAvailable || tcpipAvailable)
+ 		return;
+@@ -685,6 +686,14 @@
+ 			m_entersound = true;
+ 			QN_Menu_HostInit ();
+ 			break;
++
++		case 4:
++			IN_Deactivate(modestate == MS_WINDOWED);
++			key_dest = key_menu;
++			m_state = m_qn_join;
++			m_entersound = true;
++			QN_Menu_JoinInit ();
++			break;
+ 		}
+ 	}
+ }
+@@ -2670,6 +2679,10 @@
+ 		QN_Menu_HostDraw ();
+ 		break;
+ 
++	case m_qn_join:
++		QN_Menu_JoinDraw ();
++		break;
++
+ 	case m_search:
+ 		M_Search_Draw ();
+ 		break;
+@@ -2763,6 +2776,10 @@
+ 	case m_qn_host:
+ 		QN_Menu_HostKey (key);
+ 		return;
++
++	case m_qn_join:
++		QN_Menu_JoinKey (key);
++		return;
+ 	}
+ }
+ 
+@@ -2780,6 +2797,9 @@
+ 	case m_lanconfig:
+ 		M_LanConfig_Char (key);
+ 		return;
++	case m_qn_join:
++		QN_Menu_JoinChar (key);
++		return;
+ 	default:
+ 		return;
+ 	}
+@@ -2796,6 +2816,8 @@
+ 		return M_Quit_TextEntry ();
+ 	case m_lanconfig:
+ 		return M_LanConfig_TextEntry ();
++	case m_qn_join:
++		return true;
+ 	default:
+ 		return false;
+ 	}
+--- a/Quake/menu.h
++++ b/Quake/menu.h
+@@ -41,7 +41,8 @@
+ 	m_gameoptions,
+ 	m_search,
+ 	m_slist,
+-	m_qn_host
++	m_qn_host,
++	m_qn_join
+ };
+ 
+ extern enum m_state_e m_state;
+--- a/Quake/qn_menu.c
++++ b/Quake/qn_menu.c
+@@ -15,8 +15,15 @@
+ #include "quakedef.h"
+ #include "draw.h"
+ #include "menu.h"
++#include <SDL.h>		/* clipboard for the paste key only */
++
+ #include "net_qn.h"
+ #include "qn_menu.h"
++#include "qn_pad.h"
++
++extern void IN_Activate (void);
++extern qboolean m_return_onerror;
++extern char m_return_reason[32];
+ 
+ #define QN_HOST_MAX_MAPS	64
+ #define QN_HOST_MAPNAME_LEN	16
+@@ -210,11 +217,11 @@
+ 	M_Print (160, 136, "back");
+ 
+ 	if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
+-		M_DrawCharacter (144, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 12 + ((int)(realtime*4)&1));
++		M_DrawCharacter (144, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
+ 	else if (qn_host_cursor == QN_H_ITEM_ACTION)
+-		M_DrawCharacter (144, 116, 12 + ((int)(realtime*4)&1));
++		M_DrawCharacter (144, 116, 10 + ((int)(realtime*4)&1));
+ 	else if (qn_host_cursor == QN_H_ITEM_BACK)
+-		M_DrawCharacter (144, 136, 12 + ((int)(realtime*4)&1));
++		M_DrawCharacter (144, 136, 10 + ((int)(realtime*4)&1));
+ 
+ 	if (sv.active)
+ 	{
+@@ -302,3 +309,130 @@
+ 		return;
+ 	}
+ }
++
++//=============================================================================
++/* JOIN PAGE — code entry through qn_pad; this page is the code's only
++ * client-side display surface. */
++
++static qn_pad_t	qn_join_pad;
++static const char	*qn_join_note;
++static double	qn_join_note_time;
++
++static void QN_JoinNote (const char *fixed)
++{
++	qn_join_note = fixed;
++	qn_join_note_time = realtime;
++}
++
++void QN_Menu_JoinInit (void)
++{
++	QN_PadReset (&qn_join_pad);
++	qn_join_note = NULL;
++	m_return_reason[0] = 0;
++}
++
++static void QN_JoinDial (void)
++{
++	char	grouped[QN_PAD_CODE_LEN + 3 + 1];
++	char	cmd[8 + 3 + sizeof (grouped) + 4];
++
++	if (!QN_PadGrouped (&qn_join_pad, grouped, sizeof (grouped)))
++	{
++		QN_JoinNote ("code incomplete");
++		return;
++	}
++	if (q_snprintf (cmd, sizeof (cmd), "connect \"qn:%s\"\n",
++	                grouped) >= (int) sizeof (cmd))
++		return;
++	m_return_state = m_qn_join;
++	m_return_onerror = true;
++	IN_Activate ();
++	key_dest = key_game;
++	m_state = m_none;
++	Cbuf_AddText (cmd);
++	memset (cmd, 0, sizeof (cmd));
++	memset (grouped, 0, sizeof (grouped));
++	QN_PadReset (&qn_join_pad);	/* the secret leaves this page */
++	m_entersound = true;		/* only an accepted dial clicks */
++}
++
++void QN_Menu_JoinDraw (void)
++{
++	qpic_t	*p;
++	char	shown[QN_PAD_CODE_LEN + 3 + 1];
++	int	n = qn_join_pad.n;
++	int	i, c = 0, cx;
++
++	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp"));
++	p = Draw_CachePic ("gfx/p_multi.lmp");
++	M_DrawPic ((320 - p->width) / 2, 4, p);
++
++	M_Print (48, 56, "   join code");
++	M_DrawTextBox (144, 48, QN_PAD_CODE_LEN + 4, 1);
++	/* grouped echo of the typed code; nothing here reaches the console */
++	for (i = 0; i < n; i++)
++	{
++		if (i && (i % 4) == 0)
++			shown[c++] = '-';
++		shown[c++] = qn_join_pad.code[i];
++	}
++	shown[c] = '\0';
++	if (c)
++		M_PrintWhite (152, 56, shown);
++	cx = 152 + (n + (n ? (n - 1) / 4 : 0)) * 8;
++	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
++
++	if (m_return_reason[0])
++		M_PrintWhite (64, 80, m_return_reason);
++	else if (qn_join_note && realtime - qn_join_note_time < 4.0)
++		M_PrintWhite (64, 80, qn_join_note);
++
++	M_Print (48, 176, "type code  L paste  Del clear");
++}
++
++void QN_Menu_JoinKey (int key)
++{
++	switch (key)
++	{
++	case K_ESCAPE:
++	case K_BBUTTON:
++		M_Menu_MultiPlayer_f ();
++		return;
++
++	case K_ENTER:
++	case K_KP_ENTER:
++	case K_ABUTTON:
++		QN_JoinDial ();
++		return;
++
++	case K_BACKSPACE:
++		QN_PadBack (&qn_join_pad);
++		return;
++
++	case K_DEL:
++		QN_PadReset (&qn_join_pad);
++		QN_JoinNote ("cleared");
++		return;
++
++	default:
++		return;
++	}
++}
++
++void QN_Menu_JoinChar (int key)
++{
++	if (key == 'l' || key == 'L')	/* L: excluded from the code alphabet */
++	{
++		/* explicit paste keystroke; clipboard untrusted, never echoed */
++		char	*clip = SDL_GetClipboardText ();
++		int	ok;
++
++		ok = clip ? QN_PadPaste (&qn_join_pad, clip) : 0;
++		if (clip)
++			SDL_free (clip);
++		if (!ok)
++			QN_JoinNote ("paste not a code");	/* keep what was typed */
++		return;
++	}
++	QN_PadFeed (&qn_join_pad, (char)key);
++}
+--- a/Quake/qn_menu.h
++++ b/Quake/qn_menu.h
+@@ -8,4 +8,9 @@
+ void QN_Menu_HostDraw (void);
+ void QN_Menu_HostKey (int key);
+ 
++void QN_Menu_JoinInit (void);
++void QN_Menu_JoinDraw (void);
++void QN_Menu_JoinKey (int key);
++void QN_Menu_JoinChar (int key);
++
+ #endif	/* __qn_menu_h */
+--- a/Quake/Makefile
++++ b/Quake/Makefile
+@@ -200,7 +200,7 @@
+ vpath %.c $(QNDIR)
+ CFLAGS += -I$(QNDIR)
+ SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
+-	qn_stext.o qn_menu.o
++	qn_stext.o qn_pad.o qn_menu.o
+ SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o
+ SYSOBJ_MAIN= main_sdl.o
+ 
+--- a/Quake/net_udp.c
++++ b/Quake/net_udp.c
+@@ -429,6 +429,10 @@
+ {
+ 	struct hostent *hostentry;
+ 
++	/* qn: names belong to the QN landriver: no resolver call, no echo */
++	if (!q_strncasecmp (name, "qn:", 3))
++		return -1;
++
+ 	if (name[0] >= '0' && name[0] <= '9')
+ 		return PartialIPAddress (name, addr);
+ 
+--- a/Quake/net_dgrm.c
++++ b/Quake/net_dgrm.c
+@@ -1284,7 +1284,9 @@
+ 	// see if we can resolve the host name
+ 	if (dfunc.GetAddrFromName(host, &sendaddr) == -1)
+ 	{
+-		Con_Printf("Could not resolve %s\n", host);
++		/* never echo a qn: join code (bearer secret) to the console */
++		if (host && q_strncasecmp (host, "qn:", 3))
++			Con_Printf("Could not resolve %s\n", host);
+ 		return NULL;
+ 	}
+ 
+--- a/Quake/cl_main.c
++++ b/Quake/cl_main.c
+@@ -165,7 +165,8 @@
+ 	cls.netcon = NET_Connect (host);
+ 	if (!cls.netcon)
+ 		Host_Error ("CL_Connect: connect failed");
+-	Con_DPrintf ("CL_EstablishConnection: connected to %s\n", host);
++	if (host && q_strncasecmp (host, "qn:", 3))	/* join codes are bearer secrets */
++		Con_DPrintf ("CL_EstablishConnection: connected to %s\n", host);
+ 
+ 	cls.demonum = -1;			// not in the demo loop now
+ 	cls.state = ca_connected;

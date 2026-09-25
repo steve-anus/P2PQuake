@@ -1284,7 +1284,9 @@ static qsocket_t *_Datagram_Connect (const char *host)
 	// see if we can resolve the host name
 	if (dfunc.GetAddrFromName(host, &sendaddr) == -1)
 	{
-		Con_Printf("Could not resolve %s\n", host);
+		/* never echo a qn: join code (bearer secret) to the console */
+		if (host && q_strncasecmp (host, "qn:", 3))
+			Con_Printf("Could not resolve %s\n", host);
 		return NULL;
 	}
 
