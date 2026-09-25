@@ -631,10 +631,9 @@ void M_MultiPlayer_Draw (void)
 
 	f = (int)(realtime * 10)%6;
 	{
-		int	dx = (320 - (int)strlen(items[m_multiplayer_cursor]) * 8) / 2 - 26;
-		if (dx < 4)
-			dx = 4;
-		M_DrawTransPic (dx, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+		p = Draw_CachePic (va("gfx/menudot%i.lmp", f+1));
+		M_DrawTransPic ((320 - (int)p->width) / 2,
+		                32 + m_multiplayer_cursor * 20, p);
 	}
 
 	if (ipxAvailable || tcpipAvailable)
