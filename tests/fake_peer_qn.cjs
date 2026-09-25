@@ -300,7 +300,7 @@ class Peer {
         if (process.env.QN_FATAL) {
           /* spec 2.3: a peer→engine FATAL must tear the match down; the
            * orchestrator asserts on the engine's reported cause */
-          this.send(T.FATAL, Buffer.from([4]));
+          this.send(T.FATAL, Buffer.from([parseInt(process.env.QN_FATAL_CAUSE || '4', 10)]));
         } else if (process.env.QN_REDIAL_CHURN) {
           /* connection churn: repeated crash-style re-dials exercise
            * the datagram table (forwarding slots must not strand

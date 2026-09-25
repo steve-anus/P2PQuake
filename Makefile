@@ -25,7 +25,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback twoplayer relay smoke-dht clean fake-engine
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay smoke-dht clean fake-engine
 
 all: engine peer
 
@@ -73,6 +73,14 @@ loopback: engine
 
 # Real two-player run over the DHT testnet: two live engines, the classic
 # changelevel reconnect cycle, crash-style rejoin and stale-code refusal.
+# WM2 honest-failure battery: one loopback run per daemon refuse cause,
+# each asserting the engine's exact fixed player-facing string.
+loopback-fatal: engine
+	@for c in 0 1 2 3 4 5 6 255; do \
+	  echo "loopback-fatal cause $$c:"; \
+	  QN_FATAL=1 QN_FATAL_CAUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
+	done
+
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
 
@@ -108,6 +116,7 @@ check:
 	$(if $(NODE_TEST_SRC),$(NODE) --test $(NODE_TEST_SRC),)
 	$(MAKE) --no-print-directory e2e
 	$(MAKE) --no-print-directory loopback
+	$(MAKE) --no-print-directory loopback-fatal
 	$(MAKE) --no-print-directory twoplayer
 	$(MAKE) --no-print-directory relay
 

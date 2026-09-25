@@ -1420,6 +1420,9 @@ static qsocket_t *_Datagram_Connect (const char *host)
 	if (ret == CCREP_REJECT)
 	{
 		reason = MSG_ReadString();
+		if (host && q_strncasecmp (host, "qn:", 3) == 0)
+			reason = "host refused the join";	/* never echo
+		                                           host-supplied bytes */
 		Con_Printf("%s\n", reason);
 		q_strlcpy(m_return_reason, reason, sizeof(m_return_reason));
 		goto ErrorReturn;

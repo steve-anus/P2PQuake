@@ -42,6 +42,7 @@
 
 #include <poll.h>
 
+#include "qn_causes.h"
 #include "qn_frame.h"
 #include "qn_spawn.h"
 #include "qn_stext.h"
@@ -165,6 +166,7 @@ static unsigned long long qn_pump_ms;
 static unsigned		qn_demand, qn_demand_reported;
 static qboolean		qn_sv_was_active;
 static const char	*qn_last_note;
+static const char	*qn_join_cause_text;
 
 void QN_SetState (qn_state_t state)
 {
@@ -760,9 +762,14 @@ static void qn_dispatch (const qn_frame_t *f)
 		 * ended the session by choice, retirement covers it). */
 		/* numeric-only format: no untrusted bytes reach the console,
 		 * and qn_note's pointer-identity dedup stays literals-only */
-		Con_SafePrintf ("QN: daemon FATAL (cause %u)\n",
-		                (unsigned int) (f->len >= 1 ?
-		                          f->payload[0] : 255));
+		{
+			unsigned int cause =
+			    (unsigned int) (f->len >= 1 ? f->payload[0] : 255);
+			if (qn_client_lane_up)
+				qn_join_cause_text = QN_CauseText (cause);
+			Con_SafePrintf ("QN: daemon FATAL (cause %u): %s\n",
+			                cause, QN_CauseText (cause));
+		}
 		qn_teardown ("daemon sent FATAL");
 		return;
 
@@ -1506,6 +1513,8 @@ void QN_Status_f (void)
 	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");
 	if (qn_last_note)
 		Con_Printf ("last note: %s\n", qn_last_note);
+	if (qn_join_cause_text)
+		Con_Printf ("last cause: %s\n", qn_join_cause_text);
 }
 
 const char *QN_AddrToString (struct qsockaddr *addr)
@@ -1528,6 +1537,16 @@ const char *QN_AddrToString (struct qsockaddr *addr)
 	return buffer;
 }
 
+const char *QN_JoinCauseText (void)
+{
+	return qn_join_cause_text;
+}
+
+void QN_JoinAttemptReset (void)
+{
+	qn_join_cause_text = NULL;
+}
+
 int QN_StringToAddr (const char *string, struct qsockaddr *addr)
 {
 	qnqsockaddr_t	*a = (qnqsockaddr_t *) addr;
@@ -1541,6 +1560,7 @@ int QN_StringToAddr (const char *string, struct qsockaddr *addr)
 
 	if (q_strncasecmp (string, "qn:", 3) != 0)
 		return -1;
+	qn_join_cause_text = NULL;	/* this attempt supersedes the last verdict */
 	memset (a, 0, sizeof (*a));
 	a->family = QN_AF;
 

@@ -1,0 +1,221 @@
+--- a/Quake/Makefile
++++ b/Quake/Makefile
+@@ -200,7 +200,7 @@
+ vpath %.c $(QNDIR)
+ CFLAGS += -I$(QNDIR)
+ SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
+-	qn_stext.o qn_pad.o qn_menu.o
++	qn_stext.o qn_pad.o qn_causes.o qn_menu.o
+ SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o
+ SYSOBJ_MAIN= main_sdl.o
+ 
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -42,6 +42,7 @@
+ 
+ #include <poll.h>
+ 
++#include "qn_causes.h"
+ #include "qn_frame.h"
+ #include "qn_spawn.h"
+ #include "qn_stext.h"
+@@ -165,6 +166,7 @@
+ static unsigned		qn_demand, qn_demand_reported;
+ static qboolean		qn_sv_was_active;
+ static const char	*qn_last_note;
++static const char	*qn_join_cause_text;
+ 
+ void QN_SetState (qn_state_t state)
+ {
+@@ -760,9 +762,14 @@
+ 		 * ended the session by choice, retirement covers it). */
+ 		/* numeric-only format: no untrusted bytes reach the console,
+ 		 * and qn_note's pointer-identity dedup stays literals-only */
+-		Con_SafePrintf ("QN: daemon FATAL (cause %u)\n",
+-		                (unsigned int) (f->len >= 1 ?
+-		                          f->payload[0] : 255));
++		{
++			unsigned int cause =
++			    (unsigned int) (f->len >= 1 ? f->payload[0] : 255);
++			if (qn_client_lane_up)
++				qn_join_cause_text = QN_CauseText (cause);
++			Con_SafePrintf ("QN: daemon FATAL (cause %u): %s\n",
++			                cause, QN_CauseText (cause));
++		}
+ 		qn_teardown ("daemon sent FATAL");
+ 		return;
+ 
+@@ -1506,6 +1513,8 @@
+ 	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");
+ 	if (qn_last_note)
+ 		Con_Printf ("last note: %s\n", qn_last_note);
++	if (qn_join_cause_text)
++		Con_Printf ("last cause: %s\n", qn_join_cause_text);
+ }
+ 
+ const char *QN_AddrToString (struct qsockaddr *addr)
+@@ -1528,6 +1537,16 @@
+ 	return buffer;
+ }
+ 
++const char *QN_JoinCauseText (void)
++{
++	return qn_join_cause_text;
++}
++
++void QN_JoinAttemptReset (void)
++{
++	qn_join_cause_text = NULL;
++}
++
+ int QN_StringToAddr (const char *string, struct qsockaddr *addr)
+ {
+ 	qnqsockaddr_t	*a = (qnqsockaddr_t *) addr;
+@@ -1541,6 +1560,7 @@
+ 
+ 	if (q_strncasecmp (string, "qn:", 3) != 0)
+ 		return -1;
++	qn_join_cause_text = NULL;	/* this attempt supersedes the last verdict */
+ 	memset (a, 0, sizeof (*a));
+ 	a->family = QN_AF;
+ 
+--- a/Quake/net_qn.h
++++ b/Quake/net_qn.h
+@@ -64,4 +64,11 @@
+  * console only through here; the allowlist predicate is qn_stext.h. */
+ void QN_StufftextFromGame (const char *line);
+ 
++/* Join-page honest failure surface: the landriver remembers the last
++ * daemon FATAL cause seen on a joiner lane as a fixed literal
++ * (qn_causes.h, spec 6.3). Valid from that FATAL until the next qn: dial
++ * attempt. */
++const char *QN_JoinCauseText (void);		/* fixed literal or NULL */
++void QN_JoinAttemptReset (void);
++
+ #endif	/* __net_qn_h */
+--- a/Quake/qn_menu.c
++++ b/Quake/qn_menu.c
+@@ -187,6 +187,83 @@
+ 	Cbuf_AddText ("listen 0\ndisconnect\n");
+ }
+ 
++static int QN_ClientPing (const client_t *c)
++{
++	int		j, n = c->num_pings;
++	double	tot = 0;
++
++	if (n > NUM_PING_TIMES)
++		n = NUM_PING_TIMES;
++	if (n <= 0)
++		return -1;
++	for (j = 0; j < n; j++)
++		tot += c->ping_times[j];
++	tot /= n;
++	if (!(tot >= 0.0) || tot > 9999.0)	/* NaN and absurd values */
++		return 9999;
++	return (int) tot;
++}
++
++/* who is in, straight from the server's own bookkeeping; names are remote
++ * data, so every character outside the printable band renders as '.' */
++static void QN_RosterDraw (void)
++{
++	char	line[32];
++	int		shown = 0, extra = 0, used = 0;
++	int			i;
++
++	if (!svs.clients || svs.maxclients < 1)
++		return;
++	line[0] = '\0';
++	for (i = 0; i < svs.maxclients; i++)
++	{
++		client_t	*c = &svs.clients[i];
++		char	safe[16];
++		const char	*p;
++		int		k, need;
++
++		if (!c->active || !c->name[0] || Q_strcmp (c->name, "unconnected") == 0)
++			continue;
++		if (shown >= 8)
++		{
++			extra++;
++			continue;
++		}
++		for (k = 0; k < 15 && c->name[k]; k++)
++			safe[k] = (c->name[k] < ' ' || (unsigned char) c->name[k] > '~')
++			          ? '.' : c->name[k];
++		safe[k] = '\0';
++		need = (used ? 2 : 0) + k + 5;
++		if (used + need >= (int) sizeof (line) - 1)
++		{
++			extra++;
++			continue;
++		}
++		if (used)
++			line[used++] = ' ', line[used++] = ' ';
++		for (p = safe; *p; p++)
++			line[used++] = *p;
++		line[used++] = '@';
++		need = QN_ClientPing (c);
++		if (need < 0)
++			line[used++] = '-';
++		else
++		{
++			char	num[8];
++			q_snprintf (num, sizeof (num), "%d", need);
++			for (p = num; *p; p++)
++				line[used++] = *p;
++		}
++		line[used] = '\0';
++		shown++;
++	}
++	if (!shown)
++		return;
++	if (extra)
++		q_strlcat (line, " (+)", sizeof (line));
++	M_Print (64, 176, line);
++}
++
+ void QN_Menu_HostDraw (void)
+ {
+ 	qpic_t	*p;
+@@ -238,6 +315,8 @@
+ 		}
+ 	}
+ 
++	QN_RosterDraw ();
++
+ 	if (qn_host_note && realtime - qn_host_note_time < 4.0)
+ 		M_PrintWhite (40, 184, qn_host_note);
+ }
+@@ -349,6 +428,7 @@
+ 	IN_Activate ();
+ 	key_dest = key_game;
+ 	m_state = m_none;
++	QN_JoinAttemptReset ();		/* stale cause text dies with this dial */
+ 	Cbuf_AddText (cmd);
+ 	memset (cmd, 0, sizeof (cmd));
+ 	memset (grouped, 0, sizeof (grouped));
+@@ -382,7 +462,9 @@
+ 	cx = 152 + (n + (n ? (n - 1) / 4 : 0)) * 8;
+ 	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
+ 
+-	if (m_return_reason[0])
++	if (QN_JoinCauseText ())
++		M_PrintWhite (40, 80, QN_JoinCauseText ());
++	else if (m_return_reason[0])
+ 		M_PrintWhite (64, 80, m_return_reason);
+ 	else if (qn_join_note && realtime - qn_join_note_time < 4.0)
+ 		M_PrintWhite (64, 80, qn_join_note);
+--- a/Quake/net_dgrm.c
++++ b/Quake/net_dgrm.c
+@@ -1420,6 +1420,9 @@
+ 	if (ret == CCREP_REJECT)
+ 	{
+ 		reason = MSG_ReadString();
++		if (host && q_strncasecmp (host, "qn:", 3) == 0)
++			reason = "host refused the join";	/* never echo
++		                                           host-supplied bytes */
+ 		Con_Printf("%s\n", reason);
+ 		q_strlcpy(m_return_reason, reason, sizeof(m_return_reason));
+ 		goto ErrorReturn;

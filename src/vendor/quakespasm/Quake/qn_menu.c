@@ -187,6 +187,83 @@ static void QN_HostStop (void)
 	Cbuf_AddText ("listen 0\ndisconnect\n");
 }
 
+static int QN_ClientPing (const client_t *c)
+{
+	int		j, n = c->num_pings;
+	double	tot = 0;
+
+	if (n > NUM_PING_TIMES)
+		n = NUM_PING_TIMES;
+	if (n <= 0)
+		return -1;
+	for (j = 0; j < n; j++)
+		tot += c->ping_times[j];
+	tot /= n;
+	if (!(tot >= 0.0) || tot > 9999.0)	/* NaN and absurd values */
+		return 9999;
+	return (int) tot;
+}
+
+/* who is in, straight from the server's own bookkeeping; names are remote
+ * data, so every character outside the printable band renders as '.' */
+static void QN_RosterDraw (void)
+{
+	char	line[32];
+	int		shown = 0, extra = 0, used = 0;
+	int			i;
+
+	if (!svs.clients || svs.maxclients < 1)
+		return;
+	line[0] = '\0';
+	for (i = 0; i < svs.maxclients; i++)
+	{
+		client_t	*c = &svs.clients[i];
+		char	safe[16];
+		const char	*p;
+		int		k, need;
+
+		if (!c->active || !c->name[0] || Q_strcmp (c->name, "unconnected") == 0)
+			continue;
+		if (shown >= 8)
+		{
+			extra++;
+			continue;
+		}
+		for (k = 0; k < 15 && c->name[k]; k++)
+			safe[k] = (c->name[k] < ' ' || (unsigned char) c->name[k] > '~')
+			          ? '.' : c->name[k];
+		safe[k] = '\0';
+		need = (used ? 2 : 0) + k + 5;
+		if (used + need >= (int) sizeof (line) - 1)
+		{
+			extra++;
+			continue;
+		}
+		if (used)
+			line[used++] = ' ', line[used++] = ' ';
+		for (p = safe; *p; p++)
+			line[used++] = *p;
+		line[used++] = '@';
+		need = QN_ClientPing (c);
+		if (need < 0)
+			line[used++] = '-';
+		else
+		{
+			char	num[8];
+			q_snprintf (num, sizeof (num), "%d", need);
+			for (p = num; *p; p++)
+				line[used++] = *p;
+		}
+		line[used] = '\0';
+		shown++;
+	}
+	if (!shown)
+		return;
+	if (extra)
+		q_strlcat (line, " (+)", sizeof (line));
+	M_Print (64, 176, line);
+}
+
 void QN_Menu_HostDraw (void)
 {
 	qpic_t	*p;
@@ -237,6 +314,8 @@ void QN_Menu_HostDraw (void)
 			M_Print (72, 156, "opening room...");
 		}
 	}
+
+	QN_RosterDraw ();
 
 	if (qn_host_note && realtime - qn_host_note_time < 4.0)
 		M_PrintWhite (40, 184, qn_host_note);
@@ -349,6 +428,7 @@ static void QN_JoinDial (void)
 	IN_Activate ();
 	key_dest = key_game;
 	m_state = m_none;
+	QN_JoinAttemptReset ();		/* stale cause text dies with this dial */
 	Cbuf_AddText (cmd);
 	memset (cmd, 0, sizeof (cmd));
 	memset (grouped, 0, sizeof (grouped));
@@ -382,7 +462,9 @@ void QN_Menu_JoinDraw (void)
 	cx = 152 + (n + (n ? (n - 1) / 4 : 0)) * 8;
 	M_DrawCharacter (cx, 56, 10 + ((int)(realtime*4)&1));
 
-	if (m_return_reason[0])
+	if (QN_JoinCauseText ())
+		M_PrintWhite (40, 80, QN_JoinCauseText ());
+	else if (m_return_reason[0])
 		M_PrintWhite (64, 80, m_return_reason);
 	else if (qn_join_note && realtime - qn_join_note_time < 4.0)
 		M_PrintWhite (64, 80, qn_join_note);
