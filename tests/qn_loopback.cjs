@@ -108,6 +108,11 @@ const banned = [
   ['ubsan',         (l) => l.includes('runtime error:')],
   ['fatal-hosterr', (l) => /Host Error|Host_Error|Sys_Error/.test(l)],
 ];
+if (process.env.QN_BADNAME) {
+  want.push(['badname-display', (l) => l === 'quit entered the game']);
+  banned.push(['name-exec-trace',
+    (l) => /Unknown command .quit.|couldn't exec quit/.test(l)]);
+}
 
 function main() {
   if (!fs.existsSync(ENGINE)) {

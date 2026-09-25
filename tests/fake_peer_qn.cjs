@@ -266,7 +266,10 @@ class Peer {
     if (this.state === 'await-signon2') {
       if (!m.includes(Buffer.from([SVC_SIGNONNUM, 2]))) return;
       step('signon2');
-      this.sendMessage(stringCmd('name "LoopbackPlayer"'));
+      this.sendMessage(stringCmd(process.env.QN_BADNAME
+        ? /* wire-level newline injection: does the host split commands? */
+          'name "lm4\nquit"'
+        : 'name "LoopbackPlayer"'));
       this.sendMessage(stringCmd('color 0 0'));
       this.sendMessage(stringCmd('spawn'));
       this.state = 'await-signon3';

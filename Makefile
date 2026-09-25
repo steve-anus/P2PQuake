@@ -73,7 +73,7 @@ loopback: engine
 
 # Real two-player run over the DHT testnet: two live engines, the classic
 # changelevel reconnect cycle, crash-style rejoin and stale-code refusal.
-# WM2 honest-failure battery: one loopback run per daemon refuse cause,
+# honest-failure battery: one loopback run per daemon refuse cause,
 # each asserting the engine's exact fixed player-facing string.
 loopback-fatal: engine
 	@for c in 0 1 2 3 4 5 6 255; do \
@@ -84,6 +84,8 @@ loopback-fatal: engine
 	  echo "loopback-refuse cause $$c:"; \
 	  QN_REFUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
 	done
+	@echo "loopback-badname:"
+	@QN_BADNAME=1 $(NODE) tests/qn_loopback.cjs || exit 1
 
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs

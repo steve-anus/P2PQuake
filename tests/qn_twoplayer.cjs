@@ -26,6 +26,13 @@ const ENGINE = process.env.QN_ENGINE ||
   path.join(ROOT, 'src', 'vendor', 'quakespasm', 'Quake', 'quakespasm');
 const PEER = path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
 const GAMEDATA = process.env.QN_GAMEDATA || path.join(ROOT, 'gamedata');
+// The engine rebuilds com_cmdline (and Cmd_StuffCmds_f parses THAT) with
+// a hard 256-char cap: overrunning it silently drops later +cmds, so the
+// launch string stays on relative paths whenever the cwd allows.
+const relIfShorter = (p) => {
+  const r = path.relative(process.cwd(), p);
+  return (!r.startsWith('..') && r.length < p.length) ? r : p;
+};
 const createTestnet = require('hyperdht/testnet');
 const { makeRelayNode } = require('../src/peer/qn-relay.cjs');
 
@@ -34,6 +41,16 @@ let baseRef = null;
 let relayNodeRef = null;
 
 const CROCK = new Set('0123456789ABCDEFGHJKMNPQRSTVWXYZ');
+const LANE_TMP = 'qn-lane-tmp';
+
+// Name-fuzz payloads: a name is data, never executable.
+// Alice carries the format-spec and command-text classes (the newline
+// class lives in the wire-level crafted-client lane, not argv). Bob's
+// name is a unique sentinel: it must arrive verbatim, proving cfg
+// delivery for every joiner. A same-name PAIR is not reachable with the
+// fixed roster here; plane-B refusals key on the pubkey, not the name.
+const NAME_A = process.env.QN_T_A || '%s%n;exec llama';
+const NAME_B = process.env.QN_T_B || 'QnBobDup';
 
 function validJoinCode(s) {
   const parts = s.split('-');
@@ -78,7 +95,7 @@ class Engine {
                  SDL_AUDIODRIVER: 'dummy', ...env },
           stdio: ['pipe', 'pipe', 'pipe'],
         })
-      : spawn('stdbuf', ['-oL', ENGINE, ...args], {
+      : spawn('stdbuf', ['-oL', relIfShorter(ENGINE), ...args], {
           detached: true,
       env: { ...process.env, SDL_VIDEODRIVER: 'offscreen',
                  SDL_AUDIODRIVER: 'dummy', ...env },
@@ -224,6 +241,7 @@ async function main() {
   // The engine persists console state to basedir/id1; never inherit it.
   try { fs.rmSync(path.join(GAMEDATA, 'id1', 'config.cfg'), { force: true }); } catch (e) { /* fresh */ }
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'qn2p-'));
+  try { fs.rmSync(path.join(GAMEDATA, 'id1', LANE_TMP), { recursive: true, force: true }); } catch (e) { /* stale */ }
   baseRef = base;
   let tnet = null;
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -267,18 +285,31 @@ async function main() {
     if (relayNode) relayNode.close().catch(() => {});
     cleanup();
     if (code !== 0) for (const p of procs) if (p.dump) console.log(p.dump());
-    if (code === 0) { try { fs.rmSync(base, { recursive: true, force: true }); } catch (e) { /* tmp */ } }
+    if (code === 0) {
+      try { fs.rmSync(base, { recursive: true, force: true }); } catch (e) { /* tmp */ }
+      try { fs.rmSync(path.join(GAMEDATA, 'id1', LANE_TMP), { recursive: true, force: true }); } catch (e) { /* tmp */ }
+    }
     else console.log('BASE kept at ' + base);
     tnet.destroy().catch(() => {});
     console.log(msg);
     process.exit(code);
   };
 
+  let peerLink = null;
+  const peerArg = () => {
+    if (!peerLink) {
+      peerLink = path.join(base, 'p.cjs');
+      try { fs.unlinkSync(peerLink); } catch (e) { /* none */ }
+      fs.symlinkSync(PEER, peerLink);
+    }
+    return peerLink;
+  };
   const guard = setTimeout(() => finish(1, 'TWPLAYER FAIL: global budget'), 420000);
 
   const host = new Engine('host', path.join(base, 'host'),
-    ['-qn', '-qn-peer', PEER, '-qn-dir', path.join(base, 'host'),
-     '-basedir', GAMEDATA, '-dedicated', '+listen', '+map', 'lqdm1'], env, { pty: true });
+    ['-qn', '-qn-peer', peerArg(), '-qn-dir', path.join(base, 'host'),
+     '-basedir', relIfShorter(GAMEDATA), '-dedicated', '+listen', '+map', 'lqdm1'],
+    env, { pty: true });
   procs.push(host);
 
   const codeLine = await host.expect(
@@ -286,9 +317,26 @@ async function main() {
   const code = codeLine.slice('Join code: '.length).trim();
   if (!validJoinCode(code)) throw new Error('join code malformed: ' + codeLine);
 
+  // Name delivery via cfg file: the boot +cmd collector (Cmd_StuffCmds_f)
+  // treats '+', '-' and ';' as structural, so hostile payloads cannot ride
+  // argv values (local-launch semantics, not the wire class under test).
+  // The cfg tokenizer honors quotes; the resulting cvar bytes are identical.
+  const nameCfg = (dir, name) => {
+    const d = path.join(GAMEDATA, 'id1', LANE_TMP);
+    fs.mkdirSync(d, { recursive: true });
+    const f = path.join(d, `qnname-${path.basename(dir)}.cfg`);
+    fs.writeFileSync(f, `_cl_name "${name}"\necho QNCFGOK\n`);
+    return `${LANE_TMP}/qnname-${path.basename(dir)}.cfg`;
+  };
+  // No hostile bytes ever ride argv: the +cmd collector treats '+',
+  // '-' and ';' inside values as structural (Cmd_StuffCmds_f). The
+  // hostile bytes ride the cfg (its tokenizer honors quotes); the cfg
+  // itself carries the QNCFGOK attestation echo, and the host-console
+  // verbatim display below proves the delivered cvar bytes.
   const clientArgs = (name, dir) =>
-    ['-qn', '-qn-peer', PEER, '-qn-dir', dir, '-basedir', GAMEDATA,
-     '+name', name, '+connect', `qn:${code}`];
+    ['-qn', '-qn-peer', peerArg(), '-qn-dir', dir,
+     '-basedir', relIfShorter(GAMEDATA),
+     '+exec', nameCfg(dir, name), '+connect', `qn:${code}`];
 
   // Respawn rotates the persistent identity (identity.key lives in the
   // engine dir): the host's room keeps a stalled member until its ping
@@ -301,8 +349,8 @@ async function main() {
     procs.push(e);
     return e;
   };
-  const mkAlice = (respawn) => mkEngine('QnAlice', 'QnAlice', path.join(base, 'cl1'), respawn);
-  const mkBob = (respawn) => mkEngine('QnBob', 'QnBob', path.join(base, 'cl2'), respawn);
+  const mkAlice = (respawn) => mkEngine('QnAlice', NAME_A, path.join(base, 'cl1'), respawn);
+  const mkBob = (respawn) => mkEngine('QnBob', NAME_B, path.join(base, 'cl2'), respawn);
   let alice = mkAlice(false);
   let bob = mkBob(false);
 
@@ -313,8 +361,8 @@ async function main() {
     await c.expect((l) => l.trim() === 'qn-peer: client: roster v2',
       'roster v2', JOIN_TIMEOUT);
   }
-  alice = await waitSpawn(host, () => mkAlice(true), 'QnAlice', alice);
-  bob = await waitSpawn(host, () => mkBob(true), 'QnBob', bob);
+  alice = await waitSpawn(host, () => mkAlice(true), NAME_A, alice);
+  bob = await waitSpawn(host, () => mkBob(true), NAME_B, bob);
 
   await new Promise((r) => setTimeout(r, 10000)); // soak: banned lines would land
 
@@ -341,10 +389,10 @@ async function main() {
     'Bob in-game on lqdm2', REJOIN_TIMEOUT);
 
   // Bob exits (killed; the host notices via the daemon's plane-A EOF).
-  const removedB0 = host.count((l) => l.includes('Client QnBob removed'));
+  const removedB0 = host.count((l) => l.includes(`Client ${NAME_B} removed`));
   bob.kill();
-  await host.expect((l) => l.includes('Client QnBob removed') &&
-    host.count((x) => x.includes('Client QnBob removed')) > removedB0,
+  await host.expect((l) => l.includes(`Client ${NAME_B} removed`) &&
+    host.count((x) => x.includes(`Client ${NAME_B} removed`)) > removedB0,
     'bob slot released', 120000);
 
   // Crash-style rejoin with the same qn-dir keeps the same identity: the
@@ -352,13 +400,13 @@ async function main() {
   // Solo shape: crash-rejoin with a resident second player trips a
   // server-side freed-edict defect.
   const removedBefore = host.count(
-    (l) => l.includes('Client QnAlice removed'));
+    (l) => l.includes(`${NAME_A} removed`));
   alice.kill();
-  await host.expect((l) => l.includes('Client QnAlice removed') &&
-    host.count((x) => x.includes('Client QnAlice removed')) > removedBefore,
+  await host.expect((l) => l.includes(`${NAME_A} removed`) &&
+    host.count((x) => x.includes(`${NAME_A} removed`)) > removedBefore,
     'host slot release after crash', 120000);
-  const rejoinMin = enterCount('QnAlice') + 1;
-  let alice2 = mkEngine('QnAlice#2', 'QnAlice', path.join(base, 'cl1'), false);
+  const rejoinMin = enterCount(NAME_A) + 1;
+  let alice2 = mkEngine('QnAlice#2', NAME_A, path.join(base, 'cl1'), false);
   {
     // Same stall family as waitSpawn: a first-connection key-bind stall can
     // outlive the engine's CL budget during alice2's boot; restart the
@@ -367,7 +415,7 @@ async function main() {
     let nextCheck = Date.now() + 20000, respawns = 0;
     for (;;) {
       const joinedOk = alice2.lines.some((l) => l.includes('client: joined'));
-      const enteredOk = enterCount('QnAlice') >= rejoinMin;
+      const enteredOk = enterCount(NAME_A) >= rejoinMin;
       if (enteredOk) break;
       const now = Date.now();
       if (now > deadline) {
@@ -379,7 +427,7 @@ async function main() {
         nextCheck = now + 18000;
         console.log(`qn2p: rejoin stalled; engine respawn #${respawns}`);
         try { alice2.kill(); } catch (e) { /* already gone */ }
-        alice2 = mkEngine('QnAlice#2', 'QnAlice', path.join(base, 'cl1'), true);
+        alice2 = mkEngine('QnAlice#2', NAME_A, path.join(base, 'cl1'), true);
       }
       await new Promise((r) => setTimeout(r, 300));
     }
@@ -425,8 +473,40 @@ async function main() {
     }
   }
 
+  // Hostile names sit verbatim in the host console and executed
+  // nothing; the join code never left its sanctioned host display line.
+  if (!host.lines.some((l) => l.includes(`${NAME_A} entered the game`)))
+    return finish(1, 'TWPLAYER FAIL: hostile name not displayed verbatim');
+  for (const p of [alice, bob])
+    if (!p.lines.some((l) => l.includes('execing qn-lane-tmp/')) ||
+        !p.lines.some((l) => l.includes('QNCFGOK')))
+      return finish(1, `TWPLAYER FAIL: name cfg not attested in ${p.name}`);
+  // Detectors use this engine's real strings ('couldn't exec X',
+  // 'Unknown command "X"'); payload-derived so boot cvar noise cannot
+  // self-trip. The sv_user 'tried to' arm is Con_DPrintf-only and dead
+  // unless developer is set: an honest client only sends whitelisted
+  // stringcmds, so it is unreachable here and deliberately not asserted.
+  for (const p of procs)
+    for (const l of p.lines)
+      if (/couldn't exec llama|Unknown command "%s|Unknown command "llama|Unknown command "exec/i.test(l))
+        return finish(1, `TWPLAYER FAIL: name-execution trace in ${p.name}: ${l}`);
+  const hex = code.replace(/-/g, '').toLowerCase();
+  let codeLines = 0;
+  for (const l of host.lines) if (l.startsWith('Join code: ')) codeLines++;
+  if (codeLines !== 1)
+    return finish(1, `TWPLAYER FAIL: join code display count ${codeLines}`);
+  // The engine echoes its own argv at boot; the lane dials via argv (the
+  // developer surface). The shipped pad path never places the code in
+  // argv or console text, and every other joiner line must be code-free.
+  for (const p of procs)
+    for (const l of p.lines)
+      if (!l.startsWith('Command line:') &&
+          !(p === host && l.startsWith('Join code: ')) &&
+          l.replace(/-/g, '').toLowerCase().includes(hex))
+        return finish(1, `TWPLAYER FAIL: join code leaked in ${p.name}`);
+
   clearTimeout(guard);
-  console.log(`TWPLAYER OK: join x2, roster v2 x2, spawn x2, rejoin, stale-code refusal (${all.length} engines, ${all.reduce((n, p) => n + p.lines.length, 0)} console lines)`);
+  console.log(`TWPLAYER OK: join x2, roster v2 x2, spawn x2, rejoin, stale-code refusal, name-fuzz + redaction (${all.length} engines, ${all.reduce((n, p) => n + p.lines.length, 0)} console lines)`);
   finish(0, 'TWPLAYER OK');
 }
 

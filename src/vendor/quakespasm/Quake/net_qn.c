@@ -338,7 +338,15 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 	argv[i++] = (char *) dir;
 	if (name != NULL && *name != '\0')
 	{
+		char	*q;
+
+		/* the daemon contract is printable <= 20; out-of-band bytes
+		 * mask to dots exactly as the roster display does */
 		q_strlcpy (nm, name, sizeof (nm));
+		nm[20] = '\0';
+		for (q = nm; *q; q++)
+			if (*q < ' ' || (unsigned char) *q > '~')
+				*q = '.';
 		argv[i++] = "--name";
 		argv[i++] = nm;
 	}
