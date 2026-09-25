@@ -200,7 +200,7 @@ QNDIR = ../../../driver
 vpath %.c $(QNDIR)
 CFLAGS += -I$(QNDIR)
 SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
-	qn_stext.o qn_pad.o qn_menu.o
+	qn_stext.o qn_pad.o qn_causes.o qn_menu.o
 SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o
 SYSOBJ_MAIN= main_sdl.o
 

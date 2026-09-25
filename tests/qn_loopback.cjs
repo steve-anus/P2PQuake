@@ -66,8 +66,21 @@ if (process.env.QN_FUZZ) {
   want.push(['srvinfo-probe', (l) => l === 'LBSTEP srvinfo-probe ok']);
   want.push(['playerinfo-probe', (l) => l === 'LBSTEP playerinfo-probe ok']);
 }
-if (process.env.QN_FATAL)
-  want.push(['daemon-fatal', (l) => l.includes('daemon FATAL (cause 4)')]);
+if (process.env.QN_FATAL) {
+  const fatalCause = parseInt(process.env.QN_FATAL_CAUSE || '4', 10);
+  const FATAL_TEXT = {
+    0: 'peer left',
+    1: 'session key rejected',
+    2: 'internal service error',
+    3: 'local service closed the session',
+    4: 'connection to host lost',
+    5: 'host signature rejected',
+    6: 'suspected interference; session reset',
+  };
+  want.push(['daemon-fatal', (l) => l.includes(
+    `daemon FATAL (cause ${fatalCause}): ` +
+    (FATAL_TEXT[fatalCause] ?? 'session ended unexpectedly'))]);
+}
 if (process.env.QN_REDIAL_CHURN)
   want.push(['churn-done', (l) => l === 'LBSTEP churn-done ok']);
 const banned = [

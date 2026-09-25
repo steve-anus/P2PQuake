@@ -64,4 +64,11 @@ void QN_Pump (unsigned long long now_ms);
  * console only through here; the allowlist predicate is qn_stext.h. */
 void QN_StufftextFromGame (const char *line);
 
+/* Join-page honest failure surface: the landriver remembers the last
+ * daemon FATAL cause seen on a joiner lane as a fixed literal
+ * (qn_causes.h, spec 6.3). Valid from that FATAL until the next qn: dial
+ * attempt. */
+const char *QN_JoinCauseText (void);		/* fixed literal or NULL */
+void QN_JoinAttemptReset (void);
+
 #endif	/* __net_qn_h */
