@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "filenames.h"
+#include "net_qn.h"
 #ifndef _WIN32
 #include <dirent.h>
 #endif
@@ -2409,6 +2410,7 @@ void Host_InitCommands (void)
 	Cmd_AddCommand ("randmap", Host_Randmap_f); //ericw
 
 	Cmd_AddCommand ("status", Host_Status_f);
+	Cmd_AddCommand ("qn_status", QN_Status_f);
 	Cmd_AddCommand ("quit", Host_Quit_f);
 	Cmd_AddCommand ("god", Host_God_f);
 	Cmd_AddCommand ("notarget", Host_Notarget_f);

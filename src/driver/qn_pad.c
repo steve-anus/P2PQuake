@@ -1,5 +1,6 @@
 /* qn_pad.c -- menu field sanitizer: code = 16 Crockford chars, name =
- * printable ASCII <=20. Every write site clamps. */
+ * printable ASCII (wire contract <=20; the editor caps at 15).
+ * Every write site clamps. */
 
 #include <string.h>
 

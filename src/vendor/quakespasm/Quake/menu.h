@@ -31,7 +31,6 @@ enum m_state_e {
 	m_save,
 	m_multiplayer,
 	m_setup,
-	m_net,
 	m_options,
 	m_video,
 	m_keys,

@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "qn_menu.h"
+#include "qn_pad.h"
 
 void (*vid_menucmdfn)(void); //johnfitz
 void (*vid_menudrawfn)(void);
@@ -36,7 +37,6 @@ void M_Menu_Main_f (void);
 		void M_Menu_Save_f (void);
 	void M_Menu_MultiPlayer_f (void);
 		void M_Menu_Setup_f (void);
-		void M_Menu_Net_f (void);
 		void M_Menu_LanConfig_f (void);
 		void M_Menu_GameOptions_f (void);
 		void M_Menu_Search_f (void);
@@ -53,7 +53,6 @@ void M_Main_Draw (void);
 		void M_Save_Draw (void);
 	void M_MultiPlayer_Draw (void);
 		void M_Setup_Draw (void);
-		void M_Net_Draw (void);
 		void M_LanConfig_Draw (void);
 		void M_GameOptions_Draw (void);
 		void M_Search_Draw (void);
@@ -70,7 +69,6 @@ void M_Main_Key (int key);
 		void M_Save_Key (int key);
 	void M_MultiPlayer_Key (int key);
 		void M_Setup_Key (int key);
-		void M_Net_Key (int key);
 		void M_LanConfig_Key (int key);
 		void M_GameOptions_Key (int key);
 		void M_Search_Key (int key);
@@ -89,10 +87,10 @@ enum m_state_e	m_return_state;
 qboolean	m_return_onerror;
 char		m_return_reason [32];
 
-#define StartingGame	(m_multiplayer_cursor == 1)
-#define JoiningGame		(m_multiplayer_cursor == 0)
-#define	IPXConfig		(m_net_cursor == 0)
-#define	TCPIPConfig		(m_net_cursor == 1)
+/* LAN pages are console-only: the browser (menu_serverlist) covers
+ * joining, so the config page always opens as a new-game host */
+#define StartingGame	(true)
+#define JoiningGame		(false)
 
 void M_ConfigureNetSubsystem(void);
 
@@ -603,7 +601,7 @@ void M_Save_Key (int k)
 /* MULTIPLAYER MENU */
 
 int	m_multiplayer_cursor;
-#define	MULTIPLAYER_ITEMS	5
+#define	MULTIPLAYER_ITEMS	3
 
 
 void M_Menu_MultiPlayer_f (void)
@@ -612,6 +610,8 @@ void M_Menu_MultiPlayer_f (void)
 	key_dest = key_menu;
 	m_state = m_multiplayer;
 	m_entersound = true;
+	if (m_multiplayer_cursor < 0 || m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
+		m_multiplayer_cursor = 0;
 }
 
 
@@ -619,18 +619,23 @@ void M_MultiPlayer_Draw (void)
 {
 	int		f;
 	qpic_t	*p;
+	const char	*items[3] = { "Host game", "Join game", "Setup" };
+	int	i;
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/p_multi.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
-	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/mp_menu.lmp") );
+
+	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
+		M_Print ((320 - (int)strlen(items[i]) * 8) / 2, 32 + i * 20, items[i]);
 
 	f = (int)(realtime * 10)%6;
-
-	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
-
-	M_Print (90, 92, "Host p2pquake");
-	M_Print (90, 112, "Join p2pquake");
+	{
+		int	dx = (320 - (int)strlen(items[m_multiplayer_cursor]) * 8) / 2 - 26;
+		if (dx < 4)
+			dx = 4;
+		M_DrawTransPic (dx, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
+	}
 
 	if (ipxAvailable || tcpipAvailable)
 		return;
@@ -666,33 +671,21 @@ void M_MultiPlayer_Key (int key)
 		switch (m_multiplayer_cursor)
 		{
 		case 0:
-			if (ipxAvailable || tcpipAvailable)
-				M_Menu_Net_f ();
+			IN_Deactivate(modestate == MS_WINDOWED);
+			key_dest = key_menu;
+			m_state = m_qn_host;
+			QN_Menu_HostInit ();
 			break;
 
 		case 1:
-			if (ipxAvailable || tcpipAvailable)
-				M_Menu_Net_f ();
+			IN_Deactivate(modestate == MS_WINDOWED);
+			key_dest = key_menu;
+			m_state = m_qn_join;
+			QN_Menu_JoinInit ();
 			break;
 
 		case 2:
 			M_Menu_Setup_f ();
-			break;
-
-		case 3:
-			IN_Deactivate(modestate == MS_WINDOWED);
-			key_dest = key_menu;
-			m_state = m_qn_host;
-			m_entersound = true;
-			QN_Menu_HostInit ();
-			break;
-
-		case 4:
-			IN_Deactivate(modestate == MS_WINDOWED);
-			key_dest = key_menu;
-			m_state = m_qn_join;
-			m_entersound = true;
-			QN_Menu_JoinInit ();
 			break;
 		}
 	}
@@ -719,8 +712,8 @@ void M_Menu_Setup_f (void)
 	key_dest = key_menu;
 	m_state = m_setup;
 	m_entersound = true;
-	Q_strcpy(setup_myname, cl_name.string);
-	Q_strcpy(setup_hostname, hostname.string);
+	q_strlcpy(setup_myname, cl_name.string, sizeof(setup_myname));
+	q_strlcpy(setup_hostname, hostname.string, sizeof(setup_hostname));
 	setup_top = setup_oldtop = ((int)cl_color.value) >> 4;
 	setup_bottom = setup_oldbottom = ((int)cl_color.value) & 15;
 }
@@ -816,8 +809,8 @@ forward:
 			goto forward;
 
 		// setup_cursor == 4 (OK)
-		if (Q_strcmp(cl_name.string, setup_myname) != 0)
-			Cbuf_AddText ( va ("name \"%s\"\n", setup_myname) );
+		if (setup_myname[0] && Q_strcmp(cl_name.string, setup_myname) != 0)
+			Cvar_Set ("_cl_name", setup_myname);
 		if (Q_strcmp(hostname.string, setup_hostname) != 0)
 			Cvar_Set("hostname", setup_hostname);
 		if (setup_top != setup_oldtop || setup_bottom != setup_oldbottom)
@@ -856,6 +849,9 @@ void M_Setup_Char (int k)
 {
 	int l;
 
+	if (!QN_PadNameCharOk ((char)k))	/* charset + caps at the write site */
+		return;
+
 	switch (setup_cursor)
 	{
 	case 0:
@@ -881,114 +877,6 @@ void M_Setup_Char (int k)
 qboolean M_Setup_TextEntry (void)
 {
 	return (setup_cursor == 0 || setup_cursor == 1);
-}
-
-//=============================================================================
-/* NET MENU */
-
-int	m_net_cursor;
-int m_net_items;
-
-const char *net_helpMessage [] =
-{
-/* .........1.........2.... */
-  " Novell network LANs    ",
-  " or Windows 95 DOS-box. ",
-  "                        ",
-  "(LAN=Local Area Network)",
-
-  " Commonly used to play  ",
-  " over the Internet, but ",
-  " also used on a Local   ",
-  " Area Network.          "
-};
-
-void M_Menu_Net_f (void)
-{
-	IN_Deactivate(modestate == MS_WINDOWED);
-	key_dest = key_menu;
-	m_state = m_net;
-	m_entersound = true;
-	m_net_items = 2;
-
-	if (m_net_cursor >= m_net_items)
-		m_net_cursor = 0;
-	m_net_cursor--;
-	M_Net_Key (K_DOWNARROW);
-}
-
-
-void M_Net_Draw (void)
-{
-	int		f;
-	qpic_t	*p;
-
-	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
-	p = Draw_CachePic ("gfx/p_multi.lmp");
-	M_DrawPic ( (320-p->width)/2, 4, p);
-
-	f = 32;
-
-	if (ipxAvailable)
-		p = Draw_CachePic ("gfx/netmen3.lmp");
-	else
-		p = Draw_CachePic ("gfx/dim_ipx.lmp");
-	M_DrawTransPic (72, f, p);
-
-	f += 19;
-	if (tcpipAvailable)
-		p = Draw_CachePic ("gfx/netmen4.lmp");
-	else
-		p = Draw_CachePic ("gfx/dim_tcp.lmp");
-	M_DrawTransPic (72, f, p);
-
-	f = (320-26*8)/2;
-	M_DrawTextBox (f, 96, 24, 4);
-	f += 8;
-	M_Print (f, 104, net_helpMessage[m_net_cursor*4+0]);
-	M_Print (f, 112, net_helpMessage[m_net_cursor*4+1]);
-	M_Print (f, 120, net_helpMessage[m_net_cursor*4+2]);
-	M_Print (f, 128, net_helpMessage[m_net_cursor*4+3]);
-
-	f = (int)(realtime * 10)%6;
-	M_DrawTransPic (54, 32 + m_net_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
-}
-
-
-void M_Net_Key (int k)
-{
-again:
-	switch (k)
-	{
-	case K_ESCAPE:
-	case K_BBUTTON:
-		M_Menu_MultiPlayer_f ();
-		break;
-
-	case K_DOWNARROW:
-		S_LocalSound ("misc/menu1.wav");
-		if (++m_net_cursor >= m_net_items)
-			m_net_cursor = 0;
-		break;
-
-	case K_UPARROW:
-		S_LocalSound ("misc/menu1.wav");
-		if (--m_net_cursor < 0)
-			m_net_cursor = m_net_items - 1;
-		break;
-
-	case K_ENTER:
-	case K_KP_ENTER:
-	case K_ABUTTON:
-		m_entersound = true;
-		M_Menu_LanConfig_f ();
-		break;
-	}
-
-	if (m_net_cursor == 0 && !ipxAvailable)
-		goto again;
-	if (m_net_cursor == 1 && !tcpipAvailable)
-		goto again;
 }
 
 //=============================================================================
@@ -1751,14 +1639,7 @@ void M_Menu_LanConfig_f (void)
 	key_dest = key_menu;
 	m_state = m_lanconfig;
 	m_entersound = true;
-	if (lanConfig_cursor == -1)
-	{
-		if (JoiningGame && TCPIPConfig)
-			lanConfig_cursor = 2;
-		else
-			lanConfig_cursor = 1;
-	}
-	if (StartingGame && lanConfig_cursor == 2)
+	if (lanConfig_cursor == -1 || lanConfig_cursor == 2)
 		lanConfig_cursor = 1;
 	lanConfig_port = DEFAULTnet_hostport;
 	sprintf(lanConfig_portname, "%u", lanConfig_port);
@@ -1782,22 +1663,13 @@ void M_LanConfig_Draw (void)
 
 	basex = 72; /* Arcane Dimensions has an oversized gfx/p_multi.lmp */
 
-	if (StartingGame)
-		startJoin = "New Game";
-	else
-		startJoin = "Join Game";
-	if (IPXConfig)
-		protocol = "IPX";
-	else
-		protocol = "TCP/IP";
+	startJoin = "New Game";
+	protocol = "TCP/IP";
 	M_Print (basex, 32, va ("%s - %s", startJoin, protocol));
 	basex += 8;
 
 	M_Print (basex, 52, "Address:");
-	if (IPXConfig)
-		M_Print (basex+9*8, 52, my_ipx_address);
-	else
-		M_Print (basex+9*8, 52, my_tcpip_address);
+	M_Print (basex+9*8, 52, my_tcpip_address);
 
 	M_Print (basex, lanConfig_cursor_table[0], "Port");
 	M_DrawTextBox (basex+8*8, lanConfig_cursor_table[0]-8, 6, 1);
@@ -1837,7 +1709,7 @@ void M_LanConfig_Key (int key)
 	{
 	case K_ESCAPE:
 	case K_BBUTTON:
-		M_Menu_Net_f ();
+		M_Menu_MultiPlayer_f ();
 		break;
 
 	case K_UPARROW:
@@ -2349,7 +2221,7 @@ void M_GameOptions_Key (int key)
 	{
 	case K_ESCAPE:
 	case K_BBUTTON:
-		M_Menu_Net_f ();
+		M_Menu_MultiPlayer_f ();
 		break;
 
 	case K_UPARROW:
@@ -2583,6 +2455,8 @@ void M_Init (void)
 	Cmd_AddCommand ("help", M_Menu_Help_f);
 	Cmd_AddCommand ("menu_quit", M_Menu_Quit_f);
 	Cmd_AddCommand ("menu_credits", M_Menu_Credits_f); // needed by the 2021 re-release
+	Cmd_AddCommand ("menu_lanconfig", M_Menu_LanConfig_f);
+	Cmd_AddCommand ("menu_serverlist", M_Menu_ServerList_f);
 }
 
 
@@ -2635,10 +2509,6 @@ void M_Draw (void)
 
 	case m_setup:
 		M_Setup_Draw ();
-		break;
-
-	case m_net:
-		M_Net_Draw ();
 		break;
 
 	case m_options:
@@ -2733,10 +2603,6 @@ void M_Keydown (int key)
 		M_Setup_Key (key);
 		return;
 
-	case m_net:
-		M_Net_Key (key);
-		return;
-
 	case m_options:
 		M_Options_Key (key);
 		return;
@@ -2829,7 +2695,7 @@ void M_ConfigureNetSubsystem(void)
 // enable/disable net systems to match desired config
 	Cbuf_AddText ("stopdemo\n");
 
-	if (IPXConfig || TCPIPConfig)
+	if (lanConfig_port > 0)		/* empty field keeps the default */
 		net_hostport = lanConfig_port;
 }
 

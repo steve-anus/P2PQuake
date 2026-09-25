@@ -46,6 +46,7 @@
 #include "qn_spawn.h"
 #include "qn_stext.h"
 #include "qn_transport.h"
+#include "qn_buildid.h"
 
 #include "net_qn.h"
 
@@ -1484,6 +1485,27 @@ int QN_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 int QN_Broadcast (sys_socket_t socketid, byte *buf, int len)
 {
 	return 0;	/* LAN discovery belongs to the UDP landriver */
+}
+
+static const char *QN_state_text (void)
+{
+	switch (qn_state)
+	{
+	case QN_OFF:		return "off";
+	case QN_STANDBY:	return "standby";
+	default:		return "running";
+	}
+}
+
+void QN_Status_f (void)
+{
+	Con_Printf ("qn engine build %s\n", QN_BUILD_ID);
+	Con_Printf ("state %s\n", QN_state_text ());
+	Con_Printf ("host lane %s\n", qn_host_lane_up ? "up" : "down");
+	Con_Printf ("client lane %s\n", qn_client_lane_up ? "up" : "down");
+	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");
+	if (qn_last_note)
+		Con_Printf ("last note: %s\n", qn_last_note);
 }
 
 const char *QN_AddrToString (struct qsockaddr *addr)

@@ -29,6 +29,7 @@ void QN_Listen (qboolean state);
 /* Grouped join code for the host page (spec 5.1 display surface), or ""
  * when no room is currently announced. */
 const char *QN_JoinCodeText (void);
+void QN_Status_f (void);
 sys_socket_t  QN_OpenSocket (int port);
 int  QN_CloseSocket (sys_socket_t socketid);
 int  QN_Connect (sys_socket_t socketid, struct qsockaddr *addr);
