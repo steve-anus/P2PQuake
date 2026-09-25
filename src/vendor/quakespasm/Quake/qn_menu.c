@@ -20,6 +20,7 @@
 #include "net_qn.h"
 #include "qn_menu.h"
 #include "qn_pad.h"
+#include "qn_maps.h"
 
 extern void IN_Activate (void);
 extern qboolean m_return_onerror;
@@ -70,6 +71,16 @@ static qboolean QN_HostNameOk (const char *s)
 	return n < QN_HOST_MAPNAME_LEN;
 }
 
+static int qn_cmp_story (const void *a, const void *b)
+{
+	return QN_MapCompareStory ((const char *) a, (const char *) b);
+}
+
+static int qn_cmp_dm (const void *a, const void *b)
+{
+	return QN_MapCompareDm ((const char *) a, (const char *) b);
+}
+
 static void QN_HostBuildMaps (void)
 {
 	const filelist_item_t	*it;
@@ -82,6 +93,9 @@ static void QN_HostBuildMaps (void)
 			break;
 		if (!QN_HostNameOk (it->name))
 			continue;
+		if (!QN_MapInPool (it->name,
+		                   qn_host_mode ? QN_POOL_COOP : QN_POOL_DM))
+			continue;
 		for (i = 0; i < qn_host_mapcount; i++)
 			if (!q_strcasecmp (qn_host_maps[i], it->name))
 				break;
@@ -91,7 +105,11 @@ static void QN_HostBuildMaps (void)
 		           QN_HOST_MAPNAME_LEN);
 		qn_host_mapcount++;
 	}
-	if (qn_host_map >= qn_host_mapcount)
+	if (qn_host_mapcount > 1)
+		qsort (qn_host_maps, (size_t) qn_host_mapcount,
+		       sizeof (qn_host_maps[0]),
+		       qn_host_mode ? qn_cmp_story : qn_cmp_dm);
+	if (qn_host_map >= qn_host_mapcount || qn_host_map < 0)
 		qn_host_map = 0;
 }
 
@@ -119,6 +137,7 @@ static void QN_HostChange (int dir)
 	{
 	case QN_H_ITEM_MODE:
 		qn_host_mode = !qn_host_mode;
+		QN_HostBuildMaps ();	/* re-filter; clamps the map cursor */
 		break;
 	case QN_H_ITEM_MAP:
 		if (!qn_host_mapcount)
@@ -157,9 +176,16 @@ static void QN_HostStart (void)
 
 	if (sv.active)
 		return;
+	QN_HostBuildMaps ();	/* the pak/game dir may have moved under us */
 	if (!qn_host_mapcount || qn_host_map >= qn_host_mapcount)
 	{
 		QN_HostNote ("no playable maps found in gamedata");
+		return;
+	}
+	if (!QN_MapInPool (qn_host_maps[qn_host_map],
+	                   qn_host_mode ? QN_POOL_COOP : QN_POOL_DM))
+	{
+		QN_HostNote ("map not available for this game type");
 		return;
 	}
 	/* Fixed command texts only. listen 0 first so the port and every
