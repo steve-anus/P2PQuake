@@ -22,4 +22,14 @@ int QN_MapInPool (const char *name, qn_map_pool_t pool);
 int QN_MapCompareStory (const char *a, const char *b);
 int QN_MapCompareDm (const char *a, const char *b);
 
+/* Player ceilings per mode: co-op fills 1..4 including the host,
+ * deathmatch 2..16 (never solo DM). A below-mode hw (engine
+ * svs.maxclientslimit) never lowers a mode's minimum: the page must
+ * not offer counts the start queue could not honour downwards. */
+#define QN_PLAYERS_COOP_MAX	4
+#define QN_PLAYERS_DM_MAX	16
+int QN_PlayersLo (qn_map_pool_t pool);
+int QN_PlayersHi (qn_map_pool_t pool, int hw_limit);
+int QN_PlayerBounds (qn_map_pool_t pool, int want, int hw_limit);
+
 #endif	/* QN_MAPS_H */

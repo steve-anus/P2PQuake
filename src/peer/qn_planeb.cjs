@@ -21,7 +21,7 @@ const TAG_SIZES = {
     6: [32, 32], 7: [1, 32], 9: [32, 32], 10: [1, 64], 11: [1, 32],
     12: [32, 32] },
   [E.TYPES.JOIN_NO]: { 1: [1, 1] },
-  [E.TYPES.ROSTER]: { 1: [1, 257], 2: [1, 1], 3: [1, 1], 4: [8, 8], 5: [32, 32] },
+  [E.TYPES.ROSTER]: { 1: [1, 513], 2: [1, 1], 3: [1, 1], 4: [8, 8], 5: [32, 32] },
   [E.TYPES.RELAY]: { 1: [32, 32], 2: [1, 1100] },
   [E.TYPES.CHAT]: { 1: [1, 256] },
   [E.TYPES.PING]: { 1: [4, 4] },
@@ -598,7 +598,13 @@ class ClientRoom {
   }
 }
 
+function roomSeats(maxPlayers) {
+  const n = Number.isFinite(maxPlayers)
+    ? Math.max(1, Math.min(maxPlayers, 16)) : 1;
+  return Math.max(0, n - 1);
+}
+
 module.exports = {
-  TAG_SIZES, tagMap, checkTagSizes, isPrintable, inbound,
+  TAG_SIZES, tagMap, checkTagSizes, isPrintable, inbound, roomSeats,
   realClock, Session, HostSession, HostRoom, ClientSession, ClientRoom,
 };

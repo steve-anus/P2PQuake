@@ -127,6 +127,34 @@ static int cmp_dm_v(const void *a, const void *b)
     return QN_MapCompareDm((const char *)a, (const char *)b);
 }
 
+static void test_bounds(void)
+{
+    /* co-op fills 1..4 including the host; deathmatch 2..16 */
+    CHECK(QN_PlayersLo(QN_POOL_COOP) == 1);
+    CHECK(QN_PlayersLo(QN_POOL_DM) == 2);
+    CHECK(QN_PlayersHi(QN_POOL_COOP, 64) == 4);
+    CHECK(QN_PlayersHi(QN_POOL_DM, 64) == 16);
+    /* an engine limit clamps down inside the mode's band */
+    CHECK(QN_PlayersHi(QN_POOL_COOP, 3) == 3);
+    CHECK(QN_PlayersHi(QN_POOL_DM, 9) == 9);
+    /* a below-minimum limit never lowers the mode's floor */
+    CHECK(QN_PlayersHi(QN_POOL_DM, 1) == 16);
+    CHECK(QN_PlayersHi(QN_POOL_DM, 0) == 16);
+    CHECK(QN_PlayersHi(QN_POOL_DM, -5) == 16);
+    CHECK(QN_PlayersHi(QN_POOL_COOP, 0) == 4);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, 0, 64) == 1);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, -999, 64) == 1);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, 5, 64) == 4);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, 2, 64) == 2);
+    CHECK(QN_PlayerBounds(QN_POOL_DM, 1, 64) == 2);
+    CHECK(QN_PlayerBounds(QN_POOL_DM, 17, 64) == 16);
+    CHECK(QN_PlayerBounds(QN_POOL_DM, 16, 64) == 16);
+    CHECK(QN_PlayerBounds(QN_POOL_DM, 100, 9) == 9);
+    CHECK(QN_PlayerBounds(QN_POOL_DM, 1, 1) == 2);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, 7, 3) == 3);
+    CHECK(QN_PlayerBounds(QN_POOL_COOP, 9, 0) == 4);
+}
+
 static void test_order(void)
 {
     char list[64][16];
@@ -245,6 +273,7 @@ int qn_test_maps(int *checks_out)
     failures = 0;
     test_pool();
     test_order();
+    test_bounds();
     *checks_out = checks;
     return failures ? 1 : 0;
 }

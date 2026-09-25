@@ -465,7 +465,7 @@ async function run(opts) {
         if (!okTags) return fatal(2);
         for (const b of map) if (b < 0x20 || b > 0x7e) return fatal(2);
         for (const b of hostname) if (b < 0x20 || b > 0x7e) return fatal(2);
-        return openHostLane(Buffer.from(map), Math.min(maxp[0], 8));
+        return openHostLane(Buffer.from(map), P.roomSeats(maxp[0]));
       }
       case F.TYPES.HOST_DOWN:
         if (lane && lane.role === 'host') destroyLane();
@@ -509,7 +509,7 @@ async function run(opts) {
     }
   };
 
-  const openHostLane = async (map, maxPlayers) => {
+  const openHostLane = async (map, seats) => {
     try {
       const code = R.randomJoinCode();
       redactor.register(code);
@@ -517,7 +517,7 @@ async function run(opts) {
       const memberShas = new Map(); // binary_sha per member: log-only watch
       const room = new P.HostRoom({
         swarm: null, matchId: R.matchIdOf(code), code, keys: opts.keys,
-        identity: opts.identity, map, maxPeers: maxPlayers,
+        identity: opts.identity, map, maxPeers: seats,
         minVersion: { major: E.MAJOR, minor: E.MINOR },
         clock: opts.clock, log,
         epochStart: (() => { const v = opts.epochs.load('host', topic.toString('hex')); return v < 0n ? 0n : v; })(),
@@ -559,7 +559,8 @@ async function run(opts) {
       await disc.flushed(); // only then is the room reachable (and the code displayable)
       if (!lane || lane.swarm !== swarm) return; // torn down while flushing
       a.send(F.TYPES.HOST_READY, F.encodeTLV([[1, code]]));
-      log('host: room open, code delivered to the engine display surface');
+      log('host: room open maxpeers=' + seats
+        + ', code delivered to the engine display surface');
     } catch (e) {
       log('host: room open failed (' + e.name + ')');
       fatal(4);
