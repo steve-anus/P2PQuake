@@ -274,31 +274,40 @@ void QN_Menu_HostDraw (void)
 	p = Draw_CachePic ("gfx/p_multi.lmp");
 	M_DrawPic ((320 - p->width) / 2, 4, p);
 
-	M_Print (64, 56, "        Game Type");
-	M_Print (160, 56, qn_host_mode ? "Cooperative" : "Deathmatch");
+	M_Print (64, 56, "Game Type");
+	M_Print (176, 56, qn_host_mode ? "Cooperative" : "Deathmatch");
 
-	M_Print (64, 72, "            Map");
-	M_Print (160, 72, qn_host_mapcount ? qn_host_maps[qn_host_map]
-	                                   : "none");
+	M_Print (64, 72, "Map");
+	{
+		const char	*map = qn_host_mapcount ? qn_host_maps[qn_host_map]
+		                                     : "none";
+		char		mapline[18];
+		int			i;
 
-	M_Print (64, 88, "        Players");
+		for (i = 0; i < 16 && map[i]; i++)
+			mapline[i] = map[i];
+		mapline[i] = '\0';
+		M_Print (176, 72, mapline);
+	}
+
+	M_Print (64, 88, "Players");
 	q_snprintf (line, sizeof (line), "%d (%d open slot%s)",
 	            qn_host_players,
 	            qn_host_players > 0 ? qn_host_players - 1 : 0,
 	            (qn_host_players - 1) == 1 ? "" : "s");
-	M_Print (160, 88, line);
+	M_Print (176, 88, line);
 
-	M_DrawTextBox (152, 108, 14, 1);
-	M_Print (160, 116, sv.active ? "stop hosting" : "start hosting");
+	M_DrawTextBox (168, 108, 14, 1);
+	M_Print (176, 116, sv.active ? "stop hosting" : "start hosting");
 
-	M_Print (160, 136, "back");
+	M_Print (176, 136, "back");
 
 	if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
-		M_DrawCharacter (144, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ACTION)
-		M_DrawCharacter (144, 116, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 116, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_BACK)
-		M_DrawCharacter (144, 136, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 136, 10 + ((int)(realtime*4)&1));
 
 	if (sv.active)
 	{
