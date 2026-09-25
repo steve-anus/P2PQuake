@@ -617,7 +617,6 @@ void M_Menu_MultiPlayer_f (void)
 
 void M_MultiPlayer_Draw (void)
 {
-	int		f;
 	qpic_t	*p;
 	const char	*items[3] = { "Host game", "Join game", "Setup" };
 	int	i;
@@ -627,14 +626,11 @@ void M_MultiPlayer_Draw (void)
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
 	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
-		M_Print ((320 - (int)strlen(items[i]) * 8) / 2, 32 + i * 20, items[i]);
+		M_Print ((320 - (int)strlen(items[i]) * 8) / 2, 44 + i * 20, items[i]);
 
-	f = (int)(realtime * 10)%6;
-	{
-		p = Draw_CachePic (va("gfx/menudot%i.lmp", f+1));
-		M_DrawTransPic ((320 - (int)p->width) / 2,
-		                32 + m_multiplayer_cursor * 20, p);
-	}
+	/* conchars tile 7: the centered bullet, kept clear of the label */
+	M_DrawCharacter ((320 - (int)strlen(items[m_multiplayer_cursor]) * 8) / 2 - 16,
+	                 44 + m_multiplayer_cursor * 20, 7);
 
 	if (ipxAvailable || tcpipAvailable)
 		return;
