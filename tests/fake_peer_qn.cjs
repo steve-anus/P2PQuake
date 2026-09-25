@@ -156,6 +156,11 @@ class Peer {
     const maxp = t.get(3) ? t.get(3)[0] : 0;
     if (map !== 'lqdm1') fail('HOST_UP map is ' + JSON.stringify(map));
     if (!host.length || !maxp) fail('HOST_UP missing hostname/maxplayers');
+    if (process.env.QN_HOST_MAXP) {
+      if (maxp !== parseInt(process.env.QN_HOST_MAXP, 10))
+        fail('HOST_UP maxp ' + maxp + ' want ' + process.env.QN_HOST_MAXP);
+      step('host-maxp');
+    }
     step('host-up');
     this.send(T.HOST_READY, F.encodeTLV([[1, HOST_CODE]]));
     this.send(T.PEER_UP, F.encodeTLV([[1, PLAYER_PUB], [2, Buffer.from('LoopbackPlayer')]]));

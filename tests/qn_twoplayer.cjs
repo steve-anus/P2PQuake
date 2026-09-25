@@ -493,6 +493,8 @@ async function main() {
   const hex = code.replace(/-/g, '').toLowerCase();
   let codeLines = 0;
   for (const l of host.lines) if (l.startsWith('Join code: ')) codeLines++;
+  if (!host.lines.some((l) => l.startsWith('qn-peer: host: room open maxpeers=7')))
+    throw new Error('host console lacks the room-open maxpeers line');
   if (codeLines !== 1)
     return finish(1, `TWPLAYER FAIL: join code display count ${codeLines}`);
   // The engine echoes its own argv at boot; the lane dials via argv (the

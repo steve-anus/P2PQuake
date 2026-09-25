@@ -116,16 +116,19 @@ const bindFrom = (keys) => envBytes(E.TYPES.KEY_BIND, 1,
    [2, Buffer.from(E.signWith(keys.priv,
      E.noiseBindingContext(noiseKey, sha('fake-noise-remote'))))]], keys.priv);
 
-const joinBytes = (opts = {}) => envBytes(E.TYPES.JOIN, 2,
-  [[1, Buffer.from(KEYS.peer.pub)],
-   [2, Buffer.from(opts.proof ?? R.proofOf(CODE, KEYS.peer.pub))],
+const joinBytes = (opts = {}) => {
+  const k = opts.keys || KEYS.peer;
+  return envBytes(E.TYPES.JOIN, 2,
+  [[1, Buffer.from(k.pub)],
+   [2, Buffer.from(opts.proof ?? R.proofOf(CODE, k.pub))],
    [3, Buffer.from(opts.name ?? 'bob')],
    [4, Buffer.from([opts.major ?? E.MAJOR])], [5, Buffer.from([opts.minor ?? E.MINOR])],
    [6, Buffer.from(opts.manifest ?? IDN.manifest)],
    [7, Buffer.from(IDN.gamedir)],
    [10, Buffer.from(opts.buildId ?? IDN.buildId)],
    [11, Buffer.from(opts.platform ?? IDN.platform)],
-   [12, Buffer.from(opts.binarySha ?? IDN.binarySha)]], KEYS.peer.priv);
+   [12, Buffer.from(opts.binarySha ?? IDN.binarySha)]], k.priv);
+};
 
 const hostDecodes = (conn) =>
   conn.written.map((raw) => E.decodeEnvelope(raw, KEYS.host.pub, { expectedMatchId: MATCH }));
@@ -531,4 +534,63 @@ test('the host refreshes rosters under the client staleness bound (§6.5 pair)',
   assert.equal(conn.destroyed, false);
   assert.equal(saved.length >= 2, true, 'a second broadcast went out unprompted');
   assert.equal(saved[1], saved[0] + 1n, 'the refresh advances the epoch, never repeats it');
+});
+
+/* ---- mode player ceilings ---- */
+
+test('roomSeats maps HOST_UP max players to remote seats', () => {
+  assert.equal(P.roomSeats(8), 7);
+  assert.equal(P.roomSeats(16), 15);
+  assert.equal(P.roomSeats(4), 3);
+  assert.equal(P.roomSeats(1), 0);
+  assert.equal(P.roomSeats(0), 0);
+  assert.equal(P.roomSeats(255), 15);
+});
+
+test('full room: the seat past the cap is refused with cause 3', async () => {
+  const { clock, room } = hostRoom({ maxPeers: 3 });
+  const mk = (n) => {
+    const seed = sha('pb-full-' + n);
+    return { priv: E.privateKeyFromSeed(seed),
+      pub: Buffer.from(E.publicRaw(E.publicKeyFromSeed(seed))) };
+  };
+  for (let i = 0; i < 3; i++) {
+    const c = new FakeConn();
+    room.accept(c);
+    const k = mk(i);
+    c.emit('data', bindFrom(k));
+    c.emit('data', joinBytes({ keys: k }));
+  }
+  await clock.advance(10);
+  const full = new FakeConn();
+  room.accept(full);
+  const k4 = mk(99);
+  full.emit('data', bindFrom(k4));
+  full.emit('data', joinBytes({ keys: k4 }));
+  await clock.advance(10);
+  const no = hostDecodes(full).find((o) => o.type === E.TYPES.JOIN_NO);
+  assert.ok(no, 'fourth joiner receives JOIN_NO');
+  assert.equal(new Map(F.decodeTLV(no.payload).map((x) => [x.tag, x.value])).get(1)[0],
+    E.CAUSES.MATCH_FULL);
+});
+
+test('roster encoder pin: 16 members fit the envelope and the size contract', async () => {
+  const { clock, room } = hostRoom({ maxPeers: 16 });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  for (let i = 1; i < 16; i++) room.allocSlot(sha('pb-mem-' + i));
+  room.broadcastRoster();
+  await clock.advance(1);
+  const outs = hostDecodes(conn).filter((o) => o.type === E.TYPES.ROSTER);
+  const last = outs[outs.length - 1];
+  assert.ok(last, 'roster broadcast delivered');
+  assert.ok(last.payload.length <= E.MAX_PAYLOAD,
+    'roster payload ' + last.payload.length + ' B over ' + E.MAX_PAYLOAD);
+  P.checkTagSizes(last);
+  const t = new Map(F.decodeTLV(last.payload).map((x) => [x.tag, x.value]));
+  assert.equal(t.get(1)[0], 16);
+  assert.equal((t.get(1).length - 1) / 32, 16);
 });

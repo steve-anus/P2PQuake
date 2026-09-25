@@ -59,6 +59,9 @@ const want = [
   ['stext-allow',    (l) => l === 'QN: stufftext allowlisted'],
   ['peer-done',      (l) => l === 'LBSTEP done ok'],
 ];
+if (process.env.QN_HOST16) {
+  want.push(['peer-host-maxp', (l) => l === 'LBSTEP host-maxp ok']);
+}
 if (process.env.QN_FUZZ) {
   const rounds = parseInt(process.env.QN_FUZZ_ROUNDS || '60', 10);
   want.push(['fuzz-start', (l) => l === 'LBSTEP fuzz-start ok']);
@@ -129,6 +132,7 @@ function main() {
   const child = spawn('stdbuf', ['-oL', ENGINE,
     '-qn', '-qn-peer', FAKE, '-qn-dir', dir,
     '-basedir', GAMEDATA, '-dedicated',
+    ...(process.env.QN_HOST16 ? ['16'] : []),
     '+listen', '+map', 'lqdm1',
   ], {
     env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' },

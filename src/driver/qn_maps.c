@@ -161,6 +161,35 @@ qn_dm_num (const char *name)
 }
 
 int
+QN_PlayersLo (qn_map_pool_t pool)
+{
+	return (pool == QN_POOL_DM) ? 2 : 1;
+}
+
+int
+QN_PlayersHi (qn_map_pool_t pool, int hw_limit)
+{
+	int hi = (pool == QN_POOL_DM) ? QN_PLAYERS_DM_MAX : QN_PLAYERS_COOP_MAX;
+
+	if (hw_limit >= QN_PlayersLo (pool) && hw_limit < hi)
+		hi = hw_limit;
+	return hi;
+}
+
+int
+QN_PlayerBounds (qn_map_pool_t pool, int want, int hw_limit)
+{
+	int lo = QN_PlayersLo (pool);
+	int hi = QN_PlayersHi (pool, hw_limit);
+
+	if (want < lo)
+		return lo;
+	if (want > hi)
+		return hi;
+	return want;
+}
+
+int
 QN_MapCompareDm (const char *a, const char *b)
 {
 	long	av = qn_dm_num (a);

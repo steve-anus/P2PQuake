@@ -138,6 +138,9 @@ static void QN_HostChange (int dir)
 	case QN_H_ITEM_MODE:
 		qn_host_mode = !qn_host_mode;
 		QN_HostBuildMaps ();	/* re-filter; clamps the map cursor */
+		qn_host_players = QN_PlayerBounds (
+		    qn_host_mode ? QN_POOL_COOP : QN_POOL_DM,
+		    qn_host_players, svs.maxclientslimit);
 		break;
 	case QN_H_ITEM_MAP:
 		if (!qn_host_mapcount)
@@ -153,16 +156,16 @@ static void QN_HostChange (int dir)
 		break;
 	case QN_H_ITEM_PLAYERS:
 	{
-		int limit = 8;
-		if (svs.maxclientslimit < limit)
-			limit = svs.maxclientslimit;
-		if (limit < 1)
-			limit = 1;
-		qn_host_players += dir;
-		if (qn_host_players < 1)
-			qn_host_players = limit;
-		if (qn_host_players > limit)
-			qn_host_players = 1;
+		qn_map_pool_t pool = qn_host_mode ? QN_POOL_COOP : QN_POOL_DM;
+		int lo = QN_PlayersLo (pool);
+		int hi = QN_PlayersHi (pool, svs.maxclientslimit);
+		int want = qn_host_players + dir;
+
+		if (want > hi)
+			want = lo;
+		else if (want < lo)
+			want = hi;
+		qn_host_players = QN_PlayerBounds (pool, want, svs.maxclientslimit);
 		break;
 	}
 	default:
@@ -188,14 +191,18 @@ static void QN_HostStart (void)
 		QN_HostNote ("map not available for this game type");
 		return;
 	}
-	/* Fixed command texts only. listen 0 first so the port and every
-	 * driver re-examine the change (same sequence the LAN GameOptions
-	 * flow uses); svs.maxclients is written directly because the
-	 * maxplayers command would flip deathmatch on its own. */
+	/* Fixed command texts only, one queued sequence: listen down, the
+	 * engine's own maxplayers path (allocation floor is raised to the
+	 * engine ceiling at host init), then the mode cvars queued LAST so
+	 * the deathmatch flip inside MaxPlayers_f always loses to them -
+	 * the same ordering the LAN GameOptions flow relies on. */
 	Cbuf_AddText ("listen 0\n");
-	svs.maxclients = qn_host_players;
-	Cvar_Set ("coop", qn_host_mode ? "1" : "0");
-	Cvar_Set ("deathmatch", qn_host_mode ? "0" : "1");
+	if (q_snprintf (cmd, sizeof (cmd), "maxplayers %d\n",
+	                qn_host_players) >= (int) sizeof (cmd))
+		return;
+	Cbuf_AddText (cmd);
+	Cbuf_AddText (qn_host_mode ? "coop 1\ndeathmatch 0\n"
+	                           : "coop 0\ndeathmatch 1\n");
 	Cbuf_AddText ("listen 1\n");
 	SCR_BeginLoadingPlaque ();
 	if (q_snprintf (cmd, sizeof (cmd), "map %s\n",
