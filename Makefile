@@ -94,6 +94,8 @@ twoplayer: engine
 
 relay: engine
 	QN_RELAY=1 $(NODE) tests/qn_twoplayer.cjs
+	@echo "twoplayer-coop-advance:"
+	QN_COOP=1 $(NODE) tests/qn_twoplayer.cjs
 
 # Fuzz target 3: hostile engine-plane bytes through the real driver path,
 # with the parsers under ASan+UBSan. Forces both rebuilds (the vendored

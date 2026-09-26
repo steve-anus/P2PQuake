@@ -41,6 +41,7 @@ enum
 	QN_H_ITEM_MAP,
 	QN_H_ITEM_PLAYERS,
 	QN_H_ITEM_ACTION,
+	QN_H_ITEM_ADVANCE,
 	QN_H_ITEM_BACK,
 	QN_H_NUM_ITEMS
 };
@@ -220,6 +221,41 @@ static void QN_HostStop (void)
 	Cbuf_AddText ("listen 0\ndisconnect\n");
 }
 
+static qboolean qn_host_item_visible (int item)
+{
+	if (item == QN_H_ITEM_ADVANCE)
+		return sv.active && qn_host_mode;
+	return true;
+}
+
+/* Manual host advance: next campaign entry of the story-sorted pool as a
+ * fixed changelevel re-issue (the riding primitive: continues the game on
+ * the new level), never free-form text. */
+static void QN_HostAdvance (void)
+{
+	char	cmd[32];
+	int	i, at = -1;
+
+	if (!sv.active || !qn_host_mode)
+		return;
+	for (i = 0; i < qn_host_mapcount; i++)
+		if (!q_strcasecmp (qn_host_maps[i], sv.name))
+			at = i;
+	if (at < 0 || at + 1 >= qn_host_mapcount ||
+	    !QN_MapInPool (qn_host_maps[at + 1], QN_POOL_COOP))
+	{
+		QN_HostNote ("end of the campaign list");
+		return;
+	}
+	if (qn_host_map == at + 1)
+		return;	/* queued but not landed: a ride is already pending */
+	if (q_snprintf (cmd, sizeof (cmd), "changelevel %s\n",
+	                qn_host_maps[at + 1]) >= (int) sizeof (cmd))
+		return;
+	Cbuf_AddText (cmd);
+	qn_host_map = at + 1;
+}
+
 static int QN_ClientPing (const client_t *c)
 {
 	int		j, n = c->num_pings;
@@ -330,15 +366,24 @@ void QN_Menu_HostDraw (void)
 	            (qn_host_players - 1) == 1 ? "" : "s");
 	M_Print (176, 88, line);
 
-	M_DrawTextBox (168, 108, 14, 1);
-	M_Print (176, 116, sv.active ? "stop hosting" : "start hosting");
+	M_DrawTextBox (168, 100, 14, 1);
+	M_Print (176, 108, sv.active ? "stop hosting" : "start hosting");
+
+	if (qn_host_item_visible (QN_H_ITEM_ADVANCE))
+	{
+		M_Print (64, 128, "Campaign");
+		M_Print (176, 128, "advance map");
+	}
 
 	M_Print (176, 136, "back");
 
 	if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
 		M_DrawCharacter (158, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ACTION)
-		M_DrawCharacter (158, 116, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 108, 10 + ((int)(realtime*4)&1));
+	else if (qn_host_cursor == QN_H_ITEM_ADVANCE &&
+	         qn_host_item_visible (QN_H_ITEM_ADVANCE))
+		M_DrawCharacter (158, 128, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_BACK)
 		M_DrawCharacter (158, 136, 10 + ((int)(realtime*4)&1));
 
@@ -374,16 +419,22 @@ void QN_Menu_HostKey (int key)
 
 	case K_UPARROW:
 		S_LocalSound ("misc/menu1.wav");
-		qn_host_cursor--;
-		if (qn_host_cursor < 0)
-			qn_host_cursor = QN_H_NUM_ITEMS - 1;
+		do
+		{
+			qn_host_cursor--;
+			if (qn_host_cursor < 0)
+				qn_host_cursor = QN_H_NUM_ITEMS - 1;
+		} while (!qn_host_item_visible (qn_host_cursor));
 		return;
 
 	case K_DOWNARROW:
 		S_LocalSound ("misc/menu1.wav");
-		qn_host_cursor++;
-		if (qn_host_cursor >= QN_H_NUM_ITEMS)
-			qn_host_cursor = 0;
+		do
+		{
+			qn_host_cursor++;
+			if (qn_host_cursor >= QN_H_NUM_ITEMS)
+				qn_host_cursor = 0;
+		} while (!qn_host_item_visible (qn_host_cursor));
 		return;
 
 	case K_LEFTARROW:
@@ -419,6 +470,11 @@ void QN_Menu_HostKey (int key)
 				QN_HostStop ();
 			else
 				QN_HostStart ();
+			if (!qn_host_item_visible (qn_host_cursor))
+				qn_host_cursor = QN_H_ITEM_ACTION;
+			break;
+		case QN_H_ITEM_ADVANCE:
+			QN_HostAdvance ();
 			break;
 		default:
 			M_Menu_MultiPlayer_f ();

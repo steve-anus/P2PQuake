@@ -265,7 +265,7 @@ async function main() {
     env.QN_RELAY_ONLY = '1';
   }
   relayNodeRef = relayNode;
-  console.log(`TWPLAYER: mode=dm${relayNode ? ' relay' : ''} bootstrap=${bootstrap}`);
+  console.log(`TWPLAYER: mode=${process.env.QN_COOP ? 'coop' : 'dm'}${relayNode ? ' relay' : ''} bootstrap=${bootstrap}`);
 
   const procs = [];
   procsRef = procs;
@@ -308,7 +308,10 @@ async function main() {
 
   const host = new Engine('host', path.join(base, 'host'),
     ['-qn', '-qn-peer', peerArg(), '-qn-dir', path.join(base, 'host'),
-     '-basedir', relIfShorter(GAMEDATA), '-dedicated', '+listen', '+map', 'lqdm1'],
+     '-basedir', relIfShorter(GAMEDATA), '-dedicated', '+listen',
+     ...(process.env.QN_COOP
+       ? ['+coop', '1', '+deathmatch', '0', '+map', 'lq_e1m1']
+       : ['+map', 'lqdm1'])],
     env, { pty: true });
   procs.push(host);
 
@@ -375,18 +378,27 @@ async function main() {
   // so map-riding clients do not print it again: assertions are the host
   // status map line plus Host_Say round-trips -- which deliver only to
   // clients the server itself sees as active && spawned.
-  await host.send('changelevel lqdm2');
-  await host.send('status');
-  await host.expect((l) => l.includes('map:') && l.includes('lqdm2'),
-    'host running lqdm2', JOIN_TIMEOUT);
-  // A server-console say broadcasts only to clients the server sees as
-  // active && spawned, so each receipt is server-side attestation of
-  // re-entry on the new map.
-  await host.send('say postmap');
-  await alice.expect((l) => l.includes('<UNNAMED> postmap'),
-    'Alice in-game on lqdm2', REJOIN_TIMEOUT);
-  await bob.expect((l) => l.includes('<UNNAMED> postmap'),
-    'Bob in-game on lqdm2', REJOIN_TIMEOUT);
+  const cycleMaps = process.env.QN_COOP ? ['lq_e1m2', 'lq_e2m1'] : ['lqdm2'];
+  for (const m of cycleMaps) {
+    await host.send(`changelevel ${m}`);
+    await host.send('status');
+    await host.expect((l) => l.includes('map:') && l.includes(m),
+      `host running ${m}`, JOIN_TIMEOUT);
+    // A server-console say broadcasts only to clients the server sees as
+    // active && spawned, so each receipt is server-side attestation of
+    // re-entry on the new map. Re-entry races the two reconnects against
+    // each other, so the round-trip is re-offered until both attest.
+    const wantSay = `postmap-${m}`;
+    let sA = false, sB = false;
+    for (let t = 0; t < 30 && !(sA && sB); t++) {
+      await host.send(`say ${wantSay}`);
+      await new Promise((r) => setTimeout(r, 2000));
+      sA = alice.count((l) => l.includes('<UNNAMED> ' + wantSay)) > 0;
+      sB = bob.count((l) => l.includes('<UNNAMED> ' + wantSay)) > 0;
+    }
+    if (!sA || !sB)
+      throw new Error(`postmap round-trip missing on ${m}: alice=${sA} bob=${sB}`);
+  }
 
   // Bob exits (killed; the host notices via the daemon's plane-A EOF).
   const removedB0 = host.count((l) => l.includes(`Client ${NAME_B} removed`));
