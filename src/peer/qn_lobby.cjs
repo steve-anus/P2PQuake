@@ -17,6 +17,7 @@ const REANNOUNCE_MIN_MS = 1000; // host re-announce cadence cap
 const TAGS = Object.freeze({
   MAP: 0x01, TITLE: 0x02, MAXP: 0x03, MODE: 0x04, CODE: 0x05,
   PUBKEY: 0x06, VER: 0x07, MINVER: 0x08, EPOCH: 0x09, TTL: 0x0a,
+  PLAYERS: 0x0b,
 });
 
 class LobbyError extends Error {}
@@ -41,6 +42,12 @@ function verBuf(pair, name) {
 function readVer(v, name) {
   if (v.length !== 4) throw new LobbyError(name + ' length');
   return [v.readUInt16LE(0), v.readUInt16LE(2)];
+}
+
+function playersBuf(a, name) {
+  const b = u8(a.players, name);
+  if (!Number.isInteger(a.maxPlayers) || b[0] > a.maxPlayers) throw new LobbyError(name + ' over max');
+  return b;
 }
 
 function ttlBuf() {
@@ -95,6 +102,9 @@ function decodeAdvert(buf) {
   if (epoch < 1n) throw new LobbyError('advert: epoch zero');
   const ttlB = m.get(TAGS.TTL);
   if (ttlB.length !== 2 || ttlB.readUInt16LE(0) !== ADVERT_TTL) throw new LobbyError('advert: ttl');
+  const playersB = m.get(TAGS.PLAYERS);
+  if (playersB.length !== 1) throw new LobbyError('advert: players width');
+  if (playersB[0] > maxp[0]) throw new LobbyError('advert: players over max');
 
   let ok = false;
   try {
@@ -107,7 +117,7 @@ function decodeAdvert(buf) {
     map, title, maxPlayers: maxp[0], mode: mode[0],
     code: Buffer.from(code), pubkey: Buffer.from(pub),
     version: Object.freeze(version), minVersion: Object.freeze(minVersion),
-    epoch, ttl: ADVERT_TTL,
+    epoch, ttl: ADVERT_TTL, players: playersB[0],
   });
 }
 
@@ -137,6 +147,7 @@ function encodeAdvert(a, privKey) {
     [TAGS.MINVER, verBuf(a.minVersion, 'minVersion')],
     [TAGS.EPOCH, epochB],
     [TAGS.TTL, ttlBuf()],
+    [TAGS.PLAYERS, playersBuf(a, 'players')],
   ]);
   const sig = signWith(privKey, sigDigest(canonical));
   const advert = Buffer.concat([canonical, sig]);

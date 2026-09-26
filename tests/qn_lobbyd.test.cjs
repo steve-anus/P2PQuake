@@ -53,10 +53,11 @@ function tlvPayload(fields) {
     [0x02, Buffer.from(fields.title, 'latin1')],
     [0x03, Buffer.from([fields.maxPlayers])],
     [0x04, Buffer.from([fields.mode])],
+    [0x05, Buffer.from([fields.players])],
   ]);
 }
 
-const GOOD = { map: 'lqdm1', title: 'Test Lobby', maxPlayers: 8, mode: 1 };
+const GOOD = { map: 'lqdm1', title: 'Test Lobby', maxPlayers: 8, mode: 1, players: 3 };
 const CODE10 = Buffer.alloc(10, 0x2b);
 
 function mkHost(opts = {}) {
@@ -78,16 +79,20 @@ function mkHost(opts = {}) {
 
 test('announceFields: accept and full rejection matrix', () => {
   assert.deepEqual(D.announceFields(tlvPayload(GOOD)), GOOD);
+  assert.equal(D.announceFields(tlvPayload(GOOD)).players, 3);
   const base = [[0x01, Buffer.from('lqdm1')], [0x02, Buffer.from('T')],
-                [0x03, Buffer.from([4])], [0x04, Buffer.from([0])]];
+                [0x03, Buffer.from([4])], [0x04, Buffer.from([0])], [0x05, Buffer.from([2])]];
   const strip = (i) => F.encodeTLV(base.filter((_, j) => j !== i));
-  for (let i = 0; i < 4; i++)
+  for (let i = 0; i < 5; i++)
     assert.throws(() => D.announceFields(strip(i)), L.LobbyError, 'drop ' + i);
   const rt = (tag, val) => { const h = Buffer.alloc(4); h.writeUInt16LE(tag, 0); h.writeUInt16LE(val.length, 2); return Buffer.concat([h, val]); };
   const dupRaw = Buffer.concat(base.map(([t, v]) => rt(t, v)).concat([rt(0x04, Buffer.from([0]))]));
   assert.throws(() => D.announceFields(dupRaw), L.LobbyError);                                  // dup tag
-  const extraRaw = Buffer.concat(base.map(([t, v]) => rt(t, v)).concat([rt(0x05, Buffer.from('x'))]));
+  const extraRaw = Buffer.concat(base.map(([t, v]) => rt(t, v)).concat([rt(0x06, Buffer.from('x'))]));
   assert.throws(() => D.announceFields(extraRaw), L.LobbyError);                               // extra tag
+  assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], base[2], base[3], [0x05, Buffer.alloc(0)]])), L.LobbyError);  // players empty
+  assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], base[2], base[3], [0x05, Buffer.from([5])]])), L.LobbyError);  // players > maxp(4)
+  assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], base[2], base[3], [0x05, Buffer.from([1, 0])]])), L.LobbyError); // players width 2
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.alloc(0)], base[3]])), L.LobbyError);
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([1])], base[3]])), L.LobbyError);   // maxp 1
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([9])], base[3]])), L.LobbyError);   // maxp 9

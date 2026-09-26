@@ -31,9 +31,9 @@ function announceFields(payload) {
     if (m.has(f.tag)) throw new L.LobbyError('announce: duplicate tag');
     m.set(f.tag, f.value);
   }
-  for (const want of [0x01, 0x02, 0x03, 0x04])
+  for (const want of [0x01, 0x02, 0x03, 0x04, 0x05])
     if (!m.has(want)) throw new L.LobbyError('announce: missing tag');
-  if (m.size !== 4) throw new L.LobbyError('announce: extra tag');
+  if (m.size !== 5) throw new L.LobbyError('announce: extra tag');
   const map = m.get(0x01).toString('latin1');
   const title = m.get(0x02).toString('latin1');
   const mp = m.get(0x03);
@@ -42,7 +42,9 @@ function announceFields(payload) {
   if (!/^[\x20-\x7e]{1,20}$/.test(title)) throw new L.LobbyError('announce: title');
   if (mp.length !== 1 || mp[0] < 2 || mp[0] > 8) throw new L.LobbyError('announce: maxp');
   if (md.length !== 1 || md[0] > 1) throw new L.LobbyError('announce: mode');
-  return { map, title, maxPlayers: mp[0], mode: md[0] };
+  const pl = m.get(0x05);
+  if (pl.length !== 1 || pl[0] > mp[0]) throw new L.LobbyError('announce: players');
+  return { map, title, maxPlayers: mp[0], mode: md[0], players: pl[0] };
 }
 
 // swarmFactory(topic, { server }) -> EventEmitter emitting 'connection'
@@ -92,7 +94,7 @@ function makeHostLobby(o) {
     memEpoch = epoch;                             // before save: a throw cannot regress either
     advert = L.encodeAdvert({
       map: lastReq.map, title: lastReq.title,
-      maxPlayers: lastReq.maxPlayers, mode: lastReq.mode,
+      maxPlayers: lastReq.maxPlayers, mode: lastReq.mode, players: lastReq.players,
       code, pubkey: o.keys.pub,
       version: o.version, minVersion: o.minVersion, epoch,
     }, o.keys.priv);

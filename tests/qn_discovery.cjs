@@ -24,7 +24,7 @@ const PEER = path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
 const FAKE_ENGINE = path.join(ROOT, 'bin', 'fake-engine');
 const BUDGET_MS = 60000;
 
-const TRUTH = { map: 'lqdm1', title: 'Lane Lobby', maxPlayers: 6, mode: 1 };
+const TRUTH = { map: 'lqdm1', title: 'Lane Lobby', maxPlayers: 6, mode: 1, players: 2 };
 const HOST_SEED = crypto.randomBytes(32);
 
 let assertions = 0;
@@ -147,6 +147,7 @@ async function main() {
     [0x02, Buffer.from(TRUTH.title, 'latin1')],
     [0x03, Buffer.from([TRUTH.maxPlayers])],
     [0x04, Buffer.from([TRUTH.mode])],
+    [0x05, Buffer.from([TRUTH.players])],
   ]));
   await waitFor(() => dH.logText().includes('lobby: announced'), 'host announce');
 
@@ -166,6 +167,7 @@ async function main() {
   ok(() => assert.equal(adv.title, TRUTH.title), 'advert title');
   ok(() => assert.equal(adv.maxPlayers, TRUTH.maxPlayers), 'advert maxp');
   ok(() => assert.equal(adv.mode, TRUTH.mode), 'advert mode');
+  ok(() => assert.equal(adv.players, TRUTH.players), 'advert players');
   ok(() => assert.deepEqual(adv.code, code), 'advert carries the join code');
   ok(() => assert.deepEqual(adv.pubkey, expectPub), 'advert signed by host identity');
   ok(() => assert.equal(adv.epoch, 1n), 'advert epoch starts at one');
@@ -177,6 +179,7 @@ async function main() {
     [0x02, Buffer.from('Renamed Lobby', 'latin1')],
     [0x03, Buffer.from([4])],
     [0x04, Buffer.from([0])],
+    [0x05, Buffer.from([1])],
   ]));
   const renamedSeen = () => {              // inside a terminator-completed group only
     for (const g of completedSnapshots(lists()))
