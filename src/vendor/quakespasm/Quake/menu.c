@@ -657,19 +657,22 @@ void M_Menu_MultiPlayer_f (void)
 void M_MultiPlayer_Draw (void)
 {
 	qpic_t	*p;
-	int	i, cy;
-	static const char	*items[3] = { "Host game", "Join by code", "Setup" };
-	static const int	bx[3] = { 5, 17, 31 };
+	int	i, cy, x, total;
+	int	btnw[MULTIPLAYER_ITEMS];
+	static const char	*items[MULTIPLAYER_ITEMS] = { "Host game", "Join by code", "Setup" };
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/p_multi.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
 	QN_MultiSort ();
-	M_PrintWhite (5, 56, "room");
-	M_PrintWhite (21, 56, "map");
-	M_PrintWhite (30, 56, "mode");
-	M_PrintWhite (34, 56, "p/y");
+	/* room list panel: bordered box (menu text-box art), header, rows.
+	 * All coordinates in pixels: M_Print advances 8 px per glyph. */
+	M_DrawTextBox (24, 48, 33, 9);
+	M_PrintWhite (40, 56, "room");
+	M_PrintWhite (160, 56, "map");
+	M_PrintWhite (232, 56, "mode");
+	M_PrintWhite (272, 56, "p/y");
 	for (i = 0; i < qn_room_rows; i++)
 	{
 		int	r = qn_room_order[i];
@@ -680,39 +683,55 @@ void M_MultiPlayer_Draw (void)
 		q_snprintf (pl, sizeof (pl), "%d/%d", QN_LobbyPlayers (r), QN_LobbyMax (r));
 		cy = 68 + i * 8;
 		if (QN_LobbyMine (r))
-			M_Print (5, cy, nm);		/* own room reads dimmed */
+			M_Print (40, cy, nm);		/* own room reads dimmed */
 		else
-			M_PrintWhite (5, cy, nm);
-		M_PrintWhite (21, cy, mp);
-		M_PrintWhite (30, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
-		M_PrintWhite (34, cy, pl);
+			M_PrintWhite (40, cy, nm);
+		M_PrintWhite (160, cy, mp);
+		M_PrintWhite (232, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
+		M_PrintWhite (272, cy, pl);
 		if (qn_mfocus == 1 && i == qn_room_cursor)
-			M_DrawCharacter (0, cy, 7);
+			M_DrawCharacter (32, cy, 7);
 	}
 	if (!qn_room_rows)
-		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 11*8))/2, 72,
+		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 11*8))/2, 76,
 		              QN_LobbyHave () ? "no public lobbies" : "searching...");
 
+	/* buttons: pixel layout computed from the labels themselves (each
+	 * cell is label+2 chars for brackets, 16 px apart), whole row centred */
+	total = 0;
+	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
+	{
+		btnw[i] = (Q_strlen (items[i]) + 2) * 8;
+		total += btnw[i] + 16;
+	}
+	total -= 16;
+	x = (320 - total) / 2;
+	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
+	{
+		char	cell[40];
+		qboolean	sel = (qn_mfocus == 0 && i == m_multiplayer_cursor);
+		if (sel)
+			q_snprintf (cell, sizeof (cell), "[%s]", items[i]);
+		else
+			q_snprintf (cell, sizeof (cell), " %s ", items[i]);
+		if (sel)
+			M_PrintWhite (x, 160, cell);
+		else
+			M_Print (x, 160, cell);
+		x += btnw[i] + 16;
+	}
+
+	/* keybind legend (320x200 menu space, pixels) */
 	if (qn_mfocus == 1)
 	{
-		M_Print ((320 - 35*8)/2, 128, "up/down room  enter join  r refresh");
-		M_Print ((320 - 14*8)/2, 136, "tab to buttons");
+		M_Print ((320 - 35*8)/2, 184, "up/down room  enter join  r refresh");
+		M_Print ((320 - 21*8)/2, 192, "tab switch to buttons");
 	}
 	else
 	{
-		M_Print ((320 - 30*8)/2, 128, "up/down select  enter activate");
-		M_Print ((320 - 12*8)/2, 136, "tab to lobby");
+		M_Print ((320 - 33*8)/2, 184, "left/right select  enter activate");
+		M_Print ((320 - 19*8)/2, 192, "tab switch to lobby");
 	}
-
-	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
-	{
-		if (qn_mfocus == 0 && i == m_multiplayer_cursor)
-			M_PrintWhite (bx[i], 160, items[i]);
-		else
-			M_Print (bx[i], 160, items[i]);
-	}
-	if (qn_mfocus == 0)
-		M_DrawCharacter (bx[m_multiplayer_cursor] - 3, 160, 7);
 
 	if (ipxAvailable || tcpipAvailable)
 		return;

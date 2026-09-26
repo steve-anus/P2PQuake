@@ -459,6 +459,8 @@ static qboolean qn_ensure_daemon (void)
 	const char *name = NULL;
 	int p;
 
+	if (qn_state == QN_OFF)
+		return false;	/* -no-qn is a promise: no daemon, ever */
 	if (qn_demand_reported == qn_demand && qn_demand != 0)
 		return false;	/* latched: waiting for a fresh demand */
 	if (qn_daemon_retired)
@@ -765,7 +767,8 @@ void QN_LobbyWatch (void)
 	qn_lobby_watched = true;
 	if (qn_state != QN_RUNNING)
 	{
-		qn_ensure_daemon ();	/* browsing is a lane demand */
+		qn_demand++;			/* fresh demand: re-arm the latch */
+		(void) qn_ensure_daemon ();	/* browsing is a lane demand */
 		return;			/* emitted on authentication instead */
 	}
 	QN_LobbyEmit (QN_T_LOBBY_WATCH);
