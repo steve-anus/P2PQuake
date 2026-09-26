@@ -410,16 +410,29 @@ dependencies are introduced by this spec.
 | chat text | 256 bytes printable |
 | map name | 16 bytes |
 | peers per match | 8 (+1 host) |
+| seq drop counter → close | 100 |
+| seq gap → close | > 64 |
+| Plane A drop-storm → close | 10 consecutive malformed/dropped |
+| envelopes per second per Plane B connection (all types, metered pre-decode) | 2000 (burst 400; excess → close) |
+| control messages per second per Plane B connection (all types except RELAY, metered post-decode) | 200 (burst 50; excess → close) |
+| RELAY game-data messages per second per Plane B connection (metered post-decode) | 1200 (burst 300; excess → close) |
+| connections unbound (pre-KEY_BIND) per match | 4 (excess → close) |
+| messages/s on an unbound connection | 10 (burst 5; excess → close) |
 
 A datagram that exceeds one of these caps is dropped by the peer that sees
 it, never fragmented around the cap: an oversized unreliable message simply
 does not arrive.
-| seq drop counter → close | 100 |
-| seq gap → close | > 64 |
-| Plane A drop-storm → close | 10 consecutive malformed/dropped |
-| messages per second per Plane B connection | 200 (burst 50 queue; excess → close) |
-| connections unbound (pre-KEY_BIND) per match | 4 (excess → close) |
-| messages/s on an unbound connection | 10 (burst 5; excess → close) |
+
+Plane B per-connection metering is three-tier: the outer bucket bounds
+decode work on every envelope (pre-decode). After decode, RELAY — the
+game-data plane (server frames and usercmds) — pays a dedicated game
+bucket, and every other type pays the control bucket before dispatch.
+Replayed envelopes (seq window) count against the outer bucket only. The
+game bucket is sized for an honest listen server — up to two envelopes per
+client per render tick at supported listen-server tick rates (physics
+breaks above 72 fps; the 1000 fps clamp is not honest-playable) — while
+still bounding a joined insider's RELAY flood well below the all-envelope
+cap.
 
 ### 6.2 JOIN_NO causes
 

@@ -92,6 +92,8 @@ loopback-fatal: engine
 	@$(NODE) tests/qn_maplist.cjs || exit 1
 	@echo "hostname-save:"
 	@QN_HOSTNAME=1 $(NODE) tests/qn_twoplayer.cjs || exit 1
+	@echo "listenhost:"
+	@QN_LISTENHOST=1 $(NODE) tests/qn_twoplayer.cjs || exit 1
 
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs

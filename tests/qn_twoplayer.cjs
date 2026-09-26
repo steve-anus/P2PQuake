@@ -24,7 +24,7 @@ const { spawn } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const ENGINE = process.env.QN_ENGINE ||
   path.join(ROOT, 'src', 'vendor', 'quakespasm', 'Quake', 'quakespasm');
-const PEER = path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
+const PEER = process.env.QN_PEER || path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
 const GAMEDATA = process.env.QN_GAMEDATA || path.join(ROOT, 'gamedata');
 // The engine rebuilds com_cmdline (and Cmd_StuffCmds_f parses THAT) with
 // a hard 256-char cap: overrunning it silently drops later +cmds, so the
@@ -334,6 +334,96 @@ async function main() {
     await e2.expect((l) => l.includes('"color" is "6 4"'),
       'color restore echo', 15000);
     return finish(0, 'TWPLAYER OK: setup save - name, colors and host name survive a restart');
+  }
+
+  if (process.env.QN_LISTENHOST) {
+    // The menu flow hosts a LISTEN server inside the player's client engine:
+    // its server ticks follow the render frame rate (host_maxfps), not the
+    // dedicated sys_ticrate cap that every other scripted lane hosts under.
+    // 300 fps lifts the honest host->client RELAY envelope rate far past the
+    // control-plane budget, so this lane is the regression pin for §6.1
+    // metering of game-data traffic.
+    const LH_NAME = 'QnListenPlyr';
+    const fail = (m) => finish(1, 'LISTENHOST FAIL: ' + m);
+    const senv = { ...env, QN_LANE_STATS: '1' };
+    const hdir = path.join(base, 'lhhost');
+    const host = new Engine('lh-host', hdir,
+      ['-qn', '-qn-peer', peerArg(), '-qn-dir', hdir,
+       '-basedir', relIfShorter(GAMEDATA),
+       '+host_maxfps', '300', '+listen', '+maxplayers', '2',
+       '+deathmatch', '0', '+coop', '0', '+map', 'lqdm1'],
+      senv, { pty: true });
+    procs.push(host);
+    const codeLine = await host.expect(
+      (l) => l.startsWith('Join code: '), 'join code', BOOT_TIMEOUT);
+    const code = codeLine.slice('Join code: '.length).trim();
+    if (!validJoinCode(code)) return fail('join code malformed: ' + codeLine);
+
+    const cfgd = path.join(GAMEDATA, 'id1', LANE_TMP);
+    fs.mkdirSync(cfgd, { recursive: true });
+    const cdir = path.join(base, 'lhcl');
+    fs.writeFileSync(path.join(cfgd, `qnname-${path.basename(cdir)}.cfg`),
+      `_cl_name "${LH_NAME}"\necho QNCFGOK\n`);
+    const mkCl = (respawn) => {
+      if (respawn) {
+        try { fs.rmSync(path.join(cdir, 'identity.key'), { force: true }); } catch (e) { /* none */ }
+      }
+      const e = new Engine('lh-cl', cdir,
+        ['-qn', '-qn-peer', peerArg(), '-qn-dir', cdir,
+         '-basedir', relIfShorter(GAMEDATA),
+         '+exec', `${LANE_TMP}/qnname-${path.basename(cdir)}.cfg`,
+         '+connect', `qn:${code}`], senv);
+      procs.push(e);
+      return e;
+    };
+    let cl = mkCl(false);
+    await cl.expect((l) => l.includes('client: joined'), 'room join', JOIN_TIMEOUT);
+    cl = await waitSpawn(host, () => mkCl(true), LH_NAME, cl);
+
+    // Survival window: the pre-fix bucket (200/s burst 50) starves under a
+    // 300 fps listen host within ~1 s of spawn (proved red), so 20 s of
+    // live play with every death marker absent is the final check. No say
+    // round-trip here: a listen host's client console never reads stdin in
+    // menu/game key_dest, so harness keystrokes cannot reach it.
+    const DEAD = ['rate limit exceeded', 'lost server connection',
+      'host connection lost', `Client ${LH_NAME} removed`, 'daemon FATAL',
+      'window close-drops'];
+    const CRASH = /Host_Error|Sanitizer|AddressSanitizer|runtime error|Segmentation|Assertion failed/;
+    const tEnd = Date.now() + 20000;
+    while (Date.now() < tEnd) {
+      if (host.exitInfo || cl.exitInfo) return fail('an engine exited during the survival window');
+      for (const m of DEAD) {
+        const hit = host.lines.find((l) => l.includes(m)) ||
+          cl.lines.find((l) => l.includes(m));
+        if (hit) return fail(`lane died during honest play: ${hit}`);
+      }
+      for (const l of host.lines.concat(cl.lines))
+        if (CRASH.test(l)) return fail(`crash marker during window: ${l}`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    // Edge-of-window blind spot: one more sweep after the last sleep.
+    if (host.exitInfo || cl.exitInfo) return fail('an engine exited at the window edge');
+    for (const m of DEAD) {
+      const hit = host.lines.find((l) => l.includes(m)) ||
+        cl.lines.find((l) => l.includes(m));
+      if (hit) return fail(`lane died during honest play: ${hit}`);
+    }
+    for (const l of host.lines.concat(cl.lines))
+      if (CRASH.test(l)) return fail(`crash marker during window: ${l}`);
+    // Throughput witness: the joiner's daemon must have sustained an inbound
+    // RELAY rate above the pre-fix 200/s budget -- otherwise the box never
+    // reached the honest listen-host envelope rate and the lane proves
+    // nothing (green must not be free).
+    let peak = 0;
+    for (const l of cl.lines) {
+      const m = /client: lane-stats relays=(\d+)/.exec(l);
+      if (m) peak = Math.max(peak, Number(m[1]));
+    }
+    if (peak < 210)
+      return fail(`inbound RELAY peak only ${peak}/s: box never exceeded the old budget, lane did not exercise it`);
+    if (!cl.lines.some((l) => /^qn-peer: client: roster v\d+$/.test(l.trim())))
+      return fail('no signed roster ever reached the joiner');
+    return finish(0, 'LISTENHOST OK: listen-server host at host_maxfps 300 kept the joiner lane alive across a 20 s play window');
   }
 
   const host = new Engine('host', path.join(base, 'host'),

@@ -72,9 +72,21 @@ function signWith(privKey, msg) {
   return crypto.sign(null, msg, privKey);
 }
 
+// KeyObjects are immutable; the hot 2000/s verify path must not re-wrap DER
+// per envelope. Bounded insertion-order cache.
+const keyObjectCache = new Map();
 function verifyWith(pubKeyOrRaw, msg, sig) {
   try {
-    const key = Buffer.isBuffer(pubKeyOrRaw) ? publicKeyFromRaw(pubKeyOrRaw) : pubKeyOrRaw;
+    let key = pubKeyOrRaw;
+    if (Buffer.isBuffer(key)) {
+      const k = key.toString('hex');
+      key = keyObjectCache.get(k);
+      if (!key) {
+        key = publicKeyFromRaw(pubKeyOrRaw);
+        if (keyObjectCache.size >= 64) keyObjectCache.delete(keyObjectCache.keys().next().value);
+        keyObjectCache.set(k, key);
+      }
+    }
     return crypto.verify(null, msg, key, sig);
   } catch (e) {
     throw new EnvelopeError('verify error: ' + e.message);
@@ -221,7 +233,9 @@ class SeqWindow {
   }
 }
 
-// §6.1 per-connection message rate: token bucket 200/s, burst 50.
+// §6.1 token bucket. The class defaults are the control-plane budget
+// (200/s, burst 50); the outer all-envelope bucket is built wider by the
+// Session so honest RELAY game-data rates fit (two-tier metering, §6.1).
 class RateBucket {
   constructor({ rate = 200, burst = 50, now = () => globalThis.performance.now() } = {}) {
     this.rate = rate; this.burst = burst; this.tokens = burst; this.last = now();
