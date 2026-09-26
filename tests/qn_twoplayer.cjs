@@ -273,7 +273,7 @@ async function main() {
     for (const p of procs) { try { p.kill(); } catch (e) { /* gone */ } }
   };
   const finish = (code, msg) => {
-    if (relayNode) {
+    if (relayNode && !process.env.QN_HOSTNAME) {
       const s = relayNode.stats;
       console.log(`TWPLAYER RELAY: sessions=${s.sessions.accepted}/${s.sessions.opened} pairings=${s.pairings.requested}req/${s.pairings.matched}matched/${s.pairings.pending}pending streams=${s.streams.opened} refused=${s.refused} dropped=${s.dropped}`);
       if (code === 0 && (s.sessions.accepted < 4 || s.pairings.requested < 4 || s.pairings.matched < 2 ||
@@ -305,6 +305,36 @@ async function main() {
     return peerLink;
   };
   const guard = setTimeout(() => finish(1, 'TWPLAYER FAIL: global budget'), 420000);
+
+  if (process.env.QN_HOSTNAME) {
+    const cfgdir = path.join(GAMEDATA, 'id1', LANE_TMP);
+    fs.mkdirSync(cfgdir, { recursive: true });
+    const setupCfg = path.join(cfgdir, 'hnsetup.cfg');
+    fs.writeFileSync(setupCfg,
+      '_cl_name "QNcaptain"\n_cl_color "100"\nhostname "QNroom42"\necho QNCFGOK-HN\n');
+    const e1 = new Engine('hn1', path.join(base, 'hn1'),
+      ['-basedir', relIfShorter(GAMEDATA), '+exec', LANE_TMP + '/hnsetup.cfg', '+quit'], env);
+    procs.push(e1);
+    await e1.expect((l) => l.includes('QNCFGOK-HN'), 'setup cfg exec', BOOT_TIMEOUT);
+    await e1.expect((l) => l.includes('engine-exit hn1 code=0'), 'clean quit', BOOT_TIMEOUT);
+    const written = fs.readFileSync(path.join(GAMEDATA, 'id1', 'config.cfg'), 'utf8');
+    for (const want of ['_cl_name "QNcaptain"', '_cl_color "100"', 'hostname "QNroom42"'])
+      if (!written.includes(want))
+        return finish(1, 'HOSTNAME FAIL: config.cfg missing ' + want);
+    const e2 = new Engine('hn2', path.join(base, 'hn2'),
+      ['-basedir', relIfShorter(GAMEDATA), '+listen', '+maxplayers', '4',
+       '+deathmatch', '0', '+coop', '0', '+map', 'lqdm1', '+status', '+name',
+       '+color', '+quit'], env);
+    procs.push(e2);
+    const hostLine = await e2.expect((l) => /^host:\s+/.test(l), 'status host line', BOOT_TIMEOUT);
+    if (!hostLine.includes('QNroom42'))
+      return finish(1, 'HOSTNAME FAIL: host name not restored: ' + hostLine);
+    await e2.expect((l) => l.includes('"name" is "QNcaptain"'),
+      'name restore echo', 15000);
+    await e2.expect((l) => l.includes('"color" is "6 4"'),
+      'color restore echo', 15000);
+    return finish(0, 'TWPLAYER OK: setup save - name, colors and host name survive a restart');
+  }
 
   const host = new Engine('host', path.join(base, 'host'),
     ['-qn', '-qn-peer', peerArg(), '-qn-dir', path.join(base, 'host'),

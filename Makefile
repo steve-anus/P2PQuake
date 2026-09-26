@@ -90,6 +90,8 @@ loopback-fatal: engine
 	@QN_HOST16=1 QN_HOST_MAXP=16 $(NODE) tests/qn_loopback.cjs || exit 1
 	@echo "maplist:"
 	@$(NODE) tests/qn_maplist.cjs || exit 1
+	@echo "hostname-save:"
+	@QN_HOSTNAME=1 $(NODE) tests/qn_twoplayer.cjs || exit 1
 
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
