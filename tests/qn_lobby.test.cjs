@@ -35,6 +35,7 @@ function fieldsOf(o = {}) {
   put(0x08, o.minVerRaw ?? ver(o.minVersion ?? [1, 0]));
   put(0x09, o.epochRaw ?? epoch);
   put(0x0a, o.ttlRaw ?? ttl);
+  put(0x0b, o.players ?? Buffer.from([3]));
   return out;
 }
 
@@ -50,7 +51,7 @@ function signed(f, key = kp.privateKey, magic = 'QNLA') {
 const good = signed(fieldsOf());
 
 test('round trip: encode then decode returns every field', () => {
-  const a = { map: 'lq_e1m1', title: 'Test Lobby', maxPlayers: 4, mode: 0,
+  const a = { map: 'lq_e1m1', title: 'Test Lobby', maxPlayers: 4, players: 3, mode: 0,
     code: Buffer.alloc(10, 0x33), pubkey: pub, version: [2, 7],
     minVersion: [1, 0], epoch: 42 };
   const buf = L.encodeAdvert(a, kp.privateKey);
@@ -58,6 +59,7 @@ test('round trip: encode then decode returns every field', () => {
   assert.equal(out.map, a.map);
   assert.equal(out.title, a.title);
   assert.equal(out.maxPlayers, a.maxPlayers);
+  assert.equal(out.players, a.players);
   assert.equal(out.mode, a.mode);
   assert.deepEqual(out.code, a.code);
   assert.deepEqual(out.pubkey, a.pubkey);
@@ -98,8 +100,20 @@ test('every required tag is required (drop each in turn)', () => {
       L.LobbyError, 'dropped 0x' + tag.toString(16));
 });
 
+test('players field: width and over-max refused at decode and encode', () => {
+  assert.throws(() => L.decodeAdvert(signed(fieldsOf({ players: Buffer.alloc(2) }))),
+    /players width/);
+  assert.throws(() => L.decodeAdvert(signed(fieldsOf({ maxp: Buffer.from([2]), players: Buffer.from([5]) }))),
+    /players over max/);
+  const baseOk = { map: 'm', title: 't', maxPlayers: 4, mode: 0,
+    code: Buffer.alloc(10, 7), pubkey: pub, version: [1, 4], minVersion: [1, 0], epoch: 1 };
+  assert.throws(() => L.encodeAdvert({ ...baseOk, players: 5 }, kp.privateKey), /over max/);
+  assert.throws(() => L.encodeAdvert({ ...baseOk, players: 256 }, kp.privateKey), L.LobbyError);
+  assert.throws(() => L.encodeAdvert({ ...baseOk }, kp.privateKey), L.LobbyError);       // missing field
+});
+
 test('unknown tags are skipped, same-major forward compat', () => {
-  const f = fieldsOf().concat([[0x000b, Buffer.from('future')],
+  const f = fieldsOf().concat([[0x000c, Buffer.from('future')],
                                [0x8123, Buffer.from([1, 2, 3])]]);
   const out = L.decodeAdvert(signed(f));
   assert.equal(out.map, 'lqdm1');
@@ -143,7 +157,7 @@ test('hostile field values refuse', () => {
 });
 
 test('oversized advert refuses before any parse work', () => {
-  const pad = fieldsOf().concat([[0x000b, Buffer.alloc(L.ADVERT_MAX, 0x41)]]);
+  const pad = fieldsOf().concat([[0x000c, Buffer.alloc(L.ADVERT_MAX, 0x41)]]);
   const big = F.encodeTLV(pad);
   assert.ok(big.length + 64 > L.ADVERT_MAX);
   assert.throws(() => L.decodeAdvert(Buffer.concat([big, Buffer.alloc(64)])),
@@ -154,7 +168,7 @@ test('oversized advert refuses before any parse work', () => {
 
 test('encode refuses hostile input instead of emitting it', () => {
   const base = { code: Buffer.alloc(10, 7), pubkey: pub, version: [1, 4],
-    minVersion: [1, 0], epoch: 1 };
+    minVersion: [1, 0], epoch: 1, players: 3 };
   assert.throws(() => L.encodeAdvert({ ...base, map: 'a'.repeat(17), title: 't', maxPlayers: 8, mode: 0 }, kp.privateKey), L.LobbyError);
   assert.throws(() => L.encodeAdvert({ ...base, map: 'm', title: 't', maxPlayers: 1, mode: 0 }, kp.privateKey), L.LobbyError);
   assert.throws(() => L.encodeAdvert({ ...base, map: 'm', title: 't', maxPlayers: 8, mode: 2 }, kp.privateKey), L.LobbyError);
@@ -251,7 +265,7 @@ test('verified adverts and live entries are frozen against mutation', () => {
 });
 
 test('encode refuses a non-buffer pubkey with LobbyError', () => {
-  const base = { map: 'm', title: 't', maxPlayers: 8, mode: 0,
+  const base = { map: 'm', title: 't', maxPlayers: 8, mode: 0, players: 3,
     code: Buffer.alloc(10, 7), version: [1, 4], minVersion: [1, 0], epoch: 1 };
   assert.throws(() => L.encodeAdvert({ ...base, pubkey: pub.toString('hex') }, kp.privateKey), L.LobbyError);
   assert.throws(() => L.encodeAdvert({ ...base, pubkey: 5 }, kp.privateKey), L.LobbyError);

@@ -99,10 +99,10 @@ zero seq → close.
 | 0x0050 STUFFTEXT| peer→engine | printable ASCII line ≤512, NUL-terminated; engine-side allowlist enforced independently (§6.4) |
 | 0x0060 CLIENT_CMD| engine→peer| TLV: 0x01 body (usercmd bytes from the local client) |
 | 0x0061 RELIABLE | engine→peer | TLV: 0x01 text (≤256)                     |
-| 0x0070 LOBBY_WATCH | engine→peer | (empty); the viewer lane starts collecting the public lobby adverts (§3.6) and pushes change snapshots |
+| 0x0070 LOBBY_WATCH | engine→peer | (empty); the viewer lane starts collecting the public lobby adverts (§3.6) and pushes change snapshots; re-receipt while watching forces an immediate re-discovery and snapshot |
 | 0x0071 LOBBY_UNWATCH| engine→peer| (empty); collection stops, the daemon drops the view |
 | 0x0072 LOBBY_LIST  | peer→engine | payload = ONE complete advert (≤1200 B, already §3.6-verified by the daemon), or empty as the snapshot terminator; at most 64 adverts per snapshot, newest epoch first |
-| 0x0073 LOBBY_ANNOUNCE| engine→peer | TLV: 0x01 map name (≤16), 0x02 room title (≤20 printable), 0x03 max players u8, 0x04 mode u8 (0=coop, 1=deathmatch); the host daemon completes and signs the advert (§3.6) |
+| 0x0073 LOBBY_ANNOUNCE| engine→peer | TLV: 0x01 map name (≤16), 0x02 room title (≤20 printable), 0x03 max players u8, 0x04 mode u8 (0=coop, 1=deathmatch), 0x05 players u8 (≤ max; re-announce on join/leave, within the 1/s cap); the host daemon completes and signs the advert (§3.6) |
 | 0x0074 LOBBY_WITHDRAW| engine→peer | (empty); listing withdrawn — visibility turned off, room teardown, or map load failure |
 | 0x00FF FATAL    | peer→engine | u8 cause (§6.3); engine tears down the match |
 
@@ -342,6 +342,7 @@ exactly the required tags:
 | 0x08 | min peer version | u16 major, u16 minor (LE); joiners below it get VERSION_TOO_OLD per §3.5(a) |
 | 0x09 | epoch | u64 LE, strictly increasing per host key; persisted, never reset to zero on a reused topic (ROSTER precedent) |
 | 0x0A | ttl | u16 seconds, fixed 120 |
+| 0x0B | players | u8, ≤ max players; the browser's "x/y" left value — host re-announces on join/leave within the 1/s cap |
 
 The signature follows §3.2 discipline with its own domain magic so signed
 bytes never replay across artifact kinds:
