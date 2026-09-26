@@ -189,6 +189,41 @@ QN_PlayerBounds (qn_map_pool_t pool, int want, int hw_limit)
 	return want;
 }
 
+static const char *const qn_skill_text[QN_SKILL_MAX + 1] = {
+	"Easy", "Normal", "Hard", "Nightmare"
+};
+
+const char *
+QN_SkillText (int v)
+{
+	if (v < 0 || v > QN_SKILL_MAX)
+		return NULL;
+	return qn_skill_text[v];
+}
+
+int
+QN_SkillClamp (int v)
+{
+	if (v < 0)
+		return 0;
+	if (v > QN_SKILL_MAX)
+		return QN_SKILL_MAX;
+	return v;
+}
+
+int
+QN_SkillWrap (int v, int dir)
+{
+	int	s = QN_SkillClamp (v);
+
+	s += (dir > 0) ? 1 : (dir < 0) ? -1 : 0;
+	if (s > QN_SKILL_MAX)
+		s = 0;
+	else if (s < 0)
+		s = QN_SKILL_MAX;
+	return s;
+}
+
 int
 QN_MapCompareDm (const char *a, const char *b)
 {

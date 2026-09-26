@@ -32,4 +32,11 @@ int QN_PlayersLo (qn_map_pool_t pool);
 int QN_PlayersHi (qn_map_pool_t pool, int hw_limit);
 int QN_PlayerBounds (qn_map_pool_t pool, int want, int hw_limit);
 
+/* Difficulty dial mirroring the engine skill cvar (0..3); co-op starts
+ * carry it, deathmatch never touches it. */
+#define QN_SKILL_MAX	3
+const char *QN_SkillText (int v);	/* NULL when out of band */
+int QN_SkillClamp (int v);		/* into 0..QN_SKILL_MAX */
+int QN_SkillWrap (int v, int dir);	/* cyclic step */
+
 #endif	/* QN_MAPS_H */
