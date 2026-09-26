@@ -205,7 +205,12 @@ function makeViewerLobby(o) {
 
   return {
     start() {
-      if (timer) return;
+      if (timer)
+      {                               // re-WATCH while watching: push now (spec 3.6)
+        try { rejoin(); } catch { o.log('lobby: refresh failed'); }
+        try { snapshot(); } catch { o.log('lobby: snapshot failed'); }
+        return;
+      }
       timer = o.clock.setTimeout(refresh, SNAPSHOT_MS);
       try { rejoin(); } catch { o.log('lobby: join failed'); }
       try { snapshot(); } catch { o.log('lobby: snapshot failed'); }   // empty swap to start

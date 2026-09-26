@@ -315,6 +315,20 @@ test('viewer: ingest meter caps applies per second', async () => {
   assert.equal(v.live.length, D.INGEST_PER_S);
 });
 
+test('viewer: re-WATCH while watching pushes a snapshot immediately', async () => {
+  const { v, clock, frames } = mkViewer();
+  v.start();
+  const ad = advBuf();
+  const h = Buffer.alloc(2); h.writeUInt16LE(ad.length, 0);
+  feedFetch(v, Buffer.concat([h, ad]));
+  await clock.advance(20);
+  const before = frames.length;
+  v.start();                                                   // R key: re-receipt
+  await clock.advance(20);
+  assert.ok(frames.length > before, 'forced snapshot pushed');
+  assert.deepEqual(frames[frames.length - 1].payload, Buffer.alloc(0));
+});
+
 test('viewer: 30 s cadence rejoins and re-snapshots; stop is final', async () => {
   const { v, clock, frames, swarms } = mkViewer();
   v.start();

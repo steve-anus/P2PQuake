@@ -9,6 +9,7 @@ void QN_Menu_HostDraw (void);
 void QN_Menu_HostKey (int key);
 
 void QN_Menu_JoinInit (void);
+void QN_Menu_JoinAdvert (const char *grouped);
 void QN_Menu_JoinDraw (void);
 void QN_Menu_JoinKey (int key);
 void QN_Menu_JoinChar (int key);

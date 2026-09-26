@@ -29,6 +29,19 @@ void QN_Listen (qboolean state);
 /* Grouped join code for the host page (spec 5.1 display surface), or ""
  * when no room is currently announced. */
 const char *QN_JoinCodeText (void);
+
+/* public lobby view (spec 3.6; adverts arrive daemon-verified) */
+void QN_LobbyWatch (void);
+void QN_LobbyUnwatch (void);
+int  QN_LobbyCount (void);
+qboolean QN_LobbyHave (void);
+const char *QN_LobbyName (int i);
+const char *QN_LobbyMap (int i);
+int  QN_LobbyMode (int i);
+int  QN_LobbyPlayers (int i);
+int  QN_LobbyMax (int i);
+int  QN_LobbyMine (int i);
+int  QN_LobbyCodeGrouped (int i, char *out, size_t outlen);
 void QN_Status_f (void);
 sys_socket_t  QN_OpenSocket (int port);
 int  QN_CloseSocket (sys_socket_t socketid);

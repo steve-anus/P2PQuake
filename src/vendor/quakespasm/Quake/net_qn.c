@@ -148,6 +148,28 @@ static qboolean		qn_host_ready_shown;
 /* Host-page display copy of the minted code in grouped form (spec 5.1
  * display surface: the console line and the in-game host page). */
 static char			qn_join_code_text[24];
+
+#define	QN_LOBBY_MAX	64
+#define	QN_ADVERT_MAX	1200
+
+typedef struct
+{
+	char	name[24];			/* room title, masked */
+	char	map[20];
+	int	players, maxp, mode;
+	int	mine;
+	unsigned char	code[10];
+} qn_lobby_row_t;
+
+static qn_lobby_row_t	qn_lobby_live[QN_LOBBY_MAX];
+static qn_lobby_row_t	qn_lobby_pend[QN_LOBBY_MAX];
+static int		qn_lobby_nlive, qn_lobby_npend;
+static qboolean		qn_lobby_pending;	/* inside a consecutive run */
+static qboolean		qn_lobby_poison;	/* run overflow: skip to terminator */
+static qboolean		qn_lobby_seen;		/* a complete snapshot arrived */
+static qboolean		qn_lobby_watched;
+static unsigned char	qn_own_code[10];
+static qboolean		qn_own_code_set;
 static qboolean		qn_client_lane_up;
 static qboolean		qn_client_was_connected;	/* the lane has served a
 						   live client session */
@@ -413,6 +435,7 @@ static void qn_teardown (const char *why)
 	qn_host_lane_up = false;
 	qn_host_ready_shown = false;
 	qn_join_code_text[0] = '\0';
+	qn_own_code_set = false;
 	qn_client_lane_up = false;
 	qn_join_pending = false;
 	qn_drops_run = 0;
@@ -677,12 +700,211 @@ static void qn_show_join_code (const uint8_t code[10])
 	Con_SafePrintf ("%s", line);
 }
 
+/* ---- public lobby view (spec 2.3 rows 0x0070-0x0074, spec 3.6) --------
+ * Adverts arrive only as the daemon-validated signed form; what the
+ * engine enforces here is its own memory safety and render hygiene:
+ * width caps at copy time, the roster-grade mask on every remote byte,
+ * and an atomic whole-view swap on the run terminator. */
+
+static void QN_LobbyMasked (char *dst, size_t dsz, const unsigned char *src, size_t len)
+{
+	size_t	i, used = 0;
+
+	if (dsz == 0)
+		return;
+	for (i = 0; i < len && used < dsz - 1; i++)
+		dst[used++] = (src[i] < ' ' || src[i] > '~') ? '.' : (char) src[i];
+	dst[used] = '\0';
+}
+
+static qboolean QN_LobbyParseRow (const unsigned char *buf, int len, qn_lobby_row_t *row)
+{
+	qn_tlv_t	title, map, maxp, mode, code, players;
+
+	if (len <= 64 || len > QN_ADVERT_MAX)
+		return false;
+	/* the canonical signed bytes stop 64 short of the trailing signature;
+	 * qn_tlv_find validates the whole stream before answering */
+	if (qn_tlv_find (buf, (size_t) (len - 64), 0x02, &title) != 1 ||
+	    qn_tlv_find (buf, (size_t) (len - 64), 0x01, &map) != 1 ||
+	    qn_tlv_find (buf, (size_t) (len - 64), 0x03, &maxp) != 1 ||
+	    qn_tlv_find (buf, (size_t) (len - 64), 0x04, &mode) != 1 ||
+	    qn_tlv_find (buf, (size_t) (len - 64), 0x05, &code) != 1 ||
+	    qn_tlv_find (buf, (size_t) (len - 64), 0x0b, &players) != 1)
+		return false;
+	if (title.len == 0 || title.len > 20 ||
+	    map.len == 0 || map.len > 16 ||
+	    maxp.len != 1 || maxp.val[0] < 2 || maxp.val[0] > 8 ||
+	    mode.len != 1 || mode.val[0] > 1 ||
+	    code.len != 10 ||
+	    players.len != 1 || players.val[0] > maxp.val[0])
+		return false;
+	QN_LobbyMasked (row->name, sizeof (row->name), title.val, title.len);
+	QN_LobbyMasked (row->map, sizeof (row->map), map.val, map.len);
+	row->players = players.val[0];
+	row->maxp = maxp.val[0];
+	row->mode = mode.val[0];
+	memcpy (row->code, code.val, 10);
+	row->mine = qn_own_code_set && memcmp (row->code, qn_own_code, 10) == 0;
+	return true;
+}
+
+static void QN_LobbyEmit (unsigned short type)
+{
+	if (qn_state == QN_RUNNING)
+		(void) qn_transport_send (&qn_tr, type, NULL, 0);
+}
+
+void QN_LobbyWatch (void)
+{
+	if (qn_lobby_watched)
+	{	/* re-receipt while watching forces an immediate snapshot */
+		QN_LobbyEmit (QN_T_LOBBY_WATCH);
+		return;
+	}
+	qn_lobby_watched = true;
+	if (qn_state != QN_RUNNING)
+	{
+		qn_ensure_daemon ();	/* browsing is a lane demand */
+		return;			/* emitted on authentication instead */
+	}
+	QN_LobbyEmit (QN_T_LOBBY_WATCH);
+}
+
+void QN_LobbyUnwatch (void)
+{
+	if (qn_lobby_watched && qn_state == QN_RUNNING)
+		(void) qn_transport_send (&qn_tr, QN_T_LOBBY_UNWATCH, NULL, 0);
+	qn_lobby_watched = false;
+	qn_lobby_pending = false;
+	qn_lobby_poison = false;
+	qn_lobby_seen = false;
+	qn_lobby_nlive = 0;
+	qn_lobby_npend = 0;	/* a stale view must never flash on re-entry */
+}
+
+int QN_LobbyCount (void)
+{
+	return qn_lobby_nlive;
+}
+
+qboolean QN_LobbyHave (void)
+{
+	return qn_lobby_seen;
+}
+
+const char *QN_LobbyName (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].name : "";
+}
+
+const char *QN_LobbyMap (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].map : "";
+}
+
+int QN_LobbyMode (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].mode : -1;
+}
+
+int QN_LobbyPlayers (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].players : 0;
+}
+
+int QN_LobbyMax (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].maxp : 0;
+}
+
+int QN_LobbyMine (int i)
+{
+	return (i >= 0 && i < qn_lobby_nlive) ? qn_lobby_live[i].mine : 0;
+}
+
+int QN_LobbyCodeGrouped (int i, char *out, size_t outlen)
+{
+	char	enc[17], grouped[19 + 1];
+	int	g, c = 0;
+
+	if (i < 0 || i >= qn_lobby_nlive || outlen < sizeof (grouped))
+		return 0;
+	crockford_encode10 (qn_lobby_live[i].code, enc);
+	for (g = 0; g < 4; g++)
+	{
+		if (g)
+			grouped[c++] = '-';
+		memcpy (grouped + c, enc + g * 4, 4);
+		c += 4;
+	}
+	grouped[c] = '\0';
+	memcpy (out, grouped, sizeof (grouped));
+	memset (grouped, 0, sizeof (grouped));
+	return 1;
+}
+
+static void QN_LobbyDumpAfterSwap (void)
+{
+	int	i;
+
+	if (!getenv ("QN_LOBBY_DUMP"))
+		return;			/* lab knob: never set in play or CI */
+	Con_Printf ("QNLOBBY n=%d\n", qn_lobby_nlive);
+	for (i = 0; i < qn_lobby_nlive; i++)
+		Con_Printf ("QNLOBBY row title=%s map=%s mode=%d players=%d/%d mine=%d\n",
+		          qn_lobby_live[i].name, qn_lobby_live[i].map,
+		          qn_lobby_live[i].mode, qn_lobby_live[i].players,
+		          qn_lobby_live[i].maxp, qn_lobby_live[i].mine);
+}
+
 static void qn_dispatch (const qn_frame_t *f)
 {
 	qn_tlv_t t;
 
+	if (f->type != QN_T_LOBBY_LIST && qn_lobby_pending)
+	{	/* spec 3.6: a snapshot is one run of consecutive frames */
+		qn_lobby_pending = false;
+		qn_lobby_poison = false;
+		qn_lobby_npend = 0;
+	}
 	switch (f->type)
 	{
+	case QN_T_LOBBY_LIST:
+		qn_drops_run = 0;
+		if (f->len == 0)
+		{	/* terminator: swap whole view; partial never shows */
+			if (qn_lobby_pending && !qn_lobby_poison)
+			{
+				memcpy (qn_lobby_live, qn_lobby_pend,
+				        sizeof (qn_lobby_pend[0]) * (size_t) qn_lobby_npend);
+				qn_lobby_nlive = qn_lobby_npend;
+				qn_lobby_seen = true;
+				QN_LobbyDumpAfterSwap ();
+			}
+			qn_lobby_pending = false;
+			qn_lobby_poison = false;
+			qn_lobby_npend = 0;
+			return;
+		}
+		if (qn_lobby_poison)
+			return;
+		if (!qn_lobby_pending)
+		{
+			qn_lobby_pending = true;
+			qn_lobby_npend = 0;
+		}
+		if (qn_lobby_npend >= QN_LOBBY_MAX)
+		{	/* overlong run is protocol confusion: whole snapshot suspect */
+			qn_lobby_poison = true;
+			return;
+		}
+		if (QN_LobbyParseRow (f->payload, f->len, &qn_lobby_pend[qn_lobby_npend]))
+			qn_lobby_npend++;
+		/* malformed adverts drop silently: never the view, never a
+		 * console print, never a displayed total (spec 3.6) */
+		return;
+
 	case QN_T_PING:
 		if (f->len != 4)
 		{
@@ -806,6 +1028,8 @@ static void qn_dispatch (const qn_frame_t *f)
 			qn_teardown ("malformed host_ready");
 			return;
 		}
+		memcpy (qn_own_code, t.val, 10);	/* raw match surface for 'mine' */
+		qn_own_code_set = true;
 		qn_show_join_code (t.val);
 		qn_host_ready_shown = true;
 		qn_drops_run = 0;
@@ -923,6 +1147,8 @@ void QN_Pump (unsigned long long now_ms)
 		{
 			qn_child.authed = 1;	/* watchdog exempts an authed child */
 			QN_SetState (QN_RUNNING);
+			if (qn_lobby_watched)
+				QN_LobbyEmit (QN_T_LOBBY_WATCH);	/* page opened early */
 			qn_note ("daemon authenticated");
 		}
 		else if (st == QN_TR_FAIL || st == QN_TR_CLOSED)
@@ -983,6 +1209,7 @@ void QN_Pump (unsigned long long now_ms)
 			}
 			qn_host_lane_up = true;
 			qn_host_ready_shown = false;
+			qn_own_code_set = false;
 			qn_join_code_text[0] = '\0';	/* stale code never
 							   outlives its room */
 		}
@@ -1134,6 +1361,7 @@ void QN_Listen (qboolean state)
 			qn_host_lane_up = false;
 			qn_host_ready_shown = false;
 			qn_join_code_text[0] = '\0';
+			qn_own_code_set = false;
 			qn_sv_was_active = false;
 		}
 	}
