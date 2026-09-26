@@ -49,7 +49,7 @@ static void test_feed_caps(void)
 	/* 100 hostile keystrokes in one go: lowercase normalizes, rejects
 	 * never write, and the cap holds forever */
 	for (i = 0; i < 100; i++)
-		if (QN_PadFeed(&p, junk[i % (sizeof(junk) - 1)]))
+		if (QN_PadFeed(&p, junk[(size_t)i % (sizeof(junk) - 1)]))
 			accepted++;
 	CHECK(p.n == QN_PAD_CODE_LEN);
 	CHECK(strlen(p.code) == QN_PAD_CODE_LEN);
