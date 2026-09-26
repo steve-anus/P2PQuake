@@ -53,6 +53,7 @@ function makeHostLobby(o) {
   const matchHex = LOBBY_TOPIC.toString('hex');
   const subjectHex = o.keys.pub.toString('hex');
   let advert = null, lastReq = null, swarm = null, pend = null, cadence = null;
+  let pubTok = 0;   // invalidates a debounce slot orphaned by a direct publish
   let lastPublish = -Infinity, memEpoch = -1n;
 
   const serve = (conn) => {
@@ -77,6 +78,7 @@ function makeHostLobby(o) {
 
   const publish = () => {
     pend = null;
+    pubTok++;
     if (!lastReq) return;
     const code = o.getCode();
     if (!Buffer.isBuffer(code) || code.length !== 10) {
@@ -112,9 +114,14 @@ function makeHostLobby(o) {
       lastReq = announceFields(payload);            // throws: caller drops the frame
       const wait = L.REANNOUNCE_MIN_MS - (o.clock.now() - lastPublish);
       if (wait <= 0) { try { publish(); } catch { o.log('lobby: publish failed'); } }
-      else if (!pend) pend = o.clock.setTimeout(() => {
-        try { publish(); } catch { o.log('lobby: scheduled publish failed'); }
-      }, wait);                                     // reads lastReq at fire: latest wins
+      else if (!pend) {
+        const tok = pubTok;
+        pend = o.clock.setTimeout(() => {
+          pend = null;
+          if (tok !== pubTok) return;               // orphaned: a direct publish already served
+          try { publish(); } catch { o.log('lobby: scheduled publish failed'); }
+        }, wait);                                   // reads lastReq at fire: latest wins
+      }
     },
     onWithdraw() {
       advert = null;
@@ -197,9 +204,9 @@ function makeViewerLobby(o) {
   return {
     start() {
       if (timer) return;
-      rejoin();
-      snapshot();                                   // empty swap: viewer starts from nothing
       timer = o.clock.setTimeout(refresh, SNAPSHOT_MS);
+      try { rejoin(); } catch { o.log('lobby: join failed'); }
+      try { snapshot(); } catch { o.log('lobby: snapshot failed'); }   // empty swap to start
     },
     stop() {
       if (timer) { o.clock.clearTimeout(timer); timer = null; }
@@ -214,7 +221,8 @@ function makeViewerLobby(o) {
 
   function refresh() {
     timer = null;
-    try { rejoin(); snapshot(); } catch { o.log('lobby: refresh failed'); }   // fresh peers resurface
+    try { rejoin(); } catch { o.log('lobby: refresh failed'); }       // fresh peers resurface
+    try { snapshot(); } catch { o.log('lobby: snapshot failed'); }
     timer = o.clock.setTimeout(refresh, SNAPSHOT_MS);
   }
 }
