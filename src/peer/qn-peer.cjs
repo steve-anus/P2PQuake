@@ -289,9 +289,13 @@ function makeEpochStore(dir) {
       } catch { return -1n; }
     },
     save(subjectHex, matchHex, v) {
-      const fd = fs.openSync(path.join(dir, `epoch-${subjectHex}-${matchHex}.txt`),
-        'w', 0o600);
-      try { fs.writeFileSync(fd, String(v) + '\n'); } finally { fs.closeSync(fd); }
+      const f = path.join(dir, `epoch-${subjectHex}-${matchHex}.txt`);
+      const fd = fs.openSync(f + '.tmp', 'w', 0o600);
+      try {
+        fs.writeFileSync(fd, String(v) + '\n');
+        fs.fsyncSync(fd);                            // durable before the visible swap
+      } finally { fs.closeSync(fd); }
+      fs.renameSync(f + '.tmp', f);                      // lost write leaves the old value
     },
   };
 }
@@ -524,7 +528,8 @@ async function run(opts) {
         if (hostLobby) hostLobby.onWithdraw();
         return;
       case F.TYPES.LOBBY_WATCH:
-        viewerLobbyEnsure().start();
+        try { viewerLobbyEnsure().start(); }
+        catch { log('lobby: watch failed'); }
         return;
       case F.TYPES.LOBBY_UNWATCH:
         if (viewerLobby) viewerLobby.stop();

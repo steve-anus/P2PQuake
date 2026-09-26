@@ -33,6 +33,7 @@ function announceFields(payload) {
   }
   for (const want of [0x01, 0x02, 0x03, 0x04])
     if (!m.has(want)) throw new L.LobbyError('announce: missing tag');
+  if (m.size !== 4) throw new L.LobbyError('announce: extra tag');
   const map = m.get(0x01).toString('latin1');
   const title = m.get(0x02).toString('latin1');
   const mp = m.get(0x03);
@@ -52,7 +53,7 @@ function makeHostLobby(o) {
   const matchHex = LOBBY_TOPIC.toString('hex');
   const subjectHex = o.keys.pub.toString('hex');
   let advert = null, lastReq = null, swarm = null, pend = null, cadence = null;
-  let lastPublish = -Infinity;
+  let lastPublish = -Infinity, memEpoch = -1n;
 
   const serve = (conn) => {
     conn.once('error', () => { try { conn.destroy(); } catch { /* gone */ } });
@@ -68,17 +69,25 @@ function makeHostLobby(o) {
     swarm.on('connection', serve);
   };
 
+  const retire = () => {
+    advert = null;
+    lastReq = null;
+    if (swarm) { try { swarm.destroy(); } catch { /* best-effort */ } swarm = null; }
+  };
+
   const publish = () => {
     pend = null;
     if (!lastReq) return;
     const code = o.getCode();
     if (!Buffer.isBuffer(code) || code.length !== 10) {
-      o.log('lobby: announce without room code, dropped');
+      o.log('lobby: announce without room code, withdrawn');
+      retire();                                   // never serve stale addressing
       return;
     }
     const loaded = o.epochs.load(subjectHex, matchHex);
-    const base = loaded < 0n ? 0n : loaded;
-    const epoch = base + 1n;
+    const base = loaded < memEpoch ? memEpoch : loaded;   // watermark: save loss cannot regress
+    const epoch = base < 0n ? 1n : base + 1n;
+    memEpoch = epoch;                             // before save: a throw cannot regress either
     advert = L.encodeAdvert({
       map: lastReq.map, title: lastReq.title,
       maxPlayers: lastReq.maxPlayers, mode: lastReq.mode,
@@ -94,17 +103,18 @@ function makeHostLobby(o) {
 
   const tick = () => {
     cadence = null;
-    if (!lastReq) return;
-    publish();
-    if (advert) cadence = o.clock.setTimeout(tick, ANNOUNCE_MS);
+    if (lastReq) { try { publish(); } catch { o.log('lobby: cadence publish failed'); } }
+    if (advert && !cadence) cadence = o.clock.setTimeout(tick, ANNOUNCE_MS);
   };
 
   return {
     onAnnounce(payload) {
       lastReq = announceFields(payload);            // throws: caller drops the frame
       const wait = L.REANNOUNCE_MIN_MS - (o.clock.now() - lastPublish);
-      if (wait <= 0) publish();                     // reads lastReq at fire: latest wins
-      else if (!pend) pend = o.clock.setTimeout(publish, wait);
+      if (wait <= 0) { try { publish(); } catch { o.log('lobby: publish failed'); } }
+      else if (!pend) pend = o.clock.setTimeout(() => {
+        try { publish(); } catch { o.log('lobby: scheduled publish failed'); }
+      }, wait);                                     // reads lastReq at fire: latest wins
     },
     onWithdraw() {
       advert = null;
@@ -140,7 +150,7 @@ function makeViewerLobby(o) {
   const markDirty = () => {
     if (dirty) return;
     dirty = true;
-    o.clock.setTimeout(() => { if (dirty && timer) snapshot(); }, 10);
+    o.clock.setTimeout(() => { try { if (dirty && timer) snapshot(); } catch { o.log('lobby: snapshot failed'); } }, 10);
   };
 
   const fetch = (conn) => {
@@ -157,8 +167,8 @@ function makeViewerLobby(o) {
     const deadline = o.clock.setTimeout(kill, FETCH_MS);
     conn.on('data', (c) => {
       if (done) return;
+      if (buf.length + c.length > 2 + L.ADVERT_MAX) return kill();   // cap before alloc
       buf = Buffer.concat([buf, c]);
-      if (buf.length > 2 + L.ADVERT_MAX) return kill();
       if (need < 0) {
         if (buf.length < 2) return;
         need = 2 + buf.readUInt16LE(0);
@@ -166,10 +176,11 @@ function makeViewerLobby(o) {
       }
       if (buf.length < need) return;
       if (buf.length !== need) return kill();       // strict: no trailing slop
+      if (!metered()) return kill();                // verification is the cost gate: meter FIRST
       const raw = buf.subarray(2, need);
       try {
         const adv = L.decodeAdvert(raw);
-        if (metered() && store.apply(adv, raw, o.clock.now()) === 'stored') markDirty();
+        if (store.apply(adv, raw, o.clock.now()) === 'stored') markDirty();
       } catch { /* invalid adverts drop silently (§3.6) */ }
       kill();
     });
@@ -203,8 +214,7 @@ function makeViewerLobby(o) {
 
   function refresh() {
     timer = null;
-    rejoin();                                       // fresh peer set: present hosts resurface
-    snapshot();
+    try { rejoin(); snapshot(); } catch { o.log('lobby: refresh failed'); }   // fresh peers resurface
     timer = o.clock.setTimeout(refresh, SNAPSHOT_MS);
   }
 }
