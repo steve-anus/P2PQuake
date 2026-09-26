@@ -668,7 +668,7 @@ void M_MultiPlayer_Draw (void)
 	QN_MultiSort ();
 	/* room list panel: bordered box (menu text-box art), header, rows.
 	 * All coordinates in pixels: M_Print advances 8 px per glyph. */
-	M_DrawTextBox (24, 48, 33, 9);
+	M_DrawTextBox (16, 48, 34, 9);
 	M_PrintWhite (40, 56, "room");
 	M_PrintWhite (160, 56, "map");
 	M_PrintWhite (232, 56, "mode");
@@ -693,7 +693,7 @@ void M_MultiPlayer_Draw (void)
 			M_DrawCharacter (32, cy, 7);
 	}
 	if (!qn_room_rows)
-		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 11*8))/2, 76,
+		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 12*8))/2, 76,
 		              QN_LobbyHave () ? "no public lobbies" : "searching...");
 
 	/* buttons: pixel layout computed from the labels themselves (each
