@@ -20,6 +20,7 @@ const F = require('./qn_frame.cjs');
 const E = require('./qn_envelope.cjs');
 const R = require('./qn_room.cjs');
 const P = require('./qn_planeb.cjs');
+const D = require('./qn_lobbyd.cjs');
 
 // The runtime this code is tested on. A drifted major is unsupported —
 // refuse loudly rather than run on untested TLS/crypto semantics.
@@ -412,6 +413,7 @@ async function run(opts) {
   const { redactor } = opts;
   const log = (s) => process.stderr.write('qn-peer: ' + redactor.redact(s) + '\n');
   let lane = null; // {role, swarm, room}
+  let hostLobby = null, viewerLobby = null;
   const announced = new Set(); // client side: members already surfaced to the engine
 
   const destroyLane = () => {
@@ -419,6 +421,7 @@ async function run(opts) {
     const { swarm, room } = lane;
     const role = lane.role;
     lane = null;
+    if (hostLobby) { try { hostLobby.onWithdraw(); } catch { /* best-effort */ } }
     if (role === 'client' && room) room.closing = true; // intentional
     try { if (room) room.clock.clearTimeout(room.joinDeadlineTimer); } catch { /* cosmetic */ }
     try { if (room && room.code) redactor.release(room.code); } catch { /* cosmetic */ }
@@ -453,6 +456,31 @@ async function run(opts) {
     onFrame: (f) => handle(f),
   });
 
+  const lobbySwarm = (topic, { server }) => {
+    const s = makeSwarm();
+    s.on('error', () => {});
+    s.join(topic, { server, client: !server });
+    return s;
+  };
+  const hostLobbyEnsure = () => {
+    if (!hostLobby) hostLobby = D.makeHostLobby({
+      keys: opts.keys, epochs: opts.epochs, clock: opts.clock,
+      swarmFactory: lobbySwarm,
+      version: [E.MAJOR, E.MINOR], minVersion: [E.MAJOR, E.MINOR],
+      getCode: () => (lane && lane.role === 'host' && lane.room ? lane.room.code : null),
+      log,
+    });
+    return hostLobby;
+  };
+  const viewerLobbyEnsure = () => {
+    if (!viewerLobby) viewerLobby = D.makeViewerLobby({
+      clock: opts.clock, swarmFactory: lobbySwarm,
+      send: (type, payload) => a.send(type, payload),
+      log,
+    });
+    return viewerLobby;
+  };
+
   const handle = (f) => {
     switch (f.type) {
       case F.TYPES.HOST_UP: {
@@ -485,6 +513,21 @@ async function run(opts) {
       }
       case F.TYPES.JOIN_CLOSE:
         if (lane && lane.role === 'client') destroyLane();
+        return;
+      case F.TYPES.LOBBY_ANNOUNCE: {
+        if (!lane || lane.role !== 'host') { log('lobby: announce without host lane, dropped'); return; }
+        try { hostLobbyEnsure().onAnnounce(f.payload); }
+        catch { log('lobby: malformed announce, dropped'); }
+        return;
+      }
+      case F.TYPES.LOBBY_WITHDRAW:
+        if (hostLobby) hostLobby.onWithdraw();
+        return;
+      case F.TYPES.LOBBY_WATCH:
+        viewerLobbyEnsure().start();
+        return;
+      case F.TYPES.LOBBY_UNWATCH:
+        if (viewerLobby) viewerLobby.stop();
         return;
       case F.TYPES.CLIENT_CMD: {
         if (!lane || lane.role !== 'client') return; // known type, no lane: drop
