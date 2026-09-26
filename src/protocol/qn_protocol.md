@@ -366,7 +366,10 @@ never prints toward the engine console, never counts in a displayed
 total. Collection dedupes by host key (newest epoch wins) and caps at 64
 live adverts (overflow evicts the lowest epoch); a host re-announces at
 most 1/s. Snapshots ride LOBBY_LIST on change and at least every 30 s
-while watched.
+while watched. A snapshot is one or more consecutive LOBBY_LIST frames:
+each frame carries as many adverts as fit its 2048-byte payload cap, and
+the snapshot ends with one empty-payload LOBBY_LIST; the engine swaps the
+whole view only on that terminator, so a partial snapshot never shows.
 
 Visibility of the join code: a listed room is joinable by strangers by
 definition, so the code inside a public advert is addressing data, not
