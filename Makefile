@@ -25,7 +25,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery
 
 all: engine peer
 
@@ -98,6 +98,15 @@ loopback-fatal: engine
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
 
+lobby-browser: engine
+	$(NODE) tests/qn_lobbybrowser.cjs
+
+visibility: engine
+	$(NODE) tests/qn_visibility.cjs
+
+discovery: fake-engine
+	$(NODE) tests/qn_discovery.cjs
+
 relay: engine
 	QN_RELAY=1 $(NODE) tests/qn_twoplayer.cjs
 	@echo "twoplayer-coop-advance:"
@@ -146,6 +155,9 @@ check:
 	$(MAKE) --no-print-directory loopback-fatal
 	$(MAKE) --no-print-directory twoplayer
 	$(MAKE) --no-print-directory relay
+	$(MAKE) --no-print-directory lobby-browser
+	$(MAKE) --no-print-directory visibility
+	$(MAKE) --no-print-directory discovery
 
 asan:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi
