@@ -40,6 +40,7 @@ enum
 	QN_H_ITEM_MODE,
 	QN_H_ITEM_MAP,
 	QN_H_ITEM_PLAYERS,
+	QN_H_ITEM_VISIBILITY,
 	QN_H_ITEM_ACTION,
 	QN_H_ITEM_ADVANCE,
 	QN_H_ITEM_SKILL,
@@ -135,6 +136,12 @@ static void QN_HostNote (const char *fixed)
 
 static void QN_HostChange (int dir)
 {
+	if (qn_host_cursor == QN_H_ITEM_VISIBILITY)
+	{	/* live row: the pump re-issues the announce/withdraw edge,
+		   no match restart involved, so sv.active does not gate it */
+		QN_SetHostPublic (!QN_GetHostPublic ());
+		return;
+	}
 	if (sv.active)
 	{
 		QN_HostNote ("stop hosting to change settings");
@@ -383,34 +390,40 @@ void QN_Menu_HostDraw (void)
 	            (qn_host_players - 1) == 1 ? "" : "s");
 	M_Print (176, 88, line);
 
-	M_DrawTextBox (168, 100, 14, 1);
-	M_Print (176, 108, sv.active ? "stop hosting" : "start hosting");
+	M_Print (64, 104, "Visibility");
+	if (QN_GetHostPublic ())
+		M_PrintWhite (176, 104, "public");
+	else
+		M_Print (176, 104, "private");
+
+	M_DrawTextBox (168, 112, 14, 1);
+	M_Print (176, 120, sv.active ? "stop hosting" : "start hosting");
 
 	if (qn_host_item_visible (QN_H_ITEM_ADVANCE))
 	{
-		M_Print (64, 128, "Campaign");
-		M_Print (176, 128, "advance map");
+		M_Print (64, 132, "Campaign");
+		M_Print (176, 132, "advance map");
 	}
 	else if (qn_host_item_visible (QN_H_ITEM_SKILL))
 	{
-		M_Print (64, 128, "Skill");
-		M_Print (176, 128, QN_SkillText (QN_SkillClamp (qn_host_skill)));
+		M_Print (64, 132, "Skill");
+		M_Print (176, 132, QN_SkillText (QN_SkillClamp (qn_host_skill)));
 	}
 
-	M_Print (176, 136, "back");
+	M_Print (176, 140, "back");
 
-	if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
+	if (qn_host_cursor <= QN_H_ITEM_VISIBILITY)
 		M_DrawCharacter (158, 56 + (qn_host_cursor - QN_H_ITEM_MODE) * 16, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ACTION)
-		M_DrawCharacter (158, 108, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 120, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ADVANCE &&
 	         qn_host_item_visible (QN_H_ITEM_ADVANCE))
-		M_DrawCharacter (158, 128, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 132, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_SKILL &&
 	         qn_host_item_visible (QN_H_ITEM_SKILL))
-		M_DrawCharacter (158, 128, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 132, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_BACK)
-		M_DrawCharacter (158, 136, 10 + ((int)(realtime*4)&1));
+		M_DrawCharacter (158, 140, 10 + ((int)(realtime*4)&1));
 
 	if (sv.active)
 	{
@@ -464,6 +477,7 @@ void QN_Menu_HostKey (int key)
 
 	case K_LEFTARROW:
 		if (qn_host_cursor <= QN_H_ITEM_PLAYERS ||
+		    qn_host_cursor == QN_H_ITEM_VISIBILITY ||
 		    qn_host_cursor == QN_H_ITEM_SKILL)
 		{
 			S_LocalSound ("misc/menu3.wav");
@@ -473,6 +487,7 @@ void QN_Menu_HostKey (int key)
 
 	case K_RIGHTARROW:
 		if (qn_host_cursor <= QN_H_ITEM_PLAYERS ||
+		    qn_host_cursor == QN_H_ITEM_VISIBILITY ||
 		    qn_host_cursor == QN_H_ITEM_SKILL)
 		{
 			S_LocalSound ("misc/menu3.wav");
@@ -489,6 +504,7 @@ void QN_Menu_HostKey (int key)
 		case QN_H_ITEM_MODE:
 		case QN_H_ITEM_MAP:
 		case QN_H_ITEM_PLAYERS:
+		case QN_H_ITEM_VISIBILITY:
 		case QN_H_ITEM_SKILL:
 			S_LocalSound ("misc/menu3.wav");
 			QN_HostChange (1);

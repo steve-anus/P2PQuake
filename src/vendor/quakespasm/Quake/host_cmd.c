@@ -2411,6 +2411,7 @@ void Host_InitCommands (void)
 
 	Cmd_AddCommand ("status", Host_Status_f);
 	Cmd_AddCommand ("qn_status", QN_Status_f);
+	Cmd_AddCommand ("qn_visibility", QN_Visibility_f);
 	Cmd_AddCommand ("quit", Host_Quit_f);
 	Cmd_AddCommand ("god", Host_God_f);
 	Cmd_AddCommand ("notarget", Host_Notarget_f);

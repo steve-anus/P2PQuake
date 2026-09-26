@@ -145,6 +145,12 @@ static char		qn_sockpath[512];
 /* lane bookkeeping */
 static qboolean		qn_host_lane_up;
 static qboolean		qn_host_ready_shown;
+/* host visibility + last announced content (spec 3.6/5.1): private by
+ * default; every fresh engine process starts unlisted */
+static qboolean		qn_host_public;
+static qboolean		qn_ann_up;
+static char			qn_ann_map[17], qn_ann_title[21];
+static uint8_t		qn_ann_maxp, qn_ann_mode, qn_ann_players;
 /* Host-page display copy of the minted code in grouped form (spec 5.1
  * display surface: the console line and the in-game host page). */
 static char			qn_join_code_text[24];
@@ -439,6 +445,7 @@ static void qn_teardown (const char *why)
 	qn_client_lane_up = false;
 	qn_join_pending = false;
 	qn_drops_run = 0;
+	qn_ann_up = false;
 	memset (qn_sockets, 0, sizeof (qn_sockets));
 	if (qn_state == QN_RUNNING)
 		QN_SetState (QN_STANDBY);
@@ -755,6 +762,121 @@ static void QN_LobbyEmit (unsigned short type)
 {
 	if (qn_state == QN_RUNNING)
 		(void) qn_transport_send (&qn_tr, type, NULL, 0);
+}
+
+/* host visibility (spec 5.1): read at the HOST_UP edge, live-toggleable
+ * without restarting the match; the pump drives the announce/withdraw
+ * edges off these so no match restart is involved. */
+void QN_SetHostPublic (qboolean v)
+{
+	qn_host_public = v;
+}
+
+qboolean QN_GetHostPublic (void)
+{
+	return qn_host_public;
+}
+
+/* console surface for the same row the host page shows (dedicated
+ * operators and lanes have no menu): arg 0/1 sets, bare prints */
+void QN_Visibility_f (void)
+{
+	const char	*arg = Cmd_Argc () == 2 ? Cmd_Argv (1) : NULL;
+
+	if (!arg || (Q_strcmp (arg, "0") && Q_strcmp (arg, "1")))
+	{
+		Con_Printf ("usage: qn_visibility <0|1>\n");
+		return;
+	}
+	QN_SetHostPublic (arg[0] == '1');
+	Con_Printf ("visibility: %s\n",
+	            qn_host_public ? "public" : "private");
+}
+
+static int QN_HostPlayers (void)
+{
+	int	i, n = 0;
+
+	if (svs.clients)
+		for (i = 0; i < svs.maxclients; i++)
+			if (svs.clients[i].active)
+				n++;
+	return n;
+}
+
+/* one-way push of the visibility/content edge: announce while the room is
+ * public and hosted, exactly one withdraw when the desire falls. the
+ * daemon debounces publishes (1/s floor, latest wins), so re-issue here
+ * only needs to differ from the last accepted content. */
+static void QN_LobbyHostEdges (void)
+{
+	qboolean	want = qn_host_public && qn_host_lane_up && sv.active
+	              && qn_wantlisten && qn_live ();
+	const uint8_t	*vals[5];
+	const uint16_t	tags[5] = { 1, 2, 3, 4, 5 };
+	uint16_t	lens[5];
+	uint8_t		pl[96];
+	char		map[17], title[21];
+	uint8_t		maxp, mode, players;
+	size_t		n;
+	int			i;
+
+	if (!want)
+	{
+		if (qn_ann_up && qn_live ())
+			(void) qn_transport_send (&qn_tr, QN_T_LOBBY_WITHDRAW,
+			                          NULL, 0);
+		qn_ann_up = false;
+		return;
+	}
+
+	q_strlcpy (map, sv.name, sizeof (map));
+	for (i = 0; map[i]; i++)
+		if (map[i] < ' ' || map[i] > '~')
+			map[i] = '.';
+	if (!map[0])
+		q_strlcpy (map, "map", sizeof (map));
+	q_strlcpy (title, hostname.string, sizeof (title));
+	for (i = 0; title[i]; i++)
+		if (title[i] < ' ' || title[i] > '~')
+			title[i] = '.';
+	if (!title[0])
+		q_strlcpy (title, "host", sizeof (title));
+	maxp = (uint8_t) (svs.maxclients < 2 ? 2
+	                                    : (svs.maxclients > 8 ? 8
+	                                                           : svs.maxclients));
+	mode = (uint8_t) (deathmatch.value != 0 ? 1 : 0);
+	players = (uint8_t) QN_HostPlayers ();
+	if (players > maxp)
+		players = maxp;
+
+	if (qn_ann_up && !Q_strcmp (map, qn_ann_map)
+	    && !Q_strcmp (title, qn_ann_title) && maxp == qn_ann_maxp
+	    && mode == qn_ann_mode && players == qn_ann_players)
+		return;
+
+	vals[0] = (const uint8_t *) map;
+	lens[0] = (uint16_t) strlen (map);
+	vals[1] = (const uint8_t *) title;
+	lens[1] = (uint16_t) strlen (title);
+	vals[2] = &maxp;
+	lens[2] = 1;
+	vals[3] = &mode;
+	lens[3] = 1;
+	vals[4] = &players;
+	lens[4] = 1;
+	n = qn_tlv_write (pl, sizeof (pl), tags, vals, lens, 5);
+	if (n == 0)
+		return;	/* malformed content: stays unlisted, retried on change */
+	if (qn_transport_send (&qn_tr, QN_T_LOBBY_ANNOUNCE, pl,
+	                       (uint16_t) n) != 1)
+		return;
+	qn_ann_up = true;
+	q_strlcpy (qn_ann_map, map, sizeof (qn_ann_map));
+	q_strlcpy (qn_ann_title, title, sizeof (qn_ann_title));
+	qn_ann_maxp = maxp;
+	qn_ann_mode = mode;
+	qn_ann_players = players;
 }
 
 void QN_LobbyWatch (void)
@@ -1229,6 +1351,11 @@ void QN_Pump (unsigned long long now_ms)
 		qn_sv_was_active = false;
 	}
 
+	/* visibility edge: announce/withdraw follow (public && hosting)
+	 * live, independent of the lane edges above */
+	if (qn_state == QN_RUNNING)
+		QN_LobbyHostEdges ();
+
 	/* ca_disconnected covers the connect attempt itself -- CL only
 	 * leaves it once NET_Connect returns -- so closing the lane on
 	 * that edge alone would tear down the join before the daemon's
@@ -1363,6 +1490,7 @@ void QN_Listen (qboolean state)
 		{
 			qn_host_lane_up = false;
 			qn_host_ready_shown = false;
+			qn_ann_up = false;
 			qn_join_code_text[0] = '\0';
 			qn_own_code_set = false;
 			qn_sv_was_active = false;
@@ -1769,6 +1897,8 @@ void QN_Status_f (void)
 	Con_Printf ("host lane %s\n", qn_host_lane_up ? "up" : "down");
 	Con_Printf ("client lane %s\n", qn_client_lane_up ? "up" : "down");
 	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");
+	Con_Printf ("visibility %s\n", qn_host_public ? "public" : "private");
+	Con_Printf ("lobby %s\n", qn_ann_up ? "advertising" : "quiet");
 	if (qn_last_note)
 		Con_Printf ("last note: %s\n", qn_last_note);
 	if (qn_join_cause_text)

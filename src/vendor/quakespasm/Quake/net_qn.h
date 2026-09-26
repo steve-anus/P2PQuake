@@ -30,6 +30,12 @@ void QN_Listen (qboolean state);
  * when no room is currently announced. */
 const char *QN_JoinCodeText (void);
 
+/* Host-page Visibility row state (spec 5.1): private until the host says
+ * otherwise; the pump drives announce/withdraw off it live. */
+void QN_SetHostPublic (qboolean v);
+qboolean QN_GetHostPublic (void);
+void QN_Visibility_f (void);
+
 /* public lobby view (spec 3.6; adverts arrive daemon-verified) */
 void QN_LobbyWatch (void);
 void QN_LobbyUnwatch (void);
