@@ -265,6 +265,119 @@ test('unbound per-connection bucket: 10/s burst 5 exactly per the limits table',
   assert.equal(b.consume(), false);
 });
 
+test('§6.1 three-tier: honest RELAY game-data rates survive control and game budgets', async () => {
+  const seen = [];
+  const { clock, room } = hostRoom({ cbs: { onClData: (from, body) => seen.push(body) } });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  // 300 RELAY frames at one frozen instant: past the 200/s control burst,
+  // within the game bucket (burst 300) and the outer decode bound (400).
+  for (let s = 3; s < 303; s++)
+    conn.emit('data', envBytes(E.TYPES.RELAY, s,
+      [[1, Buffer.from(KEYS.peer.pub)], [2, Buffer.from('f' + s)]], KEYS.peer.priv));
+  await clock.advance(10);
+  assert.equal(conn.destroyed, false);
+  assert.equal(seen.length, 300);
+});
+
+test('§6.1 three-tier: a control-plane flood dies on the control bucket, before dispatch', async () => {
+  const chats = [];
+  const { clock, room, logs } = hostRoom({ cbs: { onChat: (from, text) => chats.push(text) } });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  for (let s = 3; s < 63; s++) {
+    if (conn.destroyed) break;
+    conn.emit('data', envBytes(E.TYPES.CHAT, s,
+      [[1, Buffer.from('x')]], KEYS.peer.priv));
+  }
+  await clock.advance(10);
+  assert.equal(conn.destroyed, true);
+  assert.match(logs.join('\n'), /connection closed \(control rate limit exceeded\)/);
+  // Budget: JOIN took 1 of burst 50, the 10 ms advance refilled 200/s*0.01s
+  // = 2 (capped at burst), so exactly 50 dispatches before the wall.
+  assert.equal(chats.length, 50);
+});
+
+test('§6.1 three-tier: a RELAY flood past the game bucket dies on dispatch work', async () => {
+  const seen = [];
+  const { clock, room, logs } = hostRoom({ cbs: { onClData: (from, body) => seen.push(body) } });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  for (let s = 3; s < 353; s++) {
+    if (conn.destroyed) break;
+    conn.emit('data', envBytes(E.TYPES.RELAY, s,
+      [[1, Buffer.from(KEYS.peer.pub)], [2, Buffer.from('f')]], KEYS.peer.priv));
+  }
+  await clock.advance(10);
+  assert.equal(conn.destroyed, true); // game burst 300 < outer burst 400: tier attribution
+  assert.match(logs.join('\n'), /connection closed \(game rate limit exceeded\)/);
+  assert.equal(seen.length, 300); // the flood stopped at the wall, none dispatched after
+});
+
+test('§6.1 three-tier: replayed envelopes count against the outer bucket only', async () => {
+  const seen = [];
+  const { clock, room, logs } = hostRoom({ cbs: { onClData: (from, body) => seen.push(body) } });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  const one = envBytes(E.TYPES.RELAY, 3,
+    [[1, Buffer.from(KEYS.peer.pub)], [2, Buffer.from('f')]], KEYS.peer.priv);
+  conn.emit('data', one);
+  for (let i = 0; i < 450; i++) {
+    if (conn.destroyed) break;
+    conn.emit('data', one); // every replay: outer token, no game/control token
+  }
+  await clock.advance(10);
+  assert.equal(conn.destroyed, true);
+  // Replay skips the game/control buckets -- had it fed either, the close
+  // reason would read 'game/control rate limit exceeded' (bursts 300/50);
+  // the seq-window lifetime cap (100 drops) is what stops this flood.
+  assert.match(logs.join('\n'), /connection closed \(window close-drops\)/);
+  assert.equal(seen.length, 1); // replays never dispatch
+});
+
+test('§6.1 three-tier: a mixed burst that trips no tier still dies on the outer bound', async () => {
+  const seen = [];
+  const chats = [];
+  const { clock, room, logs } = hostRoom({
+    cbs: { onClData: (from, body) => seen.push(body), onChat: (from, t) => chats.push(t) },
+  });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await clock.advance(10);
+  // Exactly fill the game burst (300 RELAY) and the control budget (50 CHAT
+  // after JOIN's refill-capped token loss); then replays: they skip both
+  // tiers, so only the all-envelope decode bound (burst 400) can stop it.
+  const relays = [];
+  for (let s = 3; s < 303; s++) {
+    const e = envBytes(E.TYPES.RELAY, s,
+      [[1, Buffer.from(KEYS.peer.pub)], [2, Buffer.from('f' + s)]], KEYS.peer.priv);
+    relays.push(e);
+    conn.emit('data', e);
+  }
+  for (let s = 303; s < 353; s++)
+    conn.emit('data', envBytes(E.TYPES.CHAT, s, [[1, Buffer.from('x')]], KEYS.peer.priv));
+  for (let i = 0; i < 200 && !conn.destroyed; i++) conn.emit('data', relays[i]);
+  await clock.advance(10);
+  assert.equal(conn.destroyed, true);
+  assert.match(logs.join('\n'), /connection closed \(envelope rate limit exceeded\)/);
+  assert.equal(seen.length, 300);
+  assert.equal(chats.length, 50);
+});
+
 test('host delivers verified RELAY bodies with the bound-key origin; a forged origin closes', async () => {
   const seen = [];
   const { clock, room, logs } = hostRoom({ cbs: { onClData: (from, body) => seen.push([from, body]) } });

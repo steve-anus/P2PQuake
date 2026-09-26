@@ -98,7 +98,14 @@ class Session {
     this.reader = new E.EnvelopeReader();
     this.bound = null;
     this.win = new E.SeqWindow();
-    this.bucket = new E.RateBucket({ now: room.clock.now });
+    // §6.1 three-tier metering: the outer bucket bounds decode work for every
+    // bound envelope; after decode, RELAY (the game-data plane: server
+    // frames and usercmds, one-per-tick honest at listen-host frame rates)
+    // pays the game bucket, and every other type pays the control bucket
+    // before dispatch.
+    this.bucket = new E.RateBucket({ rate: 2000, burst: 400, now: room.clock.now });
+    this.controlBucket = new E.RateBucket({ now: room.clock.now });
+    this.gameBucket = new E.RateBucket({ rate: 1200, burst: 300, now: room.clock.now });
     this.preBucket = new E.RateBucket({ rate: 10, burst: 5, now: room.clock.now });
     this.unknownRun = 0;
     this.seqOut = 0;
@@ -131,6 +138,15 @@ class Session {
       this.room.keys.priv));
   }
 
+  meterControl(env) {
+    if (env.type === E.TYPES.RELAY) {
+      this.relaysIn = (this.relaysIn || 0) + 1;
+      if (!this.gameBucket.consume()) throw new E.EnvelopeError('game rate limit exceeded');
+      return;
+    }
+    if (!this.controlBucket.consume()) throw new E.EnvelopeError('control rate limit exceeded');
+  }
+
   start(onData) {
     this.bindTimer = this.schedule(this.room.timeouts.keyBindMs, () =>
       this.close('key-bind timeout'));
@@ -140,7 +156,8 @@ class Session {
       catch (e) { return this.close('reader: ' + e.name); }
       for (const raw of bufs) {
         const pipe = this.bound ? this.bucket : this.preBucket; // §6.1
-        if (!pipe.consume()) return this.close('rate limit exceeded');
+        if (!pipe.consume())
+          return this.close(this.bound ? 'envelope rate limit exceeded' : 'rate limit exceeded');
         this.lastIn = this.room.clock.now();
         try {
           if (!this.bound) { this.acceptBind(raw); continue; }
@@ -153,6 +170,16 @@ class Session {
     });
     this.conn.on('error', () => {}); // discovery races are not failures
     this.conn.on('close', () => this.close('remote close'));
+    if (process.env.QN_LANE_STATS) {
+      const tick = () => {
+        if (this.dead) return;
+        const n = this.relaysIn || 0;
+        this.relaysIn = 0;
+        this.room.log(this.role + ': lane-stats relays=' + n);
+        this.schedule(1000, tick);
+      };
+      this.schedule(1000, tick);
+    }
     this.pingLoop();
     if (onData) onData();
   }
@@ -210,6 +237,7 @@ class HostSession extends Session {
   onBoundEnvelope(raw) {
     const { env, replayed } = inbound(raw, this.bound, this.win, this.room.matchId);
     if (replayed) return; // counted by the window; never executed
+    this.meterControl(env);
     if (hasIllegalTags(env)) {
       if (++this.unknownRun > 10) throw new E.EnvelopeError('drop storm (§3.4b)');
       return;
@@ -431,6 +459,7 @@ class ClientSession extends Session {
   onBoundEnvelope(raw) {
     const { env, replayed } = inbound(raw, this.bound, this.win, this.room.matchId);
     if (replayed) { this.room.cbs.onReplay(); return; } // counted, never executed
+    this.meterControl(env);
     if (hasIllegalTags(env)) {
       if (++this.unknownRun > 10) throw new E.EnvelopeError('drop storm (§3.4b)');
       return;
