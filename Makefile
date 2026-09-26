@@ -25,7 +25,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay smoke-dht clean fake-engine
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine
 
 all: engine peer
 
@@ -102,6 +102,17 @@ relay: engine
 	QN_RELAY=1 $(NODE) tests/qn_twoplayer.cjs
 	@echo "twoplayer-coop-advance:"
 	QN_COOP=1 $(NODE) tests/qn_twoplayer.cjs
+
+# Automatic relay fallback: direct dials to match peers are failed once
+# with hyperswarm's punch-error trigger code (test patch below); the lane
+# asserts the join survives by redialing through the named relay. The
+# launcher is generated per run because the engine copies (not execs-in-
+# place) the -qn-peer file, so relative paths from $0 cannot resolve.
+relayauto: engine
+	@mkdir -p bin
+	@printf '#!/bin/sh\nexec node --require "%s/src/peer/qn-relayauto-patch.cjs" "%s/src/peer/qn-peer.cjs" "$$@"\n' "$(CURDIR)" "$(CURDIR)" > bin/relayauto-launch.sh
+	@chmod +x bin/relayauto-launch.sh
+	QN_RELAY=auto QN_PEER=$(CURDIR)/bin/relayauto-launch.sh $(NODE) tests/qn_twoplayer.cjs
 
 # Fuzz target 3: hostile engine-plane bytes through the real driver path,
 # with the parsers under ASan+UBSan. Forces both rebuilds (the vendored
