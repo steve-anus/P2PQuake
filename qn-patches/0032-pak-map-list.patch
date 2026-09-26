@@ -1,0 +1,29 @@
+--- a/Quake/host_cmd.c
++++ b/Quake/host_cmd.c
+@@ -165,17 +165,17 @@
+ 		}
+ 		else //pakfile
+ 		{
+-			if (search->path_id != 1U) // don't list standard id maps: they aren't "add-on" levels
++			/* The product ships its campaign inside the base-dir paks, so
++			 * those must be listed too; the Host page pool filters gate what
++			 * the menu can actually select. */
++			for (i = 0, pak = search->pack; i < pak->numfiles; i++)
+ 			{
+-				for (i = 0, pak = search->pack; i < pak->numfiles; i++)
++				if (!strcmp(COM_FileGetExtension(pak->files[i].name), "bsp"))
+ 				{
+-					if (!strcmp(COM_FileGetExtension(pak->files[i].name), "bsp"))
+-					{
+-						if (pak->files[i].filelen > 32*1024)
+-						{ // don't list files under 32k (ammo boxes etc)
+-							COM_StripExtension(pak->files[i].name + 5, mapname, sizeof(mapname));
+-							ExtraMaps_Add (mapname, search->path_id);
+-						}
++					if (pak->files[i].filelen > 32*1024)
++					{ // don't list files under 32k (ammo boxes etc)
++						COM_StripExtension(pak->files[i].name + 5, mapname, sizeof(mapname));
++						ExtraMaps_Add (mapname, search->path_id);
+ 					}
+ 				}
+ 			}
