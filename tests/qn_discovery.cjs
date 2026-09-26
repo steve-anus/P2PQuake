@@ -169,6 +169,7 @@ async function main() {
   ok(() => assert.deepEqual(adv.code, code), 'advert carries the join code');
   ok(() => assert.deepEqual(adv.pubkey, expectPub), 'advert signed by host identity');
   ok(() => assert.equal(adv.epoch, 1n), 'advert epoch starts at one');
+  const firstEpoch = adv.epoch;            // observed well inside the 60 s cadence window
 
   // re-announce: latest content wins, epoch advances, viewer resurfaces it
   engH.st.send(F.TYPES.LOBBY_ANNOUNCE, F.encodeTLV([
@@ -177,13 +178,15 @@ async function main() {
     [0x03, Buffer.from([4])],
     [0x04, Buffer.from([0])],
   ]));
-  await waitFor(() => {
-    const snaps = collectAll(lists());
-    return snaps.some((b) => { try { return L.decodeAdvert(b).map === 'lq_e1m1'; } catch { return false; } });
-  }, 're-announce surfacing', 30000);
-  const renamed = L.decodeAdvert(
-    collectAll(lists()).find((b) => { try { return L.decodeAdvert(b).map === 'lq_e1m1'; } catch { return false; } }));
-  ok(() => assert.equal(renamed.epoch, 2n), 're-announce epoch advanced');
+  const renamedSeen = () => {              // inside a terminator-completed group only
+    for (const g of completedSnapshots(lists()))
+      for (const b of g) { try { if (L.decodeAdvert(b).map === 'lq_e1m1') return b; } catch { /* skip */ } }
+    return null;
+  };
+  await waitFor(() => renamedSeen() !== null, 're-announce surfacing', 30000);
+  const renamed = L.decodeAdvert(renamedSeen());
+  ok(() => assert.ok(renamed.epoch === firstEpoch + 1n || renamed.epoch === firstEpoch + 2n,
+    'epoch ' + renamed.epoch), 're-announce epoch advanced');
 
   // teardown withdraws
   engH.st.send(F.TYPES.HOST_DOWN, Buffer.alloc(0));
@@ -212,7 +215,6 @@ function takeSnapshot(list) {
   const g = completedSnapshots(list);
   return g.length ? g[0] : null;
 }
-function collectAll(list) { return list.filter((f) => f.payload.length > 0).map((f) => f.payload); }
 
 function fakeEngineSafe(sockPath, token) {
   fs.mkdirSync(path.dirname(sockPath), { recursive: true, mode: 0o700 });

@@ -65,7 +65,7 @@ function mkHost(opts = {}) {
   const logs = [];
   const h = D.makeHostLobby({
     keys: mkKeys(0x11),
-    epochs: Q.makeEpochStore(dir),
+    epochs: opts.epochs || Q.makeEpochStore(dir),
     clock,
     swarmFactory: () => { const s = new EventEmitter(); s.destroyed = false; s.destroy = () => { s.destroyed = true; }; swarms.push(s); return s; },
     version: [0, 2], minVersion: [0, 2],
@@ -85,6 +85,8 @@ test('announceFields: accept and full rejection matrix', () => {
   const rt = (tag, val) => { const h = Buffer.alloc(4); h.writeUInt16LE(tag, 0); h.writeUInt16LE(val.length, 2); return Buffer.concat([h, val]); };
   const dupRaw = Buffer.concat(base.map(([t, v]) => rt(t, v)).concat([rt(0x04, Buffer.from([0]))]));
   assert.throws(() => D.announceFields(dupRaw), L.LobbyError);                                  // dup tag
+  const extraRaw = Buffer.concat(base.map(([t, v]) => rt(t, v)).concat([rt(0x05, Buffer.from('x'))]));
+  assert.throws(() => D.announceFields(extraRaw), L.LobbyError);                               // extra tag
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.alloc(0)], base[3]])), L.LobbyError);
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([1])], base[3]])), L.LobbyError);   // maxp 1
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([9])], base[3]])), L.LobbyError);   // maxp 9
@@ -134,6 +136,9 @@ test('host: cadence re-signs inside ttl; epochs persist across instances', async
   const b = mk();                                              // daemon restart
   b.onAnnounce(tlvPayload(GOOD));
   assert.equal(L.decodeAdvert(b.advert).epoch, 3n);            // never restarts at zero
+  const files = fs.readdirSync(dir);
+  assert.ok(files.some((f) => f.startsWith('epoch-')), 'epoch file present');
+  assert.ok(files.every((f) => !f.endsWith('.tmp')), 'no tmp residue');
 });
 
 test('host: announce without a room code drops loudly and publishes nothing', () => {
@@ -178,6 +183,46 @@ test('host serve: advert framing on connect, silence after withdraw', () => {
   const out = Buffer.concat(chunks);
   assert.equal(out.readUInt16LE(0), h.advert.length);
   assert.deepEqual(out.subarray(2), h.advert);
+});
+
+test('host: watermark survives persistence loss; code loss retires the listing', async () => {
+  const clock = fakeClock();
+  const saves = [];
+  const swarms = [];
+  let code = CODE10;
+  const h = D.makeHostLobby({
+    keys: mkKeys(0x41),
+    epochs: { load: () => -1n, save: (s, m, v) => saves.push(v) },   // persistence wiped
+    clock,
+    swarmFactory: () => { const s = Object.assign(new EventEmitter(), { destroyed: false, destroy() { this.destroyed = true; } }); swarms.push(s); return s; },
+    version: [0, 2], minVersion: [0, 2],
+    getCode: () => code, log: () => {},
+  });
+  h.onAnnounce(tlvPayload(GOOD));
+  assert.equal(L.decodeAdvert(h.advert).epoch, 1n);
+  await clock.advance(60000);
+  assert.equal(L.decodeAdvert(h.advert).epoch, 2n);            // watermark, not a reset to one
+  code = null;
+  await clock.advance(60000);                                  // cadence meets a dead room
+  assert.equal(h.advert, null);
+  assert.equal(swarms[swarms.length - 1].destroyed, true);     // nothing served on
+  assert.equal(saves.length, 2);                               // no signing after retire
+  await clock.advance(120000);
+  assert.equal(h.advert, null);                                // cadence stays stopped
+});
+
+test('viewer: invalid adverts spend the meter (verify is the gated cost)', async () => {
+  const { v, clock, frames } = mkViewer();
+  v.start();
+  const ad = advBuf();
+  const h2 = Buffer.alloc(2); h2.writeUInt16LE(ad.length, 0);
+  const bad = Buffer.from(ad); bad[bad.length - 1] ^= 1;
+  for (let i = 0; i < 50; i++) feedFetch(v, Buffer.concat([h2, bad]));    // flood spends the bucket
+  const live = advBuf(GOOD, 0x7a);                                          // honest host arrives
+  const h3 = Buffer.alloc(2); h3.writeUInt16LE(live.length, 0);
+  feedFetch(v, Buffer.concat([h3, live]));
+  await clock.advance(20);
+  assert.equal(v.live.length, 0);        // pre-metered tampering would have stored the good one
 });
 
 function mkViewer() {
