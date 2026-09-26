@@ -369,7 +369,9 @@ most 1/s. Snapshots ride LOBBY_LIST on change and at least every 30 s
 while watched. A snapshot is one or more consecutive LOBBY_LIST frames:
 each frame carries as many adverts as fit its 2048-byte payload cap, and
 the snapshot ends with one empty-payload LOBBY_LIST; the engine swaps the
-whole view only on that terminator, so a partial snapshot never shows.
+whole view only on that terminator, so a partial snapshot never shows; a
+reader discards its pending buffer if any other frame type interrupts a
+snapshot.
 
 Visibility of the join code: a listed room is joinable by strangers by
 definition, so the code inside a public advert is addressing data, not

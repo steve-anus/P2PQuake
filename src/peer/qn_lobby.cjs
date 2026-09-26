@@ -103,13 +103,9 @@ function decodeAdvert(buf) {
     throw new LobbyError('advert verify: ' + e.message);
   }
   if (!ok) throw new LobbyError('advert: signature');
-  const codeC = Buffer.from(code);
-  const pubC = Buffer.from(pub);
-  if (codeC.freeze) codeC.freeze();
-  if (pubC.freeze) pubC.freeze();
   return Object.freeze({
     map, title, maxPlayers: maxp[0], mode: mode[0],
-    code: codeC, pubkey: pubC,
+    code: Buffer.from(code), pubkey: Buffer.from(pub),
     version: Object.freeze(version), minVersion: Object.freeze(minVersion),
     epoch, ttl: ADVERT_TTL,
   });
@@ -162,14 +158,20 @@ class AdvertStore {
   apply(advert, buf, now) {
     if (typeof advert.epoch !== 'bigint' || !Buffer.isBuffer(advert.pubkey))
       throw new LobbyError('apply: unverified advert object');
+    if (!Buffer.isBuffer(buf) || buf.length < 64 || buf.length > ADVERT_MAX)
+      throw new LobbyError('apply: bad buf');
+    const fromBuf = decodeAdvert(buf);       // self-verifying: stored bytes must BE the verified advert
+    if (!fromBuf.pubkey.equals(advert.pubkey) || fromBuf.epoch !== advert.epoch)
+      throw new LobbyError('apply: buf/advert mismatch');
     const key = advert.pubkey.toString('hex');
     const fl = this.floor.get(key);
     if (fl !== undefined && advert.epoch <= fl) return 'stale';   // tie, regression, or post-forget replay
+    Object.freeze(advert);
     const copy = Buffer.from(buf);
-    if (copy.freeze) copy.freeze();
     this.byHost.set(key, Object.freeze({
-      advert, buf: copy, epoch: advert.epoch, firstSeen: now,
+      advert, _buf: copy, epoch: advert.epoch, firstSeen: now,
     }));
+    this.floor.delete(key);                  // re-queue on activity: recency-based eviction
     this.floor.set(key, advert.epoch);
     if (this.floor.size > this.floorCap)
       this.floor.delete(this.floor.keys().next().value);
@@ -183,13 +185,19 @@ class AdvertStore {
   }
 
   live(now) {
-    const out = [];
+    const keep = [];
     for (const [k, v] of this.byHost) {
       if (now - v.firstSeen > v.advert.ttl * 1000) this.byHost.delete(k);
-      else out.push(v);
+      else keep.push(v);
     }
-    out.sort((a, b) => (a.epoch === b.epoch ? 0 : a.epoch > b.epoch ? -1 : 1));
-    return out;
+    keep.sort((a, b) => (a.epoch === b.epoch ? 0 : a.epoch > b.epoch ? -1 : 1));
+    return keep.map((v) => {
+      const src = v._buf;
+      return Object.freeze({
+        advert: v.advert, epoch: v.epoch, firstSeen: v.firstSeen,
+        get buf() { return Buffer.from(src); },
+      });
+    });
   }
 
   get size() { return this.byHost.size; }

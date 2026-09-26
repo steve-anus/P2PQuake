@@ -120,7 +120,7 @@ test('hostile field values refuse', () => {
     ['maxp 0', { maxp: Buffer.from([0]) }],
     ['maxp 1', { maxp: Buffer.from([1]) }],
     ['maxp 9', { maxp: Buffer.from([9]) }],
-    ['maxp two bytes', { maxp: Buffer.from([8, 0]) }],
+    ['maxp two bytes', { maxp: Buffer.from([8, 0]) }, /advert: maxp$/],
     ['mode 2', { mode: Buffer.from([2]) }],
     ['mode empty', { mode: Buffer.alloc(0) }],
     ['code 9', { code: Buffer.alloc(9, 7) }],
@@ -130,15 +130,16 @@ test('hostile field values refuse', () => {
     ['epoch zero', { epoch: 0n }],
     ['ttl 121', { ttl: 121 }],
     ['ttl 0', { ttl: 0 }],
-    ['ttl 1 byte', { ttlRaw: Buffer.from([120]) }],
-    ['ttl 3 bytes', { ttlRaw: Buffer.alloc(3, 120) }],
-    ['version 3 bytes', { verRaw: Buffer.alloc(3) }],
-    ['minVersion 5 bytes', { minVerRaw: Buffer.alloc(5) }],
-    ['epoch 7 bytes', { epochRaw: Buffer.alloc(7, 1) }],
-    ['epoch 9 bytes', { epochRaw: Buffer.alloc(9, 1) }],
+    ['ttl 1 byte', { ttlRaw: Buffer.from([120]) }, /advert: ttl$/],
+    ['ttl 3 bytes', { ttlRaw: Buffer.alloc(3, 120) }, /advert: ttl$/],
+    ['version 3 bytes', { verRaw: Buffer.alloc(3) }, /advert: version length$/],
+    ['minVersion 5 bytes', { minVerRaw: Buffer.alloc(5) }, /advert: minVersion length$/],
+    ['epoch 7 bytes', { epochRaw: Buffer.alloc(7, 1) }, /advert: epoch length$/],
+    ['epoch 9 bytes', { epochRaw: Buffer.alloc(9, 1) }, /advert: epoch length$/],
   ];
-  for (const [name, o] of bad)
-    assert.throws(() => L.decodeAdvert(signed(fieldsOf(o))), L.LobbyError, name);
+  for (const [name, o, re] of bad)
+    assert.throws(() => L.decodeAdvert(signed(fieldsOf(o))),
+      (err) => err instanceof L.LobbyError && (!re || re.test(err.message)), name);
 });
 
 test('oversized advert refuses before any parse work', () => {
@@ -254,4 +255,60 @@ test('encode refuses a non-buffer pubkey with LobbyError', () => {
     code: Buffer.alloc(10, 7), version: [1, 4], minVersion: [1, 0], epoch: 1 };
   assert.throws(() => L.encodeAdvert({ ...base, pubkey: pub.toString('hex') }, kp.privateKey), L.LobbyError);
   assert.throws(() => L.encodeAdvert({ ...base, pubkey: 5 }, kp.privateKey), L.LobbyError);
+});
+
+test('store hands out copies: post-verify byte mutation cannot reach the forward path', () => {
+  const st = new L.AdvertStore();
+  const buf = signed(fieldsOf());
+  st.apply(L.decodeAdvert(buf), buf, 0);
+  const e = st.live(0)[0];
+  const b = e.buf;
+  b[0] ^= 0xff;
+  assert.notDeepEqual(e.buf, b);
+  assert.deepEqual(e.buf, buf);
+});
+
+test('apply guards buf provenance: string arg and mismatched bytes refuse', () => {
+  const st = new L.AdvertStore();
+  const buf = signed(fieldsOf());
+  const adv = L.decodeAdvert(buf);
+  assert.throws(() => st.apply(adv, buf.toString('latin1'), 0), /bad buf/);
+  assert.throws(() => st.apply(adv, Buffer.alloc(63), 0), /bad buf/);
+  const other = signed(fieldsOf({ epoch: 9n, pubkey: pub2 }), kp2.privateKey);
+  assert.throws(() => st.apply(adv, other, 0), /buf\/advert mismatch/);
+});
+
+test('floor keeps recency: an active host survives churn of dead keys', () => {
+  const st = new L.AdvertStore();
+  const vk = crypto.generateKeyPairSync('ed25519');
+  const vpub = E.publicRaw(vk.publicKey);
+  const mkVictim = (epoch) => signed(fieldsOf({ epoch, pubkey: vpub }), vk.privateKey);
+  const churn = (n) => {
+    for (let i = 0; i < n; i++) {
+      const k = crypto.generateKeyPairSync('ed25519');
+      const b = signed(fieldsOf({ epoch: 1n, pubkey: E.publicRaw(k.publicKey) }), k.privateKey);
+      st.apply(L.decodeAdvert(b), b, i);
+    }
+  };
+  const b7 = mkVictim(7n);
+  st.apply(L.decodeAdvert(b7), b7, 0);
+  churn(600);
+  const b8 = mkVictim(8n);
+  st.apply(L.decodeAdvert(b8), b8, 700);
+  churn(600);
+  assert.equal(st.apply(L.decodeAdvert(b8), b8, 99999), 'stale');
+});
+
+test('ordered-adjacent duplicate tag refuses (TLV duplicate arm)', () => {
+  const tlv = (tag, val) => {
+    const h = Buffer.alloc(4);
+    h.writeUInt16LE(tag, 0);
+    h.writeUInt16LE(val.length, 2);
+    return Buffer.concat([h, val]);
+  };
+  const e1 = Buffer.alloc(8);
+  e1.writeBigUInt64LE(1n, 0);
+  const parts = fieldsOf().map(([tag, v]) => tlv(tag, v));
+  parts.splice(9, 0, tlv(0x09, e1));
+  assert.throws(() => L.decodeAdvert(signed(Buffer.concat(parts))), L.LobbyError);
 });
