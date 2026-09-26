@@ -155,6 +155,29 @@ static void test_bounds(void)
     CHECK(QN_PlayerBounds(QN_POOL_COOP, 9, 0) == 4);
 }
 
+static void test_skill(void)
+{
+    CHECK(QN_SkillText(0) && !strcmp(QN_SkillText(0), "Easy"));
+    CHECK(QN_SkillText(1) && !strcmp(QN_SkillText(1), "Normal"));
+    CHECK(QN_SkillText(2) && !strcmp(QN_SkillText(2), "Hard"));
+    CHECK(QN_SkillText(3) && !strcmp(QN_SkillText(3), "Nightmare"));
+    CHECK(QN_SkillText(-1) == NULL);
+    CHECK(QN_SkillText(4) == NULL);
+    CHECK(QN_SkillText(9999) == NULL);
+    CHECK(QN_SkillClamp(-7) == 0);
+    CHECK(QN_SkillClamp(9) == 3);
+    CHECK(QN_SkillClamp(2) == 2);
+    CHECK(QN_SkillWrap(0, 1) == 1);
+    CHECK(QN_SkillWrap(3, 1) == 0);
+    CHECK(QN_SkillWrap(0, -1) == 3);
+    CHECK(QN_SkillWrap(2, 0) == 2);
+    CHECK(QN_SkillWrap(-9, 1) == 1);
+    CHECK(QN_SkillWrap(9, -1) == 2);
+    CHECK(QN_SkillWrap(99, 999999) == 0);
+    CHECK(QN_SkillWrap(-9, -999999) == 3);
+    CHECK(QN_SkillWrap(99, 0) == 3);
+}
+
 static void test_order(void)
 {
     char list[64][16];
@@ -274,6 +297,7 @@ int qn_test_maps(int *checks_out)
     test_pool();
     test_order();
     test_bounds();
+    test_skill();
     *checks_out = checks;
     return failures ? 1 : 0;
 }

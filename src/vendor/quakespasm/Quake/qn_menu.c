@@ -42,6 +42,7 @@ enum
 	QN_H_ITEM_PLAYERS,
 	QN_H_ITEM_ACTION,
 	QN_H_ITEM_ADVANCE,
+	QN_H_ITEM_SKILL,
 	QN_H_ITEM_BACK,
 	QN_H_NUM_ITEMS
 };
@@ -49,6 +50,7 @@ enum
 static int		qn_host_cursor;
 static int		qn_host_mode;		/* 0 = deathmatch, 1 = co-op */
 static int		qn_host_players = 2;	/* counts the host itself */
+static int		qn_host_skill = 1;
 static int		qn_host_map;
 static int		qn_host_mapcount;
 static char		qn_host_maps[QN_HOST_MAX_MAPS][QN_HOST_MAPNAME_LEN];
@@ -118,6 +120,10 @@ void QN_Menu_HostInit (void)
 {
 	qn_host_cursor = 0;
 	QN_HostBuildMaps ();
+	if (skill.value >= 0.0 && skill.value <= (double) QN_SKILL_MAX)
+		qn_host_skill = QN_SkillClamp ((int)skill.value);	/* guarded: never casts a non-finite */
+	else
+		qn_host_skill = 1;
 	qn_host_note = NULL;
 }
 
@@ -169,10 +175,17 @@ static void QN_HostChange (int dir)
 		qn_host_players = QN_PlayerBounds (pool, want, svs.maxclientslimit);
 		break;
 	}
+	case QN_H_ITEM_SKILL:
+		qn_host_skill = QN_SkillWrap (qn_host_skill, dir);
+		break;
 	default:
 		break;
 	}
 }
+
+static const char *const qn_skill_cmds[4] = {
+	"skill 0\n", "skill 1\n", "skill 2\n", "skill 3\n"
+};
 
 static void QN_HostStart (void)
 {
@@ -204,6 +217,8 @@ static void QN_HostStart (void)
 	Cbuf_AddText (cmd);
 	Cbuf_AddText (qn_host_mode ? "coop 1\ndeathmatch 0\n"
 	                           : "coop 0\ndeathmatch 1\n");
+	if (qn_host_mode)
+		Cbuf_AddText (qn_skill_cmds[QN_SkillClamp (qn_host_skill)]);
 	Cbuf_AddText ("listen 1\n");
 	SCR_BeginLoadingPlaque ();
 	if (q_snprintf (cmd, sizeof (cmd), "map %s\n",
@@ -225,6 +240,8 @@ static qboolean qn_host_item_visible (int item)
 {
 	if (item == QN_H_ITEM_ADVANCE)
 		return sv.active && qn_host_mode;
+	if (item == QN_H_ITEM_SKILL)
+		return qn_host_mode && !sv.active;
 	return true;
 }
 
@@ -374,6 +391,11 @@ void QN_Menu_HostDraw (void)
 		M_Print (64, 128, "Campaign");
 		M_Print (176, 128, "advance map");
 	}
+	else if (qn_host_item_visible (QN_H_ITEM_SKILL))
+	{
+		M_Print (64, 128, "Skill");
+		M_Print (176, 128, QN_SkillText (QN_SkillClamp (qn_host_skill)));
+	}
 
 	M_Print (176, 136, "back");
 
@@ -383,6 +405,9 @@ void QN_Menu_HostDraw (void)
 		M_DrawCharacter (158, 108, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_ADVANCE &&
 	         qn_host_item_visible (QN_H_ITEM_ADVANCE))
+		M_DrawCharacter (158, 128, 10 + ((int)(realtime*4)&1));
+	else if (qn_host_cursor == QN_H_ITEM_SKILL &&
+	         qn_host_item_visible (QN_H_ITEM_SKILL))
 		M_DrawCharacter (158, 128, 10 + ((int)(realtime*4)&1));
 	else if (qn_host_cursor == QN_H_ITEM_BACK)
 		M_DrawCharacter (158, 136, 10 + ((int)(realtime*4)&1));
@@ -438,7 +463,8 @@ void QN_Menu_HostKey (int key)
 		return;
 
 	case K_LEFTARROW:
-		if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
+		if (qn_host_cursor <= QN_H_ITEM_PLAYERS ||
+		    qn_host_cursor == QN_H_ITEM_SKILL)
 		{
 			S_LocalSound ("misc/menu3.wav");
 			QN_HostChange (-1);
@@ -446,7 +472,8 @@ void QN_Menu_HostKey (int key)
 		return;
 
 	case K_RIGHTARROW:
-		if (qn_host_cursor <= QN_H_ITEM_PLAYERS)
+		if (qn_host_cursor <= QN_H_ITEM_PLAYERS ||
+		    qn_host_cursor == QN_H_ITEM_SKILL)
 		{
 			S_LocalSound ("misc/menu3.wav");
 			QN_HostChange (1);
@@ -462,6 +489,7 @@ void QN_Menu_HostKey (int key)
 		case QN_H_ITEM_MODE:
 		case QN_H_ITEM_MAP:
 		case QN_H_ITEM_PLAYERS:
+		case QN_H_ITEM_SKILL:
 			S_LocalSound ("misc/menu3.wav");
 			QN_HostChange (1);
 			break;
