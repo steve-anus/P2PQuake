@@ -525,13 +525,16 @@ async function run(opts) {
         return;
       }
       case F.TYPES.LOBBY_WITHDRAW:
+        if (f.payload.length !== 0) { log('lobby: malformed control frame, dropped'); return; }
         if (hostLobby) hostLobby.onWithdraw();
         return;
       case F.TYPES.LOBBY_WATCH:
+        if (f.payload.length !== 0) { log('lobby: malformed control frame, dropped'); return; }
         try { viewerLobbyEnsure().start(); }
         catch { log('lobby: watch failed'); }
         return;
       case F.TYPES.LOBBY_UNWATCH:
+        if (f.payload.length !== 0) { log('lobby: malformed control frame, dropped'); return; }
         if (viewerLobby) viewerLobby.stop();
         return;
       case F.TYPES.CLIENT_CMD: {

@@ -62,6 +62,50 @@ function fakeEngine(t, expected) {
     reject: (e) => rejectFrame(e) };
 }
 
+test('payload-bearing lobby control frames are inert (spec 2.3: empty)', async (t) => {
+  const token = crypto.randomBytes(32);
+  const { dir, sockPath } = mkSocketPath();
+  const got = [];
+  const server = net.createServer((conn) => {
+    const fr = new F.FrameReader();
+    let authed = false, eseq = 1;
+    conn.on('data', (c) => {
+      let frames;
+      try { frames = fr.feed(c); } catch { conn.destroy(); return; }
+      for (const f of frames) {
+        if (!authed) {
+          const good = f.type === F.TYPES.AUTH && f.seq === 1 &&
+            f.payload.length === token.length && crypto.timingSafeEqual(f.payload, token);
+          if (!good) { conn.destroy(); continue; }
+          authed = true;
+          conn.write(F.encodeFrame(F.TYPES.LOBBY_WATCH, eseq++, Buffer.from('junk')));
+          conn.write(F.encodeFrame(F.TYPES.LOBBY_UNWATCH, eseq++, Buffer.from('junk')));
+          conn.write(F.encodeFrame(F.TYPES.LOBBY_WITHDRAW, eseq++, Buffer.from('junk')));
+          conn.write(F.encodeFrame(F.TYPES.PING, eseq++, Buffer.from([1, 2, 3, 4])));
+          continue;
+        }
+        got.push(f);
+      }
+    });
+    conn.on('error', () => {});
+  });
+  await new Promise((res) => server.listen(sockPath, () => res()));
+  t.after(async () => {
+    server.close(); server.closeAllConnections?.();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const p = spawnPeer(t, sockPath);
+  p.child.stdin.write(token);
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline && !got.some((f) => f.type === F.TYPES.PONG))
+    await new Promise((r) => setTimeout(r, 25));
+  assert.ok(got.some((f) => f.type === F.TYPES.PONG), 'daemon alive: PONG came back');
+  assert.equal(got.filter((f) => f.type === F.TYPES.LOBBY_LIST).length, 0,
+    'a corrupt WATCH must not start the snapshot pump');
+  p.child.kill('SIGTERM');
+  await p.exits;
+});
+
 const FAKE_ENGINE = path.join(__dirname, '..', 'bin', 'fake-engine');
 
 function spawnPeer(t, sockPath, extra = []) {

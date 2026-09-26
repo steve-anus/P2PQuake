@@ -50,6 +50,11 @@ enum {
     QN_T_STUFFTEXT   = 0x0050,
     QN_T_CLIENT_CMD  = 0x0060,
     QN_T_RELIABLE    = 0x0061,
+    QN_T_LOBBY_WATCH    = 0x0070,
+    QN_T_LOBBY_UNWATCH  = 0x0071,
+    QN_T_LOBBY_LIST     = 0x0072,
+    QN_T_LOBBY_ANNOUNCE = 0x0073,
+    QN_T_LOBBY_WITHDRAW = 0x0074,
     QN_T_FATAL       = 0x00FF
 };
 

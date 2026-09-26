@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "qn_menu.h"
 #include "qn_pad.h"
+#include "net_qn.h"
 
 void (*vid_menucmdfn)(void); //johnfitz
 void (*vid_menudrawfn)(void);
@@ -602,6 +603,42 @@ void M_Save_Key (int k)
 
 int	m_multiplayer_cursor;
 #define	MULTIPLAYER_ITEMS	3
+#define	QN_ROOM_ROWS		6
+
+static int	qn_mfocus;			/* 0 buttons, 1 lobby rooms */
+static int	qn_room_cursor;
+static int	qn_room_order[QN_ROOM_ROWS];
+static int	qn_room_rows;
+
+/* top rows by players desc then name (owner D4): stable selection sort */
+static void QN_MultiSort (void)
+{
+	int	picked[64];
+	int	n = QN_LobbyCount (), i, j, best, tmp;
+
+	if (n > (int) (sizeof (picked) / sizeof (picked[0])))
+		n = (int) (sizeof (picked) / sizeof (picked[0]));
+	for (i = 0; i < n; i++)
+		picked[i] = i;
+	qn_room_rows = n < QN_ROOM_ROWS ? n : QN_ROOM_ROWS;
+	for (i = 0; i < qn_room_rows; i++)
+	{
+		best = i;
+		for (j = i + 1; j < n; j++)
+		{
+			int	a = picked[j], b = picked[best];
+			int	pa = QN_LobbyPlayers (a), pb = QN_LobbyPlayers (b);
+			if (pa > pb || (pa == pb && Q_strcmp (QN_LobbyName (a), QN_LobbyName (b)) < 0))
+				best = j;
+		}
+		tmp = picked[i];
+		picked[i] = picked[best];
+		picked[best] = tmp;
+		qn_room_order[i] = picked[i];
+	}
+	if (qn_room_cursor >= qn_room_rows)
+		qn_room_cursor = qn_room_rows ? qn_room_rows - 1 : 0;
+}
 
 
 void M_Menu_MultiPlayer_f (void)
@@ -612,25 +649,70 @@ void M_Menu_MultiPlayer_f (void)
 	m_entersound = true;
 	if (m_multiplayer_cursor < 0 || m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
 		m_multiplayer_cursor = 0;
+	qn_mfocus = 1;		/* browser-first: the lobby is the point */
+	QN_LobbyWatch ();
 }
 
 
 void M_MultiPlayer_Draw (void)
 {
 	qpic_t	*p;
-	const char	*items[3] = { "Host game", "Join game", "Setup" };
-	int	i;
+	int	i, cy;
+	static const char	*items[3] = { "Host game", "Join by code", "Setup" };
+	static const int	bx[3] = { 5, 17, 31 };
 
 	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
 	p = Draw_CachePic ("gfx/p_multi.lmp");
 	M_DrawPic ( (320-p->width)/2, 4, p);
 
-	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
-		M_Print ((320 - (int)strlen(items[i]) * 8) / 2, 44 + i * 20, items[i]);
+	QN_MultiSort ();
+	M_PrintWhite (5, 56, "room");
+	M_PrintWhite (21, 56, "map");
+	M_PrintWhite (30, 56, "mode");
+	M_PrintWhite (34, 56, "p/y");
+	for (i = 0; i < qn_room_rows; i++)
+	{
+		int	r = qn_room_order[i];
+		char	nm[15], mp[9], pl[8];
 
-	/* conchars tile 7: the centered bullet, kept clear of the label */
-	M_DrawCharacter ((320 - (int)strlen(items[m_multiplayer_cursor]) * 8) / 2 - 16,
-	                 44 + m_multiplayer_cursor * 20, 7);
+		q_strlcpy (nm, QN_LobbyName (r), sizeof (nm));
+		q_strlcpy (mp, QN_LobbyMap (r), sizeof (mp));
+		q_snprintf (pl, sizeof (pl), "%d/%d", QN_LobbyPlayers (r), QN_LobbyMax (r));
+		cy = 68 + i * 8;
+		if (QN_LobbyMine (r))
+			M_Print (5, cy, nm);		/* own room reads dimmed */
+		else
+			M_PrintWhite (5, cy, nm);
+		M_PrintWhite (21, cy, mp);
+		M_PrintWhite (30, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
+		M_PrintWhite (34, cy, pl);
+		if (qn_mfocus == 1 && i == qn_room_cursor)
+			M_DrawCharacter (0, cy, 7);
+	}
+	if (!qn_room_rows)
+		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 11*8))/2, 72,
+		              QN_LobbyHave () ? "no public lobbies" : "searching...");
+
+	if (qn_mfocus == 1)
+	{
+		M_Print ((320 - 35*8)/2, 128, "up/down room  enter join  r refresh");
+		M_Print ((320 - 14*8)/2, 136, "tab to buttons");
+	}
+	else
+	{
+		M_Print ((320 - 30*8)/2, 128, "up/down select  enter activate");
+		M_Print ((320 - 12*8)/2, 136, "tab to lobby");
+	}
+
+	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
+	{
+		if (qn_mfocus == 0 && i == m_multiplayer_cursor)
+			M_PrintWhite (bx[i], 160, items[i]);
+		else
+			M_Print (bx[i], 160, items[i]);
+	}
+	if (qn_mfocus == 0)
+		M_DrawCharacter (bx[m_multiplayer_cursor] - 3, 160, 7);
 
 	if (ipxAvailable || tcpipAvailable)
 		return;
@@ -644,28 +726,83 @@ void M_MultiPlayer_Key (int key)
 	{
 	case K_ESCAPE:
 	case K_BBUTTON:
+		QN_LobbyUnwatch ();
 		M_Menu_Main_f ();
 		break;
 
-	case K_DOWNARROW:
+	case K_TAB:
 		S_LocalSound ("misc/menu1.wav");
-		if (++m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
-			m_multiplayer_cursor = 0;
+		qn_mfocus = !qn_mfocus;
+		break;
+
+	case K_LEFTARROW:
+		if (qn_mfocus != 0)
+			break;
+		S_LocalSound ("misc/menu1.wav");
+		m_multiplayer_cursor = (m_multiplayer_cursor + MULTIPLAYER_ITEMS - 1) % MULTIPLAYER_ITEMS;
+		break;
+
+	case K_RIGHTARROW:
+		if (qn_mfocus != 0)
+			break;
+		S_LocalSound ("misc/menu1.wav");
+		m_multiplayer_cursor = (m_multiplayer_cursor + 1) % MULTIPLAYER_ITEMS;
 		break;
 
 	case K_UPARROW:
+		if (qn_mfocus != 1)
+			break;
+		QN_MultiSort ();
+		if (qn_room_rows > 0)
+		{
+			S_LocalSound ("misc/menu1.wav");
+			qn_room_cursor = (qn_room_cursor + qn_room_rows - 1) % qn_room_rows;
+		}
+		break;
+
+	case K_DOWNARROW:
+		if (qn_mfocus != 1)
+			break;
+		QN_MultiSort ();
+		if (qn_room_rows > 0)
+		{
+			S_LocalSound ("misc/menu1.wav");
+			qn_room_cursor = (qn_room_cursor + 1) % qn_room_rows;
+		}
+		break;
+
+	case 'r':
+		if (qn_mfocus != 1)
+			break;
 		S_LocalSound ("misc/menu1.wav");
-		if (--m_multiplayer_cursor < 0)
-			m_multiplayer_cursor = MULTIPLAYER_ITEMS - 1;
+		QN_LobbyWatch ();	/* re-receipt forces an immediate snapshot */
 		break;
 
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 		m_entersound = true;
+		if (qn_mfocus == 1)
+		{	/* click-to-join: the code rides the advert; the dial
+			    below is the join-by-code path verbatim */
+			QN_MultiSort ();
+			if (qn_room_rows > 0)
+			{
+				char	grouped[20];
+				int	r = qn_room_order[qn_room_cursor];
+				if (QN_LobbyCodeGrouped (r, grouped, sizeof (grouped)))
+				{
+					QN_LobbyUnwatch ();
+					QN_Menu_JoinAdvert (grouped);
+					memset (grouped, 0, sizeof (grouped));
+				}
+			}
+			break;
+		}
 		switch (m_multiplayer_cursor)
 		{
 		case 0:
+			QN_LobbyUnwatch ();
 			IN_Deactivate(modestate == MS_WINDOWED);
 			key_dest = key_menu;
 			m_state = m_qn_host;
@@ -673,6 +810,7 @@ void M_MultiPlayer_Key (int key)
 			break;
 
 		case 1:
+			QN_LobbyUnwatch ();
 			IN_Deactivate(modestate == MS_WINDOWED);
 			key_dest = key_menu;
 			m_state = m_qn_join;
@@ -680,9 +818,11 @@ void M_MultiPlayer_Key (int key)
 			break;
 
 		case 2:
+			QN_LobbyUnwatch ();
 			M_Menu_Setup_f ();
 			break;
 		}
+		break;
 	}
 }
 

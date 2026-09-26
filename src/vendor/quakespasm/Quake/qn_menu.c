@@ -562,6 +562,27 @@ static void QN_JoinDial (void)
 	m_entersound = true;		/* only an accepted dial clicks */
 }
 
+/* click-to-join: takes the grouped code the lobby browser read off a
+ * verified advert and drives the exact join-by-code path (same pad,
+ * same dial, same causes) — there is no second join implementation */
+void QN_Menu_JoinAdvert (const char *grouped)
+{
+	const char	*p;
+
+	QN_Menu_JoinInit ();
+	for (p = grouped; *p; p++)
+	{
+		if (*p == '-')
+			continue;
+		if (!QN_PadFeed (&qn_join_pad, *p))
+		{
+			QN_JoinNote ("code rejected");
+			return;
+		}
+	}
+	QN_JoinDial ();
+}
+
 static void QN_DrawCause (void)
 {
 	const char	*t = QN_JoinCauseText ();
