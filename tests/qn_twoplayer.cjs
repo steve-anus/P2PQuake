@@ -254,18 +254,21 @@ async function main() {
   // refuses direct hole-punching, so the match can ONLY ride the relay --
   // and finish() fails the lane if the relay saw no traffic. A test, not
   // a hope.
-  if (process.env.QN_RELAY && process.env.QN_RELAY !== '1') {
-    throw new Error('QN_RELAY malformed (want 1)');
+  if (process.env.QN_RELAY && process.env.QN_RELAY !== '1' && process.env.QN_RELAY !== 'auto') {
+    throw new Error('QN_RELAY malformed (want 1|auto)');
   }
   let relayNode = null;
+  let relayAutoMark = null;
   const env = { QN_DHT_BOOTSTRAP: bootstrap };
-  if (process.env.QN_RELAY === '1') {
+  if (process.env.QN_RELAY === '1' || process.env.QN_RELAY === 'auto') {
     relayNode = await makeRelayNode({ bootstrap: tnet.bootstrap });
     env.QN_RELAY_THROUGH = relayNode.publicKey.toString('hex');
-    env.QN_RELAY_ONLY = '1';
+    if (process.env.QN_RELAY === '1') env.QN_RELAY_ONLY = '1';
+    else relayAutoMark = path.join(base, 'relayauto-marks.txt');
   }
+  if (relayAutoMark) env.QN_RELAYAUTO_MARK = relayAutoMark;
   relayNodeRef = relayNode;
-  console.log(`TWPLAYER: mode=${process.env.QN_COOP ? 'coop' : 'dm'}${relayNode ? ' relay' : ''} bootstrap=${bootstrap}`);
+  console.log(`TWPLAYER: mode=${process.env.QN_COOP ? 'coop' : 'dm'}${relayNode ? (process.env.QN_RELAY === 'auto' ? ' relay-auto' : ' relay') : ''} bootstrap=${bootstrap}`);
 
   const procs = [];
   procsRef = procs;
@@ -276,10 +279,26 @@ async function main() {
     if (relayNode && !process.env.QN_HOSTNAME) {
       const s = relayNode.stats;
       console.log(`TWPLAYER RELAY: sessions=${s.sessions.accepted}/${s.sessions.opened} pairings=${s.pairings.requested}req/${s.pairings.matched}matched/${s.pairings.pending}pending streams=${s.streams.opened} refused=${s.refused} dropped=${s.dropped}`);
-      if (code === 0 && (s.sessions.accepted < 4 || s.pairings.requested < 4 || s.pairings.matched < 2 ||
-          s.streams.opened < 4 || s.refused !== 0 || s.dropped !== 0)) {
+      const auto = process.env.QN_RELAY === 'auto';
+      const mins = auto ? { acc: 2, req: 1, mat: 1, strm: 2 }
+                        : { acc: 4, req: 4, mat: 2, strm: 4 };
+      if (code === 0 && (s.sessions.accepted < mins.acc || s.pairings.requested < mins.req ||
+          s.pairings.matched < mins.mat || s.streams.opened < mins.strm ||
+          s.refused !== 0 || s.dropped !== 0)) {
         console.log('TWPLAYER FAIL: the match did not ride the relay');
         code = 1; msg = 'TWPLAYER FAIL (relay)';
+      }
+      if (code === 0 && auto) {
+        // Vacuity gate: the lane only means anything if the simulated
+        // punch failure actually fired -- and the relay minima above
+        // prove the match then completed over the relay (redials are
+        // informational: hyperdht may pair before the punch even fails).
+        let marks = '';
+        try { marks = fs.readFileSync(relayAutoMark, 'utf8'); } catch (e) { /* below fails it */ }
+        if (!/^punch-fail/m.test(marks)) {
+          console.log('TWPLAYER FAIL: simulated punch failure never fired\n' + marks);
+          code = 1; msg = 'TWPLAYER FAIL (relay-auto vacuous)';
+        }
       }
     }
     if (relayNode) relayNode.close().catch(() => {});
