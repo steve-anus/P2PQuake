@@ -24,8 +24,9 @@ function fakeClock() {
     now: () => st.t,
     setTimeout(fn, ms) { const h = st.id++; st.tasks.set(h, { at: st.t + ms, fn }); return h; },
     clearTimeout(h) { st.tasks.delete(h); },
-    async advance(ms) {
+    async advance(ms, run = true) {
       const target = st.t + ms;
+      if (!run) { st.t = Math.max(st.t, target); return; }
       for (;;) {
         let next = null;
         for (const [h, x] of st.tasks)
@@ -223,6 +224,17 @@ test('viewer: invalid adverts spend the meter (verify is the gated cost)', async
   feedFetch(v, Buffer.concat([h3, live]));
   await clock.advance(20);
   assert.equal(v.live.length, 0);        // pre-metered tampering would have stored the good one
+});
+
+test('host: an orphaned debounce slot cannot double-publish past a direct publish', async () => {
+  const { h, clock } = mkHost();
+  h.onAnnounce(tlvPayload(GOOD));                                  // immediate, epoch 1
+  h.onAnnounce(tlvPayload({ ...GOOD, map: 'lq_e1m1' }));           // arms the single slot
+  await clock.advance(1000, false);                                // slot due but callback queued
+  h.onAnnounce(tlvPayload({ ...GOOD, map: 'lq_e1m1' }));           // boundary hit: direct publish
+  assert.equal(L.decodeAdvert(h.advert).epoch, 2n);
+  await clock.advance(500);                                        // orphan fires: token must veto
+  assert.equal(L.decodeAdvert(h.advert).epoch, 2n);                // no duplicate epoch 3
 });
 
 function mkViewer() {
