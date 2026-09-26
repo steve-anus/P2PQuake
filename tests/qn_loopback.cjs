@@ -62,6 +62,10 @@ const want = [
 if (process.env.QN_HOST16) {
   want.push(['peer-host-maxp', (l) => l === 'LBSTEP host-maxp ok']);
 }
+if (!process.env.QN_REFUSE && !process.env.QN_FATAL &&
+    !process.env.QN_REDIAL_CHURN && !process.env.QN_FUZZ) {
+  want.push(['peer-admin-gauntlet', (l) => l === 'LBSTEP admin-gauntlet ok']);
+}
 if (process.env.QN_FUZZ) {
   const rounds = parseInt(process.env.QN_FUZZ_ROUNDS || '60', 10);
   want.push(['fuzz-start', (l) => l === 'LBSTEP fuzz-start ok']);
@@ -157,7 +161,8 @@ function main() {
     }
     const terminal = process.env.QN_FUZZ ? 'fuzz-done'
       : process.env.QN_FATAL ? 'daemon-fatal'
-      : process.env.QN_REDIAL_CHURN ? 'churn-done' : 'peer-done';
+      : process.env.QN_REDIAL_CHURN ? 'churn-done'
+      : process.env.QN_REFUSE ? 'peer-done' : 'peer-admin-gauntlet';
     if (seen.get(terminal) && !child.killed) {
       /* everything arrived; give the engine a beat to settle, then win */
       setTimeout(() => doneResolve(0), 300);

@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_user.c -- server code for moving users
 
 #include "quakedef.h"
+#include "qn_scmd.h"   /* stringcmd allowlist */
 
 edict_t	*sv_player;
 
@@ -482,6 +483,7 @@ Returns false if the client should be killed
 qboolean SV_ReadClientMessage (void)
 {
 	int		ret;
+	int		ok;
 	int		ccmd;
 	const char	*s;
 
@@ -527,49 +529,12 @@ nextmsg:
 
 			case clc_stringcmd:
 				s = MSG_ReadString ();
-				ret = 0;
-				if (q_strncasecmp(s, "status", 6) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "god", 3) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "notarget", 8) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "fly", 3) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "name", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "noclip", 6) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "setpos", 6) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "say", 3) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "say_team", 8) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "tell", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "color", 5) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "kill", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "pause", 5) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "spawn", 5) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "begin", 5) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "prespawn", 8) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "kick", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "ping", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "give", 4) == 0)
-					ret = 1;
-				else if (q_strncasecmp(s, "ban", 3) == 0)
-					ret = 1;
-
-				if (ret == 1)
+				/* The client wire admits exactly the handshake and
+				 * chat phrases a real client sends; admin and cheat
+				 * verbs are host-console only. Predicate shared with
+				 * the unit battery: src/driver/qn_scmd.c. */
+				ok = QN_ScmdAllowed (s);
+				if (ok == 1)
 					Cmd_ExecuteString (s, src_client);
 				else
 					Con_DPrintf("%s tried to %s\n", host_client->name, s);

@@ -635,8 +635,10 @@ async function main() {
   // Detectors use this engine's real strings ('couldn't exec X',
   // 'Unknown command "X"'); payload-derived so boot cvar noise cannot
   // self-trip. The sv_user 'tried to' arm is Con_DPrintf-only and dead
-  // unless developer is set: an honest client only sends whitelisted
-  // stringcmds, so it is unreachable here and deliberately not asserted.
+  // unless developer is set: an honest client only sends allowlisted
+  // stringcmds (qn_scmd.h), so it is unreachable here and deliberately
+  // not asserted; the hostile-stringcmd gauntlet lives in the loopback
+  // lane's fake peer.
   for (const p of procs)
     for (const l of p.lines)
       if (/couldn't exec llama|Unknown command "%s|Unknown command "llama|Unknown command "exec/i.test(l))

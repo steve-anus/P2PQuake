@@ -30,7 +30,7 @@ const clc_stringcmd = 4;
 const SVC_SERVERINFO = 11, SVC_SIGNONNUM = 25, SVC_PRINT = 8;
 
 const step = (n) => console.error(`LBSTEP ${n} ok`);
-const fail = (why) => { console.error(`LBSTEP FAIL ${why}`); process.exit(1); };
+const fail = (why) => { console.log(`LBSTEP FAIL ${why}`); process.exit(1); };
 
 function parseUds(argv) {
   const i = argv.indexOf('--uds');
@@ -86,6 +86,8 @@ class Peer {
     this.outbound = [];               /* queued follow-up messages */
     this.resendTimer = null;
     this.steps = new Set();
+    this.prints = [];                 /* every SVC_PRINT payload seen, raw */
+    this.gauntletDone = false;
     sock.on('data', (c) => this.feed(c));
     sock.on('close', () => {
       if (this.state === 'done') process.exit(0);   /* session over, by choice */
@@ -242,6 +244,8 @@ class Peer {
           this.clData(dataPacket(this.sendSeq, next, true));
         }
       }
+      if (!this.pending && !this.outbound.length && this.gauntletCheck)
+        this.gauntletCheck();
       return;
     }
     if (!(flags & F_DATA)) return;
@@ -254,6 +258,7 @@ class Peer {
     }
   }
   onHostMessage(m) {
+    if (m[0] === SVC_PRINT) this.prints.push(m);
     if (this.state === 'await-serverinfo') {
       if (m[0] !== SVC_PRINT) fail('server message does not begin svc_print');
       if (!m.includes(Buffer.from('FITZQUAKE', 'latin1'))) fail('no FITZQUAKE banner');
@@ -305,6 +310,40 @@ class Peer {
         this.send(T.STUFFTEXT, Buffer.from('reconnect\0', 'latin1'));
         this.state = 'done';
         step('done');
+        if (!process.env.QN_REFUSE && !process.env.QN_FATAL &&
+            !process.env.QN_REDIAL_CHURN && !process.env.QN_FUZZ) {
+          /* Host-console-class verbs must never dispatch from the
+           * client wire. This lane runs deathmatch (forced for
+           * maxclients>1), so the live pre-fix traces are ping's table
+           * header and pause's broadcast (both client-stream); every
+           * other verb is upstream-gated or print-silent here -- their
+           * refusal is proven by the predicate units, and the reliable
+           * queue proves each one's ACK delivery to the dispatch path.
+           * Sent through the reliable queue: raw same-tick bursts are
+           * lawfully droppable and would test nothing.
+           * QN_GAUNTLET is a lab knob; CI must never set it. */
+          const verbs = (process.env.QN_GAUNTLET ||
+            'ping,god,ban 1.2.3.4,ban,status,give all,notarget,fly,' +
+            'noclip,setpos 0 0 0,kill,pause,kick LoopbackPlayer,kick ghost')
+            .split(',');
+          for (const v of verbs.filter(Boolean))
+            this.sendMessage(stringCmd(v));
+          this.gauntletCheck = () => {
+            if (this.gauntletDone) return;
+            if (this.pending || this.outbound.length) {
+              setTimeout(this.gauntletCheck, 500);   /* queue in flight:
+                                                        never mark early */
+              return;
+            }
+            this.gauntletDone = true;
+            const stream = this.prints.map((b) => b.toString('latin1')).join('\n');
+            for (const t of ['Client ping times', 'paused the game',
+                             'unpaused the game'])
+              if (stream.includes(t)) fail('admin verb executed: ' + t);
+            step('admin-gauntlet');
+          };
+          setTimeout(this.gauntletCheck, 2500);  /* watchdog; drain is primary */
+        }
         if (process.env.QN_REFUSE) {
           /* §6.2 relay: the joiner must see the fixed reason (the real
            * daemon's onRefused shape; stay alive so the engine catches
