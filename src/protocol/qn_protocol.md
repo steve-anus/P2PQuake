@@ -101,7 +101,7 @@ zero seq → close.
 | 0x0061 RELIABLE | engine→peer | TLV: 0x01 text (≤256)                     |
 | 0x0070 LOBBY_WATCH | engine→peer | (empty); the viewer lane starts collecting the public lobby adverts (§3.6) and pushes change snapshots |
 | 0x0071 LOBBY_UNWATCH| engine→peer| (empty); collection stops, the daemon drops the view |
-| 0x0072 LOBBY_LIST  | peer→engine | repeated TLV 0x01 advert (each ≤1200 B, already §3.6-verified by the daemon); at most 64, newest epoch first |
+| 0x0072 LOBBY_LIST  | peer→engine | payload = ONE complete advert (≤1200 B, already §3.6-verified by the daemon), or empty as the snapshot terminator; at most 64 adverts per snapshot, newest epoch first |
 | 0x0073 LOBBY_ANNOUNCE| engine→peer | TLV: 0x01 map name (≤16), 0x02 room title (≤20 printable), 0x03 max players u8, 0x04 mode u8 (0=coop, 1=deathmatch); the host daemon completes and signs the advert (§3.6) |
 | 0x0074 LOBBY_WITHDRAW| engine→peer | (empty); listing withdrawn — visibility turned off, room teardown, or map load failure |
 | 0x00FF FATAL    | peer→engine | u8 cause (§6.3); engine tears down the match |
@@ -367,8 +367,9 @@ total. Collection dedupes by host key (newest epoch wins) and caps at 64
 live adverts (overflow evicts the lowest epoch); a host re-announces at
 most 1/s. Snapshots ride LOBBY_LIST on change and at least every 30 s
 while watched. A snapshot is one or more consecutive LOBBY_LIST frames:
-each frame carries as many adverts as fit its 2048-byte payload cap, and
-the snapshot ends with one empty-payload LOBBY_LIST; the engine swaps the
+each frame carries exactly one complete advert (its signed bytes verbatim,
+one frame per advert — no cross-frame reassembly), and the snapshot ends
+with one empty-payload LOBBY_LIST; the engine swaps the
 whole view only on that terminator, so a partial snapshot never shows; a
 reader discards its pending buffer if any other frame type interrupts a
 snapshot.
