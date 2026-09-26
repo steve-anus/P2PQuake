@@ -99,6 +99,11 @@ zero seq → close.
 | 0x0050 STUFFTEXT| peer→engine | printable ASCII line ≤512, NUL-terminated; engine-side allowlist enforced independently (§6.4) |
 | 0x0060 CLIENT_CMD| engine→peer| TLV: 0x01 body (usercmd bytes from the local client) |
 | 0x0061 RELIABLE | engine→peer | TLV: 0x01 text (≤256)                     |
+| 0x0070 LOBBY_WATCH | engine→peer | (empty); the viewer lane starts collecting the public lobby adverts (§3.6) and pushes change snapshots |
+| 0x0071 LOBBY_UNWATCH| engine→peer| (empty); collection stops, the daemon drops the view |
+| 0x0072 LOBBY_LIST  | peer→engine | repeated TLV 0x01 advert (each ≤1200 B, already §3.6-verified by the daemon); at most 64, newest epoch first |
+| 0x0073 LOBBY_ANNOUNCE| engine→peer | TLV: 0x01 map name (≤16), 0x02 room title (≤20 printable), 0x03 max players u8, 0x04 mode u8 (0=coop, 1=deathmatch); the host daemon completes and signs the advert (§3.6) |
+| 0x0074 LOBBY_WITHDRAW| engine→peer | (empty); listing withdrawn — visibility turned off, room teardown, or map load failure |
 | 0x00FF FATAL    | peer→engine | u8 cause (§6.3); engine tears down the match |
 
 Unknown type value → that frame is dropped and counted; more than 10
@@ -313,6 +318,62 @@ test (see the test suite names in parentheses):
   not alter the netquake protocol number; any patch that changes *emitted*
   bytes gates on it.
 
+### 3.6 Public lobby advert (normative)
+
+While hosting with visibility=public the host daemon stores its advert in
+the fixed public topic `"qn-lobby-v1"` (the wire generation lives in the
+topic name; renaming it is world-breaking). The advert is a self-contained
+signed artifact — not a Plane B envelope, rides no connection, and is
+never verified by the engine: collection and every §3.6 check are daemon
+work; the engine sees only bytes its own daemon already validated.
+
+The canonical signed bytes are the ascending TLV serialization (§2.4) of
+exactly the required tags:
+
+| tag | field | form |
+|---|---|---|
+| 0x01 | map name | ≤16; pool-validated spelling only — never free text into an engine command |
+| 0x02 | room title | ≤20 printable, the same sanitizer as the daemon `--name` |
+| 0x03 | max players | u8, 2..8 |
+| 0x04 | mode | u8: 0=coop, 1=deathmatch |
+| 0x05 | join code | 10 bytes (§5.1); carried openly — visibility below |
+| 0x06 | host pubkey | 32 bytes (§5.2) |
+| 0x07 | host version | u16 major, u16 minor (LE) |
+| 0x08 | min peer version | u16 major, u16 minor (LE); joiners below it get VERSION_TOO_OLD per §3.5(a) |
+| 0x09 | epoch | u64 LE, strictly increasing per host key; persisted, never reset to zero on a reused topic (ROSTER precedent) |
+| 0x0A | ttl | u16 seconds, fixed 120 |
+
+The signature follows §3.2 discipline with its own domain magic so signed
+bytes never replay across artifact kinds:
+
+    signature = Ed25519(host key, sha256("QNLA" || canonical bytes))
+
+appended after the canonical bytes, never itself covered.
+
+A collecting daemon verifies in strict order — size first, so a hostile
+store entry cannot cost parse work past the cap:
+
+1. whole advert ≤1200 B;
+2. required tags present, ascending, every cap honored;
+3. signature valid under the 0x06 key over the canonical bytes;
+4. epoch strictly greater than the stored epoch for that host key — a tie
+   or regression is dropped, never merged; the store is (epoch, advert);
+5. freshness: first-seen starts a ttl budget; expiry drops the advert, a
+   re-announce at a new epoch refreshes it.
+
+Any failure → drop silently. A malformed advert never reaches the view,
+never prints toward the engine console, never counts in a displayed
+total. Collection dedupes by host key (newest epoch wins) and caps at 64
+live adverts (overflow evicts the lowest epoch); a host re-announces at
+most 1/s. Snapshots ride LOBBY_LIST on change and at least every 30 s
+while watched.
+
+Visibility of the join code: a listed room is joinable by strangers by
+definition, so the code inside a public advert is addressing data, not
+secrecy — code secrecy protects private rooms only. Public join keeps
+every other gate unchanged: signature, version floors (§3.5),
+asset/manifest identity, JOIN_NO causes (§6.2), join rate limits.
+
 ---
 
 ## 4. Plane A authentication
@@ -411,6 +472,10 @@ dependencies are introduced by this spec.
 | map name | 16 bytes |
 | peers per match | 8 (+1 host) |
 | seq drop counter → close | 100 |
+| public lobby advert (§3.6, whole) | 1200 bytes |
+| collected adverts per viewer | 64 (newest epoch wins) |
+| host re-announce cadence | 1/s |
+| advert TTL | 120 s, fixed |
 | seq gap → close | > 64 |
 | Plane A drop-storm → close | 10 consecutive malformed/dropped |
 | envelopes per second per Plane B connection (all types, metered pre-decode) | 2000 (burst 400; excess → close) |
