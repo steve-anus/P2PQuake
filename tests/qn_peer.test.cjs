@@ -417,3 +417,25 @@ test('no relay env: the forcing stack stays untouched', () => {
      if(s.applied||s.remoteAddress||s.punch||s.addHandshake||s.connect)process.exit(8);`);
   assert.equal(r.status, 0, r.stderr);
 });
+
+/* ---- display-name validation ---- */
+
+test('parseFlags: display fields are validated strings, never coerced literals', () => {
+  const ok = Q.parseFlags(['--uds', '/x']);
+  assert.ok(ok, 'flag-absent parse is valid');
+  assert.equal(ok.name, 'player', 'flag absent keeps the printable default');
+  assert.equal(ok.gamedir, 'id1');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--name']), null,
+    'valueless --name rejected, not coerced');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--gamedir']), null,
+    'valueless --gamedir rejected, not coerced');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--name', '']), null, 'empty name rejected');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--name', 'x'.repeat(21)]), null);
+  assert.equal(Q.parseFlags(['--uds', '/x', '--gamedir', 'x'.repeat(33)]), null);
+  assert.equal(Q.parseFlags(['--uds', '/x', '--gamedir', 'x'.repeat(32)]).gamedir,
+    'x'.repeat(32), 'gamedir upper edge accepted');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--name', 'op name']).name, 'op name',
+    'spaces ride the printable band');
+  assert.equal(Q.parseFlags(['--uds', '/x', '--name', 'x'.repeat(20)]).name,
+    'x'.repeat(20), 'band upper edge accepted');
+});

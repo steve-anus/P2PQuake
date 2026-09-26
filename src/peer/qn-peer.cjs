@@ -692,8 +692,12 @@ function parseFlags(argv) {
     else return null;
   }
   if (!o.uds) return null;
-  if (!/^[\x20-\x7e]{1,20}$/.test(o.name)) return null;      // display name: printable, bounded
-  if (!/^[\x20-\x7e]{1,32}$/.test(o.gamedir)) return null;   // §3.4a gamedir contract
+  if (typeof o.gamedata !== 'string' || typeof o.dir !== 'string')
+    return null;                                   // fs args: strings only, no coercion
+  if (typeof o.name !== 'string' ||
+      !/^[\x20-\x7e]{1,20}$/.test(o.name)) return null;      // display name: printable, bounded
+  if (typeof o.gamedir !== 'string' ||
+      !/^[\x20-\x7e]{1,32}$/.test(o.gamedir)) return null;   // §3.4a gamedir contract
   return o;
 }
 
