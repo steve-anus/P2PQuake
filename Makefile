@@ -6,7 +6,8 @@ QS_DIR   := src/vendor/quakespasm
 DRIVER_SRC := $(wildcard src/driver/*.c)
 TEST_SRC   := $(filter-out tests/fake-engine.c,$(wildcard tests/*.c))
 CC ?= gcc
-NODE ?= node
+# explicit NODE= > repo-local bin/node/bin/node (tools/setup-node.sh) > PATH
+NODE ?= $(firstword $(wildcard $(CURDIR)/bin/node/bin/node) $(shell command -v node 2>/dev/null))
 NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
