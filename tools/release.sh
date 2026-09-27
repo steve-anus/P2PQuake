@@ -47,8 +47,9 @@ tag_commit=$(git rev-parse "$tag^{commit}" 2>/dev/null) \
 [ "$(git rev-parse HEAD)" = "$tag_commit" ] \
   || { echo "release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
 
+NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-node.sh | cut -d= -f2)
 NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-node.sh | cut -d= -f2)
-[ "${#NODE_PIN}" = 64 ] \
+[ "${#NODE_PIN}" = 64 ] && [ -n "$NODE_VER" ] \
   || { echo "release.sh: could not read the node pin from setup-node.sh" >&2; exit 1; }
 
 echo "==> battery at $tag"
@@ -59,15 +60,15 @@ make engine
 ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
 [ -x "$ENGINE_BIN" ] || { echo "release.sh: engine binary missing" >&2; exit 1; }
 
-echo "==> runtime/node (pin-verified install, no PATH node dependency)"
-if [ -x bin/node/bin/node ] && \
-   echo "$NODE_PIN  bin/node/bin/node" | sha256sum -c - >/dev/null 2>&1; then
-  echo "reusing bin/node/bin/node (matches the pin)"
-else
+echo "==> runtime/node ($NODE_VER via pinned tarball; setup-node.sh enforces the sha256)"
+# The pin is the TARBALL hash (nodejs.org SHASUMS256); --force makes the
+# installer always refetch-and-verify, never take a PATH-node shortcut.
+if [ ! -x bin/node/bin/node ] || \
+   [ "$(bin/node/bin/node --version 2>/dev/null)" != "$NODE_VER" ]; then
   tools/setup-node.sh --force
 fi
-echo "$NODE_PIN  bin/node/bin/node" | sha256sum -c - \
-  || { echo "release.sh: runtime node does not match the pin" >&2; exit 1; }
+[ "$(bin/node/bin/node --version 2>/dev/null)" = "$NODE_VER" ] \
+  || { echo "release.sh: runtime node is not $NODE_VER" >&2; exit 1; }
 
 STAGE=$(mktemp -d "$TMPBASE/qnrelease-XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
