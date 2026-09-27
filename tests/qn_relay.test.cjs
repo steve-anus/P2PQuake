@@ -119,3 +119,46 @@ test('idle sweep reaps a pending-holding squatter', { timeout: 60000 }, async ()
     await tnet.destroy();
   }
 });
+
+/* Identity persistence: the RELAY-READY key friends pin in QN_RELAY_THROUGH
+ * must survive restarts. hyperdht mints a fresh keyPair per boot without a
+ * seed (index.js:35), so the seed file is the stability mechanism — and its
+ * 0600 discipline mirrors the player identity key (loose modes refused). */
+test('relay seed: stable identity across boots, strict 0600, looseness refused', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadOrCreateSeed } = require('../src/peer/qn-relay.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnseed-'));
+  const p = path.join(dir, 'r.seed');
+  const s1 = loadOrCreateSeed(p);
+  const s2 = loadOrCreateSeed(p);
+  assert.strictEqual(s1.length, 32);
+  assert.ok(s1.equals(s2), 'seed stable across calls');
+  assert.strictEqual(fs.statSync(p).mode & 0o077, 0, 'seed written 0600');
+  const loose = path.join(dir, 'loose.seed');
+  fs.writeFileSync(loose, s1, { mode: 0o644 });
+  assert.throws(() => loadOrCreateSeed(loose), /too loose/);
+  assert.throws(() => loadOrCreateSeed((() => {
+    const bad = path.join(dir, 'bad.seed');
+    fs.writeFileSync(bad, Buffer.alloc(16, 1), { mode: 0o600 });
+    return bad;
+  })()), /32 bytes/);
+  // Same seed -> same DHT identity (what the two boots must publish):
+  const tnet = await startTestnet();
+  try {
+    const sp = path.join(dir, 'relay.seed');
+    const opts = { bootstrap: tnet.bootstrap, idleMs: 5000, sweepMs: 200, seedPath: sp };
+    const a = await makeRelayNode(opts);
+    const ka = a.publicKey.toString('hex');
+    await a.close();
+    const b = await makeRelayNode(opts);
+    assert.strictEqual(b.publicKey.toString('hex'), ka, 'RELAY-READY key stable across restarts');
+    await b.close();
+    const c = await makeRelayNode({ bootstrap: tnet.bootstrap, idleMs: 5000, sweepMs: 200 });
+    assert.notStrictEqual(c.publicKey.toString('hex'), ka, 'distinct seed -> distinct identity');
+    await c.close();
+  } finally {
+    await tnet.destroy();
+  }
+});

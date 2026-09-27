@@ -20,6 +20,10 @@
 
 const DHT = require('hyperdht');
 const { Server: BlindRelayServer } = require('blind-relay');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
 const MAX_SESSIONS = 64;   /* concurrent relayed half-connections accepted */
 const MAX_ACTIVE_PAIRINGS = 32; /* paired (traffic-carrying) sessions */
@@ -44,15 +48,57 @@ function parseBootstrap(raw) {
   return list;
 }
 
-/* makeRelayNode({ bootstrap }) -> { publicKey, stats, close }
+/* The pinned RELAY-READY key friends configure in QN_RELAY_THROUGH is this
+ * node's DHT identity; hyperdht mints a fresh keyPair per boot unless given
+ * a seed, so the seed must persist or every restart silently rots the
+ * operator's published key (same 0600 discipline as the player identity
+ * key: loose modes are refused, never repaired silently). */
+function relaySeedPath() {
+  const base = process.env.QN_RELAY_STATE_DIR
+    || (process.env.XDG_STATE_HOME
+      ? path.join(process.env.XDG_STATE_HOME, 'p2pquake-relay')
+      : path.join(os.homedir(), '.p2pquake-relay'));
+  return path.join(base, 'relay.seed');
+}
+
+function loadOrCreateSeed(p) {
+  let missing = false;
+  try {
+    const st = fs.statSync(p);
+    if (st.mode & 0o077) throw new Error('relay seed mode too loose (need 0600): ' + p);
+    const seed = fs.readFileSync(p);
+    if (seed.length !== 32) throw new Error('relay seed must be 32 bytes: ' + p);
+    return seed;
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    missing = true;
+  }
+  if (!missing) return loadOrCreateSeed(p); // TOCTOU: lost between stat and read
+  const seed = crypto.randomBytes(32);
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  const tmp = p + '.' + process.pid + '.tmp';
+  try {
+    fs.writeFileSync(tmp, seed, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, p);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+    if (e.code === 'EEXIST') return loadOrCreateSeed(p); // racer won; take theirs
+    throw e;
+  }
+  return seed;
+}
+
+/* makeRelayNode({ bootstrap[, seedPath] }) -> { publicKey, stats, close }
  * stats mirrors the blind-relay counters the test lanes assert against:
- * { sessions, pairings, streams } plus the counts this glue enforces. */
-async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
+ * { sessions, pairings, streams } plus the counts this glue enforces.
+ * seedPath persists the DHT identity across restarts (see above). */
+async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seedPath = null }) {
   const loopback = bootstrap.every((b) => /^127\.|^::1$|^\[::1\]$/.test(b.host));
   const dht = new DHT({
     bootstrap,
     ephemeral: false,
     firewalled: false,
+    ...(seedPath ? { seed: loadOrCreateSeed(seedPath) } : {}),
     ...(loopback ? { host: '127.0.0.1' } : {})
   });
   await dht.fullyBootstrapped();
@@ -130,17 +176,22 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000 }) {
   };
 }
 
-module.exports = { makeRelayNode, parseBootstrap, MAX_SESSIONS, MAX_ACTIVE_PAIRINGS,
+module.exports = { makeRelayNode, parseBootstrap, loadOrCreateSeed, relaySeedPath,
+  MAX_SESSIONS, MAX_ACTIVE_PAIRINGS,
   MAX_PAIRS_PER_SESSION, MAX_PENDING, IDLE_MS };
 
 if (require.main === module) {
   const bootstrap = parseBootstrap(process.env.QN_DHT_BOOTSTRAP
     || (process.argv[2] || '').replace(/^--bootstrap=/, '') || null);
   if (!bootstrap) {
-    process.stderr.write('usage: qn-relay.cjs --bootstrap=host:port[,host:port] (or QN_DHT_BOOTSTRAP)\n');
+    process.stderr.write('usage: qn-relay.cjs --bootstrap=host:port[,host:port] '
+      + '(or QN_DHT_BOOTSTRAP) [--state=seedfile] (or QN_RELAY_STATE)\n');
     process.exit(2);
   }
-  makeRelayNode({ bootstrap }).then((node) => {
+  const stateArg = (process.argv.slice(3).find((a) => a.startsWith('--state=')) || '')
+    .replace(/^--state=/, '');
+  const seedPath = stateArg || process.env.QN_RELAY_STATE || relaySeedPath();
+  makeRelayNode({ bootstrap, seedPath }).then((node) => {
     process.stdout.write('RELAY-READY ' + node.publicKey.toString('hex') + '\n');
     setInterval(() => {
       const s = node.stats;
