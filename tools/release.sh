@@ -59,9 +59,13 @@ make engine
 ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
 [ -x "$ENGINE_BIN" ] || { echo "release.sh: engine binary missing" >&2; exit 1; }
 
-echo "==> runtime/node (pinned fetch, no PATH node dependency)"
-tools/setup-node.sh
-[ -x bin/node/bin/node ] || { echo "release.sh: bin/node/bin/node missing" >&2; exit 1; }
+echo "==> runtime/node (pin-verified install, no PATH node dependency)"
+if [ -x bin/node/bin/node ] && \
+   echo "$NODE_PIN  bin/node/bin/node" | sha256sum -c - >/dev/null 2>&1; then
+  echo "reusing bin/node/bin/node (matches the pin)"
+else
+  tools/setup-node.sh --force
+fi
 echo "$NODE_PIN  bin/node/bin/node" | sha256sum -c - \
   || { echo "release.sh: runtime node does not match the pin" >&2; exit 1; }
 
@@ -115,24 +119,34 @@ rm -f "$DIST/$ZIP" "$DIST/$ZIP.sig" "$DIST/sha256sums.txt"
 (cd "$STAGE" && zip -qrX "$REPO_ROOT/$DIST/$ZIP" "p2pquake-$ver")
 (cd "$DIST" && sha256sum "$ZIP" > sha256sums.txt)
 
+verify_zip() {
+  local pub="$1" identity="$2" allowed="$STAGE/allowed_signers"
+  case "$(head -1 "$pub")" in
+    "ssh-"*|"ecdsa-"*|"sk-"*) printf '%s %s\n' "$identity" "$(cat "$pub")" > "$allowed" ;;
+    *) cp "$pub" "$allowed" ;;
+  esac
+  (cd "$DIST" && ssh-keygen -Y verify -f "$allowed" -I "$identity" -n file \
+    -s "$ZIP.sig" < "$ZIP") \
+    || { echo "release.sh: signature verification FAILED" >&2; exit 1; }
+}
+
 if [ "$dryrun" = 1 ]; then
   KEY="$STAGE/signkey"
   ssh-keygen -q -t ed25519 -N "" -f "$KEY" -C "qn-dryrun" >/dev/null
-  (cd "$DIST" && ssh-keygen -Y sign -f "$KEY" -n file "$ZIP" >/dev/null)
-  echo "==> DRY RUN: signed with an ephemeral key (not for distribution)"
+  (cd "$DIST" && ssh-keygen -Y sign -f "$KEY" -i qn-dryrun -n file "$ZIP" >/dev/null)
+  verify_zip "$KEY.pub" "qn-dryrun"
+  echo "==> DRY RUN: signed + verified with an ephemeral key (not for distribution)"
 else
   [ -n "${QN_SIGN_KEY:-}" ] \
     || { echo "release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
-  (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -n file "$ZIP")
-fi
-if [ "$dryrun" = 1 ]; then
-  (cd "$DIST" && ssh-keygen -Y verify -f "$KEY.pub" -I qn-dryrun -n file \
-    -s "$ZIP.sig" < "$ZIP" >/dev/null) \
-    && echo "release.sh: dry-run signature verifies against the ephemeral key"
-elif [ -n "${QN_SIGN_KEY_PUB:-}" ]; then
-  (cd "$DIST" && ssh-keygen -Y verify -f "$QN_SIGN_KEY_PUB" -I "${QN_SIGN_ID:-}" \
-    -n file -s "$ZIP.sig" < "$ZIP" >/dev/null) \
-    && echo "release.sh: signature verifies against QN_SIGN_KEY_PUB"
+  [ -n "${QN_SIGN_KEY_PUB:-}" ] \
+    || { echo "release.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
+  IDENTITY="${QN_SIGN_ID:-$(awk '{print $NF}' "$QN_SIGN_KEY_PUB" 2>/dev/null | tail -1)}"
+  [ -n "$IDENTITY" ] \
+    || { echo "release.sh: set QN_SIGN_ID (signing identity)" >&2; exit 1; }
+  (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -i "$IDENTITY" -n file "$ZIP")
+  verify_zip "$QN_SIGN_KEY_PUB" "$IDENTITY"
+  echo "release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
 fi
 
 echo "release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums.txt)"
