@@ -49,25 +49,28 @@ tag_commit=$(git rev-parse "$tag^{commit}" 2>/dev/null) \
 [ "$(git rev-parse HEAD)" = "$tag_commit" ] \
   || { echo "release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
 
-NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-node.sh | cut -d= -f2)
-NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-node.sh | cut -d= -f2)
+NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
+NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-nodejs.sh | cut -d= -f2)
 [ "${#NODE_PIN}" = 64 ] && [ -n "$NODE_VER" ] \
-  || { echo "release.sh: could not read the node pin from setup-node.sh" >&2; exit 1; }
+  || { echo "release.sh: could not read the node pin from setup-nodejs.sh" >&2; exit 1; }
 
 echo "==> battery at $tag"
 make check
+
+echo "==> bootstrap-node lane (operator surface, minutes-heavy; release-only)"
+make bootstrap-node
 
 echo "==> engine build"
 make engine
 ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
 [ -x "$ENGINE_BIN" ] || { echo "release.sh: engine binary missing" >&2; exit 1; }
 
-echo "==> runtime/node ($NODE_VER via pinned tarball; setup-node.sh enforces the sha256)"
+echo "==> runtime/node ($NODE_VER via pinned tarball; setup-nodejs.sh enforces the sha256)"
 # The pin is the TARBALL hash (nodejs.org SHASUMS256); --force makes the
 # installer always refetch-and-verify, never take a PATH-node shortcut.
 if [ ! -x bin/node/bin/node ] || \
    [ "$(bin/node/bin/node --version 2>/dev/null)" != "$NODE_VER" ]; then
-  tools/setup-node.sh --force
+  tools/setup-nodejs.sh --force
 fi
 [ "$(bin/node/bin/node --version 2>/dev/null)" = "$NODE_VER" ] \
   || { echo "release.sh: runtime node is not $NODE_VER" >&2; exit 1; }
@@ -106,11 +109,30 @@ fi
 echo "==> engine binary + launcher + runtime"
 [ -f LICENSE.md ] || { echo "release.sh: LICENSE.md missing" >&2; exit 1; }
 cp LICENSE.md "$PKG/LICENSE.md"
+[ -f README.md ] || { echo "release.sh: README.md missing" >&2; exit 1; }
+cp README.md "$PKG/README.md"
+[ -f p2pquake.desktop ] || { echo "release.sh: p2pquake.desktop missing" >&2; exit 1; }
+cp p2pquake.desktop "$PKG/p2pquake.desktop"
 cp "$ENGINE_BIN" "$PKG/quakespasm"
 strip --strip-debug "$PKG/quakespasm" 2>/dev/null || strip "$PKG/quakespasm"
 chmod 0755 "$PKG/quakespasm"
 if strings "$PKG/quakespasm" | grep -qE "/home/|/Users/|/root/"; then
   echo "release.sh: engine binary leaks the build home path" >&2
+  exit 1
+fi
+# Shipped-bytes hygiene (conventions: absence proven, all artifacts): our
+# build paths are gone by construction, so any personal identity reaching
+# the package is the finding. Generic /home/ scans would false-positive on
+# vendor strings (node's own /home/iojs), hence targeted personal scan.
+ME_USER="${USER:-$(id -un)}"; ME_HOME="$HOME"
+[ -n "$ME_USER" ] && [ -n "$ME_HOME" ] \
+  || { echo "release.sh: cannot determine identity for the leak scan" >&2; exit 1; }
+if grep -rlI -e "$ME_HOME" -e "/home/$ME_USER" -e "/Users/$ME_USER" -e "/root/$ME_USER" "$PKG"; then
+  echo "release.sh: shipped text leaks a personal home path (listed above)" >&2
+  exit 1
+fi
+if strings "$PKG/runtime/node" | grep -qE "$ME_HOME|/home/$ME_USER|/Users/$ME_USER|/root/$ME_USER"; then
+  echo "release.sh: shipped runtime leaks a personal home path" >&2
   exit 1
 fi
 printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).\n// require() alone never runs main(): the module guard checks require.main,\n// which is this launcher. cliMain() is the single CLI bootstrap.\nrequire("./src/peer/qn-peer.cjs").cliMain();\n' > "$PKG/qn-peer"

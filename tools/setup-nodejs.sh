@@ -1,6 +1,6 @@
 #!/bin/bash
-# setup-node.sh — repo-local Node bootstrap for source builders.
-# Fetches the pinned official Node 24 tarball into bin/node/ after hash
+# setup-nodejs.sh — repo-local Node bootstrap for source builders.
+# Fetches the pinned official Node 24 tarball into bin/nodejs/ after hash
 # verification; never writes outside the repo tree or $TMPBASE, never
 # touches a system or user toolchain.
 set -euo pipefail

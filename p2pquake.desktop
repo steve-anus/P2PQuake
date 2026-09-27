@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=p2pquake
+GenericName=Quake (peer-to-peer)
+Comment=Serverless peer-to-peer Quake — host by playing, join with a code
+Exec=/opt/p2pquake/quakespasm
+Icon=/opt/p2pquake/id1/docs/branding/icon.svg
+Terminal=false
+Categories=Game;
+Keywords=quake;fps;multiplayer;p2p;
+# Unpack a release archive to /opt/p2pquake (or adjust Exec/Icon paths).
