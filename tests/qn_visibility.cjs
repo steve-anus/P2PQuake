@@ -27,7 +27,8 @@ const banned = [
 
 const shq = (s) => (/[ \t]/.test(s) ? "'" + s.replace(/'/g, "'\\''") + "'" : s);
 
-function runPhase(name, boot, script, bootstrap) {
+function runPhase(name, boot, script, bootstrap, extraBanned) {
+  const killList = banned.concat(extraBanned || []);
   return new Promise((resolve) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnvis-'));
     const args = ['-qn', '-qn-peer', PEER, '-qn-dir', dir,
@@ -61,7 +62,7 @@ function runPhase(name, boot, script, bootstrap) {
       for (const l of chunk.toString('utf8').split(/\r?\n/)) {
         const t = l.trim();
         if (!t) continue;
-        for (const [nm, f] of banned) {
+        for (const [nm, f] of killList) {
           if (f.test(t)) { fail = `banned ${nm}: ${t}`; finish(fail); return; }
         }
         const cur = script[step];
@@ -87,11 +88,11 @@ async function main() {
   const scriptA = [
     { expect: /Join code: [0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/, then: 'quit' },
   ];
-  const a = await runPhase('private-by-default', [], scriptA, bootstrap);
+  /* absence is asserted, not inferred: a stray advertisement fails A
+   * outright, so the default-private claim has its own referee */
+  const a = await runPhase('private-by-default', [], scriptA, bootstrap,
+    [['stray-advert', /lobby: announced/]]);
   if (a) { console.error('VISIBILITY FAIL A: ' + a); process.exit(1); }
-  /* absence is honest here: the same binary/daemon pair announces in
-   * phase B, so a missing 'lobby: announced' in A is the default, not
-   * a broken announcer. */
   console.log('VISIBILITY: A ok (private by default)');
 
   const scriptB = [

@@ -823,10 +823,18 @@ static void QN_LobbyHostEdges (void)
 
 	if (!want)
 	{
-		if (qn_ann_up && qn_live ())
-			(void) qn_transport_send (&qn_tr, QN_T_LOBBY_WITHDRAW,
-			                          NULL, 0);
-		qn_ann_up = false;
+		if (qn_ann_up)
+		{
+			if (!qn_live ())
+				qn_ann_up = false;	/* plane dying anyway */
+			else if (qn_transport_send (&qn_tr, QN_T_LOBBY_WITHDRAW,
+			                             NULL, 0) != 1)
+				/* a lost withdraw keeps a "private" room listed:
+				 * same convention as the sibling lane sends */
+				qn_teardown ("lobby withdraw send failed");
+			else
+				qn_ann_up = false;
+		}
 		return;
 	}
 
