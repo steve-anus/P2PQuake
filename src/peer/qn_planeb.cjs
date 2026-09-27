@@ -171,11 +171,17 @@ class Session {
     this.conn.on('error', () => {}); // discovery races are not failures
     this.conn.on('close', () => this.close('remote close'));
     if (process.env.QN_LANE_STATS) {
+      this.room._seq = (this.room._seq || 0) + 1;
+      this.tag = this.role[0] + this.room._seq;
       const tick = () => {
         if (this.dead) return;
-        const n = this.relaysIn || 0;
-        this.relaysIn = 0;
-        this.room.log(this.role + ': lane-stats relays=' + n);
+        const n = this.relaysIn || 0; this.relaysIn = 0;
+        const age = this.lastIn ? Math.round(this.room.clock.now() - this.lastIn) : -1;
+        this.room.log(this.role + ': lane-stats #' + this.tag +
+          ' pk=' + this.conn.remotePublicKey.toString('hex').slice(0, 8) +
+          ' relays=' + n + ' pings=' + (this.pingsIn || 0) + ' pongs=' + (this.pongsIn || 0) +
+          ' age=' + age + 'ms bound=' + (this.bound ? this.bound.toString('hex').slice(0, 8) : '-') +
+          ' joined=' + (this.joined ? 1 : 0));
         this.schedule(1000, tick);
       };
       this.schedule(1000, tick);
@@ -219,6 +225,9 @@ class Session {
     if (this.dead) return;
     this.dead = true;
     this.clearTimers();
+    if (process.env.QN_LANE_STATS && this.tag) this.room.log(this.role + ': close#' + this.tag +
+      ' pk=' + this.conn.remotePublicKey.toString('hex').slice(0, 8) + ' why=' + why +
+      ' age=' + (this.lastIn ? Math.round(this.room.clock.now() - this.lastIn) : -1) + 'ms');
     this.room.sessionClosed(this, why);
     this.conn.destroy();
   }
@@ -302,9 +311,11 @@ class HostSession extends Session {
       }
       case E.TYPES.PING:
         checkTagSizes(env);
+        this.pingsIn = (this.pingsIn || 0) + 1;
         this.send(E.TYPES.PONG, [[1, tagMap(env.payload, [1]).get(1)]]);
         return;
       case E.TYPES.PONG:
+        this.pongsIn = (this.pongsIn || 0) + 1;
         return; // our ping answered
       default:
         this.unknownRun++; // §3.4b: drop+count, close at 10
@@ -540,9 +551,11 @@ class ClientSession extends Session {
         return;
       case E.TYPES.PING:
         checkTagSizes(env);
+        this.pingsIn = (this.pingsIn || 0) + 1;
         this.send(E.TYPES.PONG, [[1, tagMap(env.payload, [1]).get(1)]]);
         return;
       case E.TYPES.PONG:
+        this.pongsIn = (this.pongsIn || 0) + 1;
         return;
       default:
         this.unknownRun++;
@@ -565,8 +578,9 @@ class ClientRoom {
     this.members = []; // current signed roster (RELAY origin set)
     this.epoch = opts.epochStart ?? -1n;
     this.maxSessions = opts.maxSessions ?? 12; // star needs one lane; the rest is noise
-    this.timeouts = { keyBindMs: 5000, joinOkMs: 10000, pingMs: 2000, deadMs: 6000,
-      idleMs: 15000, rosterMs: 30000, lookupMs: 6500 }; // §6.5 (+ non-lane idle bound)
+    this.timeouts = Object.assign({ keyBindMs: 5000, joinOkMs: 10000, pingMs: 2000,
+      deadMs: 6000, idleMs: 15000, rosterMs: 30000, lookupMs: 6500 },
+      opts.timeouts || {}); // §6.5 (+ non-lane idle bound); tests may tighten
     this.lastRosterAt = 0;
     this.rosterWatch = null;
     this.nonceBuf = () => {

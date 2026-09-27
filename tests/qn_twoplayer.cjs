@@ -277,6 +277,8 @@ async function main() {
   }
   let relayNode = null;
   let relayAutoMark = null;
+  for (const k of ['QN_TEST_TIMEOUTS', 'QN_JOIN_ATTEMPTS',
+    'QN_JOIN_WALL_BUDGET', 'QN_JOIN_END_BUDGET']) delete process.env[k];
   const env = { QN_DHT_BOOTSTRAP: bootstrap };
   if (process.env.QN_RELAY === '1' || process.env.QN_RELAY === 'auto') {
     relayNode = await makeRelayNode({ bootstrap: tnet.bootstrap });
@@ -453,7 +455,7 @@ async function main() {
     // nothing (green must not be free).
     let peak = 0;
     for (const l of cl.lines) {
-      const m = /client: lane-stats relays=(\d+)/.exec(l);
+      const m = /client: lane-stats\b.*\brelays=(\d+)/.exec(l);
       if (m) peak = Math.max(peak, Number(m[1]));
     }
     if (peak < 210)
@@ -564,6 +566,15 @@ async function main() {
     host.count((x) => x.includes(`Client ${NAME_B} removed`)) > removedB0,
     'bob slot released', 120000);
 
+  // Variant gate: plain = historical flow; resident = bob returns while
+  // alice stays seated (freed-edict crash shape); race = immediate re-dial
+  // within the removal window (PEER_DOWN sweep shape). Default keeps the
+  // conformance flow unchanged.
+  const VARIANT = process.env.QN_LANVARIANT || 'plain';
+  if (VARIANT !== 'plain' && VARIANT !== 'resident' && VARIANT !== 'race')
+    throw new Error('QN_LANVARIANT must be plain|resident|race');
+  let alice2 = null, bob2 = null;
+  if (VARIANT === 'plain') {
   // Crash-style rejoin with the same qn-dir keeps the same identity: the
   // transport must accept the returning peer (epoch guard covers replays).
   // Solo shape: crash-rejoin with a resident second player trips a
@@ -575,7 +586,7 @@ async function main() {
     host.count((x) => x.includes(`${NAME_A} removed`)) > removedBefore,
     'host slot release after crash', 120000);
   const rejoinMin = enterCount(NAME_A) + 1;
-  let alice2 = mkEngine('QnAlice#2', NAME_A, path.join(base, 'cl1'), false);
+  alice2 = mkEngine('QnAlice#2', NAME_A, path.join(base, 'cl1'), false);
   {
     // Same stall family as waitSpawn: a first-connection key-bind stall can
     // outlive the engine's CL budget during alice2's boot; restart the
@@ -601,12 +612,169 @@ async function main() {
       await new Promise((r) => setTimeout(r, 300));
     }
   }
+  } else if (VARIANT === 'resident') {
+  // Crash-style rejoin of bob while alice stays resident: the transport
+  // must accept the returning peer (epoch guard covers replays).
+  const rejoinMin = enterCount(NAME_B) + 1;
+  bob2 = mkEngine('QnBob#2', NAME_B, path.join(base, 'cl2'), false);
+  {
+    // Verdict loop: crash line => defect present; clean enter => play window.
+    const notConnectFailure = (l) => !/CL_Connect: connect failed/.test(l);
+    const deadline = Date.now() + REJOIN_TIMEOUT;
+    for (;;) {
+      const crash = bob2.lines.find((l) => /Host_Error/.test(l) && notConnectFailure(l)) ||
+        alice.lines.find((l) => /Host_Error/.test(l) && notConnectFailure(l));
+      if (crash !== undefined) {
+        console.log('REPRO CONFIRMED: resident rejoin crashed: ' + crash);
+        for (const l of bob2.lines.slice(-25)) console.log('bob2: ' + l);
+        for (const l of alice.lines.slice(-25)) console.log('alice: ' + l);
+        for (const l of host.lines)
+          if (/error|freed|edict|entity/i.test(l)) console.log('host: ' + l);
+        return finish(1, 'REPRO: client-side Host_Error on resident rejoin');
+      }
+      if (enterCount(NAME_B) >= rejoinMin) {
+        // Play window: deltas flow both ways with resident + returner.
+        const playEnd = Date.now() + 8000;
+        while (Date.now() < playEnd) {
+          const late = bob2.lines.find((l) => /Host_Error|daemon FATAL/.test(l) && notConnectFailure(l)) ||
+            alice.lines.find((l) => /Host_Error|daemon FATAL/.test(l) && notConnectFailure(l));
+          if (late !== undefined) {
+            console.log('REPRO CONFIRMED (post-enter): ' + late);
+            return finish(1, 'REPRO: crash in resident-rejoin play window');
+          }
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        console.log('RESIDENT-REJOIN OK: returner entered and played with a resident present');
+        break;
+      }
+      if (Date.now() > deadline)
+        throw new Error('repro: timeout, no crash and no enter');
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+  } else {
+  // Re-dial hammering against the removal window (resident player shape):
+  // each round kills the last accepted racer and immediately re-dials the
+  // same identity. An accept landing while the host still owes PEER_DOWN
+  // processing is the hazard window (windowHit).
+  const notRefusal = (l) => !/CL_Connect: connect failed/.test(l);
+  const fatalLine = (l) => /Host_Error|daemon FATAL|lost server connection/.test(l) && notRefusal(l);
+  const dumpRace = (why, cur) => {
+    console.log('RACE CAPTURE (' + why + ')');
+    console.log('racer exit=' + JSON.stringify(cur.exitInfo || null) +
+      ' alice exit=' + JSON.stringify(alice.exitInfo || null) +
+      ' host exit=' + JSON.stringify(host.exitInfo || null));
+    for (const l of cur.lines) console.log('racer: ' + l);
+    for (const l of alice.lines) console.log('alice: ' + l);
+    for (const l of host.lines) console.log('host: ' + l);
+  };
+  const removedA0 = host.count((l) => l.includes(`${NAME_A} removed`));
+  const ROUNDS = Number(process.env.QN_ROUNDS || 5);
+  const outcomes = [];
+  let windowHits = 0;
+  for (let round = 1; round <= ROUNDS; round++) {
+    const t0 = Date.now();
+    let refusedKills = 0;
+    let cur = mkEngine('QnBobRace' + round, NAME_B, path.join(base, 'cl2'), false);
+    let accepted = false;
+    while (Date.now() - t0 < 45000) {
+      const fatal = cur.lines.find(fatalLine) || alice.lines.find(fatalLine);
+      if (fatal !== undefined) {
+        console.log('RACE round ' + round + ': fatal line: ' + fatal);
+        dumpRace('round ' + round, cur);
+        return finish(1, 'REPRO: race round ' + round + ' crash/wipe line');
+      }
+      if (cur.lines.some((l) => l.includes('client: joined'))) {
+        const removedSoFar = host.count((l) => l.includes(`Client ${NAME_B} removed`));
+        const enteredBefore = enterCount(NAME_B);
+        const inWindow = removedSoFar < round;
+        if (inWindow) windowHits++;
+        console.log(`RACE round ${round}: joined (+` + (Date.now() - t0) +
+          'ms), removals=' + removedSoFar + ', windowHit=' + inWindow);
+        const watchEnd = Date.now() + 9000;
+        let entered = false;
+        while (Date.now() < watchEnd) {
+          const late = cur.lines.find(fatalLine) || alice.lines.find(fatalLine);
+          if (late !== undefined) {
+            console.log('RACE round ' + round + ': post-join wipe: ' + late);
+            dumpRace('round ' + round + ' post-join', cur);
+            return finish(1, `REPRO: round ${round} post-join wipe (windowHit=${inWindow})`);
+          }
+          if (enterCount(NAME_B) > enteredBefore) { entered = true; break; }
+          await new Promise((rr) => setTimeout(rr, 200));
+        }
+        if (!entered) {
+          console.log('RACE round ' + round + ': joined but never entered (silent wipe), windowHit=' + inWindow);
+          dumpRace('round ' + round + ' silent', cur);
+          return finish(1, `REPRO: round ${round} silent wipe (windowHit=${inWindow})`);
+        }
+        outcomes.push(inWindow ? 'window-entered' : 'clean');
+        bob2 = cur;
+        accepted = true;
+        break;
+      }
+      if (cur.lines.some((l) => /join refused/.test(l)) && refusedKills < 60) {
+        refusedKills++;
+        try { cur.kill(); } catch (e) { /* gone */ }
+        await new Promise((rr) => setTimeout(rr, 250));
+        cur = mkEngine('QnBobRace' + round + '.' + refusedKills, NAME_B,
+          path.join(base, 'cl2'), false);
+      }
+      await new Promise((rr) => setTimeout(rr, 200));
+    }
+    if (!accepted) {
+      try { cur.kill(); } catch (e) { /* gone */ }
+      console.log('RACE round ' + round + ': no accept within budget');
+      return finish(1, 'RACE round ' + round + ': no join within budget (refused=' +
+        refusedKills + ')');
+    }
+    try { bob2.kill(); } catch (e) { /* gone */ }
+    bob2 = null;
+    await new Promise((rr) => setTimeout(rr, 300));
+  }
+  if (windowHits === 0 && !process.env.QN_RACE_ALLOW_GATED)
+    return finish(1, 'RACE VACUOUS: no accept raced a pending removal (' +
+      outcomes.join(',') + ')');
+  if (host.count((l) => l.includes(`${NAME_A} removed`)) !== removedA0)
+    return finish(1, 'REPRO: resident evicted during crash-rejoin rounds');
+
+  // Final accepted racer keeps the resident shape for the ghost phase.
+  bob2 = mkEngine('QnBobFinal', NAME_B, path.join(base, 'cl2'), false);
+  {
+    const deadline = Date.now() + REJOIN_TIMEOUT;
+    let finalKills = 0;
+    for (;;) {
+      const fatal = bob2.lines.find(fatalLine);
+      if (fatal !== undefined)
+        return finish(1, 'REPRO: final racer fatal: ' + fatal);
+      if (bob2.lines.some((l) => l.includes('client: joined'))) break;
+      if (bob2.lines.some((l) => /join refused|CL_Connect: connect failed/.test(l)) && finalKills < 40) {
+        // Same refused-re-dial shape as the rounds: a rejoin landing in
+        // the ghost window is the product's clean DUP_IDENTITY verdict,
+        // the lane's job is to come back after the removal lands.
+        finalKills++;
+        try { bob2.kill(); } catch (e) { /* gone */ }
+        await new Promise((rr) => setTimeout(rr, 250));
+        bob2 = mkEngine('QnBobFinal.' + finalKills, NAME_B, path.join(base, 'cl2'), false);
+        continue;
+      }
+      if (Date.now() > deadline)
+        throw new Error('final racer never joined (refused=' + finalKills + ')');
+      await new Promise((rr) => setTimeout(rr, 300));
+    }
+  }
+  console.log('RACE OK: ' + ROUNDS + ' crash-rejoin rounds (' +
+    outcomes.join(',') + '), windowHits=' + windowHits +
+    (windowHits === 0 ? ' (join-side hazard gated: DUP_IDENTITY refusal + ' +
+      'synchronous roster removal at sessionClosed)' : ''));
+  }
 
   // Stale code after the host is gone must fail cleanly, never crash.
   // Residents go first: a resident re-dial meeting a dead host is a
   // mid-match refusal (correctly fatal), and fatal lines are only
   // exempted past the harness's own kills.
-  alice2.kill();
+  if (VARIANT === 'plain') alice2.kill();
+  else { bob2.kill(); alice.kill(); } // residents exit before the host
   await new Promise((r) => setTimeout(r, 1500));
   host.kill();
   await new Promise((r) => setTimeout(r, 2000));
@@ -628,7 +796,8 @@ async function main() {
     }
   }
 
-  const all = [host, alice, bob, alice2, ghost];
+  const all = VARIANT === 'plain'
+    ? [host, alice, bob, alice2, ghost] : [host, alice, bob, bob2, ghost];
   for (const p of all) {
     for (let li = 0; li < p.lines.length; li++) {
       const l = p.lines[li];
@@ -679,7 +848,7 @@ async function main() {
         return finish(1, `TWPLAYER FAIL: join code leaked in ${p.name}`);
 
   clearTimeout(guard);
-  console.log(`TWPLAYER OK: join x2, roster v2 x2, spawn x2, rejoin, stale-code refusal, name-fuzz + redaction (${all.length} engines, ${all.reduce((n, p) => n + p.lines.length, 0)} console lines)`);
+  console.log(`TWPLAYER OK (${VARIANT}): join x2, roster v2 x2, spawn x2, rejoin, stale-code refusal, name-fuzz + redaction (${all.length} engines, ${all.reduce((n, p) => n + p.lines.length, 0)} console lines)`);
   finish(0, 'TWPLAYER OK');
 }
 
