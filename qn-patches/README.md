@@ -4,7 +4,12 @@ Fixes applied inside the vendored engine tree (`src/vendor/quakespasm`).
 The tree in git already has them applied; these files exist so
 `tools/update-engine.sh` can re-apply them automatically after each engine
 sync. A patch that fails to apply there is a STOP condition — read the
-failing hunk, rebase or retire the patch, never skip it.
+failing hunk, rebase or retire the patch, never skip it. To (re)generate an
+entry from the vendored working tree, run
+`tools/regen-patch.sh qn-patches/NNNN-name.patch [Quake-file ...]`: it stages
+the pinned bytes plus the earlier series and diffs the named files; members
+shared with a later patch refuse regeneration there (regenerate the later
+one). Always follow with `make engine-verify` before committing.
 
 | file | what it does |
 |---|---|
