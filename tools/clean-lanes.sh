@@ -25,6 +25,9 @@ for re in \
   '.*/qnvis-home-[A-Za-z0-9]{6}$' \
   '.*/qnpeer-test-[A-Za-z0-9]{6}$' \
   '.*/qnpt-st-[A-Za-z0-9]{6}$' \
+  '.*/qnpt-root-[A-Za-z0-9]{6}$' \
+  '.*/qnloop-[A-Za-z0-9]{6}$' \
+  '.*/qnvis-probe-[A-Za-z0-9]{6}$' \
   '.*/qn-idn-[A-Za-z0-9]{6}$' \
   '.*/p2pquake-e2e-[A-Za-z0-9]{6}$' \
   '.*/qnpb-[A-Za-z0-9-]{1,20}$' \
