@@ -81,7 +81,8 @@ static void cleanup_tmpdir_files(void)
     static const char *names[] = { "cap", "capelf", "cmdline.out",
                                    "environ.out", "cap.sh", "dump.sh",
                                    "exit3.sh", "hang.sh", "noexec",
-                                   "badprog", "peer.elf" };
+                                   "badprog", "peer.elf", "cmd.bin", "interp-ran",
+                                   "peer.node", "peer.r", "peer.t", "peer.p" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         snprintf(p, sizeof p, "%s/%s", tmpdir, names[i]);
         unlink(p);
@@ -580,6 +581,298 @@ static void test_delivery_races_survive(void)
     }
 }
 
+/* ---- bundled-interpreter spawn ----
+ * The packaged layout places an app-local interpreter at
+ * <exe-dir>/runtime/node; when present it must be execed from its
+ * validated descriptor with the peer entry as the interpreter's first
+ * argument, and it must never degrade to a shebang path-exec. The peer
+ * entries here carry NO shebang on purpose: only an interpreter can run
+ * them, so any stray path-exec lands on ENOEXEC/127 instead of silently
+ * passing. The interpreter under test is a copy of /bin/sh — an ELF, so
+ * it exercises the descriptor fast path itself. */
+
+static char rt_dir[512], rt_interp[600];
+
+static int copy_exec(const char *src, const char *dst)
+{
+    int s = open(src, O_RDONLY);
+    if (s < 0) {
+        return -1;
+    }
+    int d = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (d < 0) {
+        close(s);
+        return -1;
+    }
+    char chunk[65536];
+    ssize_t r;
+    while ((r = read(s, chunk, sizeof chunk)) > 0) {
+        ssize_t off = 0;
+        while (off < r) {
+            ssize_t w = write(d, chunk + off, (size_t)(r - off));
+            if (w <= 0) {
+                close(s);
+                close(d);
+                return -1;
+            }
+            off += w;
+        }
+    }
+    close(s);
+    close(d);
+    return r == 0 ? 0 : -1;
+}
+
+static int which_exec(const char *names[], char *out, size_t cap)
+{
+    for (int i = 0; names[i] != NULL; i++) {
+        if (access(names[i], X_OK) == 0) {
+            snprintf(out, cap, "%s", names[i]);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int install_runtime(const char *program) /* NULL: dir only */
+{
+    char base[480];
+    ssize_t k = readlink("/proc/self/exe", base, sizeof base - 1);
+    if (k <= 0 || k == (ssize_t)sizeof base - 1) {
+        return -1; /* same truncation refusal the module enforces */
+    }
+    base[k] = '\0';
+    char *slash = strrchr(base, '/');
+    if (slash == NULL || slash == base) {
+        return -1;
+    }
+    *slash = '\0';
+    if (snprintf(rt_dir, sizeof rt_dir, "%s/runtime", base)
+        >= (int)sizeof rt_dir) {
+        return -1;
+    }
+    if (mkdir(rt_dir, 0755) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    if (snprintf(rt_interp, sizeof rt_interp, "%s/node", rt_dir)
+        >= (int)sizeof rt_interp) {
+        return -1;
+    }
+    if (program == NULL) {
+        return 0;
+    }
+    return copy_exec(program, rt_interp);
+}
+
+static void remove_runtime(void)
+{
+    if (rt_dir[0] == '\0') {
+        return;
+    }
+    unlink(rt_interp);
+    rmdir(rt_dir);
+    rt_dir[0] = '\0';
+}
+
+/* interpreter-visible argv lands in cmd.bin (NUL-separated, from
+ * /proc/self/cmdline); the marker proves the interpreter itself ran. */
+static int write_node_entry(const char *name, int append)
+{
+    char body[1024];
+    snprintf(body, sizeof body,
+             "cat /proc/$$/cmdline %s '%s/cmd.bin'\n"
+             ": > '%s/interp-ran'\n"
+             "cat >/dev/null\n",
+             append ? ">>" : ">", tmpdir, tmpdir);
+    return write_exec(name, body, 1);
+}
+
+static void clear_node_outputs(void)
+{
+    char p[512];
+    snprintf(p, sizeof p, "%s/cmd.bin", tmpdir);
+    unlink(p);
+    snprintf(p, sizeof p, "%s/interp-ran", tmpdir);
+    unlink(p);
+}
+
+static void test_bundled_exec(void)
+{
+    qn_spawn_t s;
+    qn_spawn_init(&s);
+    const char *reason = NULL;
+    char sh[256] = "";
+    const char *shs[] = { "/bin/sh", "/usr/bin/sh", NULL };
+    clear_node_outputs();
+    CHECK(which_exec(shs, sh, sizeof sh) == 0);
+    CHECK(install_runtime(sh) == 0);
+    CHECK(write_node_entry("peer.node", 0) == 0);
+    char script[512];
+    snprintf(script, sizeof script, "%s/peer.node", tmpdir);
+    char *const argv[] = { script, (char *)"--uds", (char *)"U", NULL };
+    char *const envp[] = { "PATH=/usr/bin:/bin", NULL };
+    uint8_t tk[QN_SPAWN_TOKEN_LEN];
+    CHECK(qn_spawn_make_token(tk) == 0);
+    int r = qn_spawn_start(&s, script, argv, envp, tk, 1000, &reason);
+    CHECK(r == 0);
+    if (r == 0) {
+        CHECK(wait_exit(&s));
+        CHECK(s.exited && WIFEXITED(s.exit_status)
+              && WEXITSTATUS(s.exit_status) == 0);
+        char buf[4096];
+        ssize_t n = read_file("cmd.bin", buf, sizeof buf - 1);
+        CHECK(n > 0);
+        if (n > 0) {
+            buf[n] = '\0';
+            char *args[4] = { NULL, NULL, NULL, NULL };
+            char *q = buf;
+            int argc = 0;
+            while (q < buf + n && argc < 4) {
+                args[argc++] = q;
+                q += strlen(q) + 1;
+            }
+            CHECK(argc == 4);
+            /* argv[0] is the interpreter; the entry rides as its first
+             * argument; the caller's daemon flags keep their order */
+            CHECK(argc == 4 && strstr(args[0], "/runtime/node") != NULL);
+            CHECK(argc == 4 && strcmp(args[1], script) == 0);
+            CHECK(argc == 4 && strcmp(args[2], "--uds") == 0);
+            CHECK(argc == 4 && strcmp(args[3], "U") == 0);
+        }
+        char m[8];
+        CHECK(read_file("interp-ran", m, sizeof m) == 0); /* marker exists, empty */
+    }
+    remove_runtime();
+}
+
+static void test_bundled_refusal(void)
+{
+    const char *shs[] = { "/bin/sh", "/usr/bin/sh", NULL };
+    clear_node_outputs();
+    char sh[256] = "";
+    CHECK(which_exec(shs, sh, sizeof sh) == 0);
+
+    /* present but not executable: refusal, and the entry never runs */
+    CHECK(install_runtime(sh) == 0);
+    CHECK(chmod(rt_interp, 0644) == 0);
+    qn_spawn_t s;
+    qn_spawn_init(&s);
+    const char *reason = NULL;
+    CHECK(write_node_entry("peer.r", 0) == 0);
+    char script[512];
+    snprintf(script, sizeof script, "%s/peer.r", tmpdir);
+    char *const argv[] = { script, NULL };
+    uint8_t tk[QN_SPAWN_TOKEN_LEN];
+    CHECK(qn_spawn_make_token(tk) == 0);
+    CHECK(qn_spawn_start(&s, script, argv, NULL, tk, 1000, &reason) == -1);
+    CHECK(reason != NULL && *reason != '\0');
+    CHECK(qn_spawn_running(&s) == 0);
+    char m[8];
+    CHECK(read_file("interp-ran", m, sizeof m) == -1); /* never fell back */
+
+    /* present but not a regular file: same refusal shape */
+    remove_runtime();
+    CHECK(install_runtime(NULL) == 0);
+    CHECK(mkdir(rt_interp, 0755) == 0);
+    qn_spawn_init(&s);
+    reason = NULL;
+    CHECK(qn_spawn_make_token(tk) == 0);
+    tk[0] ^= 0x5A;
+    CHECK(qn_spawn_start(&s, script, argv, NULL, tk, 1001, &reason) == -1);
+    CHECK(reason != NULL && *reason != '\0');
+    CHECK(read_file("interp-ran", m, sizeof m) == -1);
+    rmdir(rt_interp);
+    remove_runtime();
+}
+
+static void test_bundled_tracks_file(void)
+{
+    /* revalidation per spawn: what executes follows the CURRENT bytes of
+     * runtime/node — swap the interpreter for dd (a foreign ELF) and the
+     * spawn stops behaving like a shell, proving nothing is cached from
+     * the first validated descriptor. */
+    const char *dds[] = { "/usr/bin/dd", "/bin/dd", NULL };
+    const char *shs[] = { "/bin/sh", "/usr/bin/sh", NULL };
+    char bin[256] = "";
+    CHECK(which_exec(shs, bin, sizeof bin) == 0);
+    CHECK(install_runtime(bin) == 0);
+    CHECK(write_node_entry("peer.t", 1) == 0);
+    char script[512];
+    snprintf(script, sizeof script, "%s/peer.t", tmpdir);
+    char *const argv[] = { script, (char *)"--uds", (char *)"U", NULL };
+    char *const envp[] = { "PATH=/usr/bin:/bin", NULL };
+    clear_node_outputs();
+    qn_spawn_t s1;
+    qn_spawn_init(&s1);
+    const char *reason = NULL;
+    uint8_t tk[QN_SPAWN_TOKEN_LEN];
+    CHECK(qn_spawn_make_token(tk) == 0);
+    CHECK(qn_spawn_start(&s1, script, argv, envp, tk, 1000, &reason) == 0);
+    CHECK(wait_exit(&s1));
+    char buf[4096];
+    ssize_t n = read_file("cmd.bin", buf, sizeof buf - 1);
+    CHECK(n > 0);
+    int records = 0;
+    for (ssize_t i = 0; i + 5 <= n; i++) {
+        if (memcmp(buf + i, "--uds", 5) == 0) {
+            records++;
+        }
+    }
+    CHECK(records == 1);
+
+    CHECK(which_exec(dds, bin, sizeof bin) == 0);
+    CHECK(install_runtime(bin) == 0); /* overwrite mid-life: revalidate */
+    qn_spawn_t s2;
+    qn_spawn_init(&s2);
+    reason = NULL;
+    CHECK(qn_spawn_make_token(tk) == 0);
+    tk[1] ^= 0x5A;
+    int r = qn_spawn_start(&s2, script, argv, envp, tk, 1001, &reason);
+    /* dd rejects the operands without consuming stdin: the start either
+     * fails against a dead child or exits nonzero — both prove the new
+     * bytes ran. A cached-shell bug would exit 0 and append. */
+    if (r == 0) {
+        CHECK(wait_exit(&s2));
+        CHECK(!(s2.exited && WIFEXITED(s2.exit_status)
+                && WEXITSTATUS(s2.exit_status) == 0));
+    } else {
+        CHECK(r == -1);
+    }
+    n = read_file("cmd.bin", buf, sizeof buf - 1);
+    records = 0;
+    for (ssize_t i = 0; i + 5 <= n; i++) {
+        if (memcmp(buf + i, "--uds", 5) == 0) {
+            records++;
+        }
+    }
+    CHECK(records == 1);
+    remove_runtime();
+}
+
+static void test_plain_entry_without_bundled(void)
+{
+    /* source-tree layout (no runtime/): a shebangless entry gets no
+     * interpreter magic — both exec paths fail and the child exits 127
+     * with no marker written. */
+    clear_node_outputs();
+    remove_runtime();
+    CHECK(write_node_entry("peer.p", 0) == 0);
+    char script[512];
+    snprintf(script, sizeof script, "%s/peer.p", tmpdir);
+    char *const argv[] = { script, NULL };
+    qn_spawn_t s;
+    qn_spawn_init(&s);
+    const char *reason = NULL;
+    uint8_t tk[QN_SPAWN_TOKEN_LEN];
+    CHECK(qn_spawn_make_token(tk) == 0);
+    CHECK(qn_spawn_start(&s, script, argv, NULL, tk, 1000, &reason) == 0);
+    CHECK(wait_exit(&s));
+    CHECK(s.exited && WIFEXITED(s.exit_status)
+          && WEXITSTATUS(s.exit_status) == 127);
+    char m[8];
+    CHECK(read_file("interp-ran", m, sizeof m) == -1);
+}
+
 int qn_test_spawn(int *checks_out)
 {
     if (setup_tmpdir() != 0) {
@@ -593,9 +886,14 @@ int qn_test_spawn(int *checks_out)
     test_early_exit();
     test_watchdog();
     test_elf_from_descriptor();
+    test_bundled_exec();
+    test_bundled_refusal();
+    test_bundled_tracks_file();
+    test_plain_entry_without_bundled();
     test_cap_and_freshness();
     test_refusals();
     test_delivery_races_survive();
+    remove_runtime();
     cleanup_tmpdir_files();
     *checks_out = checks;
     if (failures) {

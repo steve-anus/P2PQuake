@@ -76,6 +76,83 @@ static int exec_open(const char *path, const char **reason)
     return fd;
 }
 
+/* Directory of this process image, with the resolve lane's refusal
+ * discipline: truncation is a refusal, never a probe of a prefix. */
+static int exe_dir(char *out, size_t cap, const char **reason)
+{
+    char base[PATH_MAX];
+    ssize_t k = readlink("/proc/self/exe", base, sizeof base - 1);
+    if (k <= 0) {
+        *reason = "cannot locate this process image";
+        return -1;
+    }
+    if (k == (ssize_t)sizeof base - 1) {
+        *reason = "process image path too long";
+        return -1; /* refuse rather than probe a truncated prefix */
+    }
+    base[k] = '\0';
+    char *slash = strrchr(base, '/');
+    if (slash == NULL || slash == base) {
+        *reason = "process image path malformed";
+        return -1;
+    }
+    *slash = '\0';
+    if (strlen(base) >= cap) {
+        *reason = "process image path too long";
+        return -1;
+    }
+    memcpy(out, base, strlen(base) + 1);
+    return 0;
+}
+
+/* Packaged layout: <exe-dir>/runtime/node is the app-local interpreter,
+ * execed through its own validated descriptor with the peer entry as the
+ * interpreter's first argument. The descriptor promise covers the
+ * interpreter; the entry is read by path from inside it, as for any
+ * script program. Its existence is a promise: whatever sits there must
+ * validate as an ELF image (fd exec cannot run a script, and bundled
+ * mode never falls back), so a broken or tampered runtime refuses the
+ * spawn outright. Absent (ENOENT/ENOTDIR) means the source-tree layout.
+ * Returns the fd, -1 = refusal (*reason set), -2 = not bundled. */
+static int bundled_open(char *path, size_t cap, const char **reason)
+{
+    char dir[PATH_MAX];
+    if (exe_dir(dir, sizeof dir, reason) != 0) {
+        return -1;
+    }
+    if (snprintf(path, cap, "%s/runtime/node", dir) >= (int)cap) {
+        *reason = "bundled interpreter path too long";
+        return -1;
+    }
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT || errno == ENOTDIR) {
+            return -2;
+        }
+        *reason = "bundled interpreter cannot be opened";
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        *reason = "bundled interpreter is not a regular file";
+        return -1;
+    }
+    if (faccessat(fd, "", X_OK, AT_EMPTY_PATH | AT_EACCESS) != 0) {
+        close(fd);
+        *reason = "bundled interpreter is not executable by us";
+        return -1;
+    }
+    char magic[4];
+    if (pread(fd, magic, sizeof magic, 0) != (ssize_t)sizeof magic ||
+        memcmp(magic, "\x7f" "ELF", 4) != 0) {
+        close(fd);
+        *reason = "bundled interpreter is not an ELF image";
+        return -1;
+    }
+    return fd;
+}
+
 int qn_spawn_resolve(char *out, size_t outlen, const char *override,
                      const char **reason)
 {
@@ -87,22 +164,9 @@ int qn_spawn_resolve(char *out, size_t outlen, const char *override,
         src = override;
     } else {
         char base[PATH_MAX];
-        ssize_t k = readlink("/proc/self/exe", base, sizeof base - 1);
-        if (k <= 0) {
-            *reason = "cannot locate this process image";
+        if (exe_dir(base, sizeof base, reason) != 0) {
             return -1;
         }
-        if (k == (ssize_t)sizeof base - 1) {
-            *reason = "process image path too long";
-            return -1; /* refuse rather than probe a truncated prefix */
-        }
-        base[k] = '\0';
-        char *slash = strrchr(base, '/');
-        if (slash == NULL || slash == base) {
-            *reason = "process image path malformed";
-            return -1;
-        }
-        *slash = '\0';
         if (snprintf(buf, sizeof buf, "%s/%s", base, QN_PEER_SIBLING)
             >= (int)sizeof buf) {
             *reason = "sibling path too long";
@@ -232,19 +296,51 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     if (exec_ok_path(program, reason) != 0) {
         return -1;
     }
-    int prog_fd = exec_open(program, reason);
-    if (prog_fd < 0) {
+    char interp[PATH_MAX];
+    int exec_fd = bundled_open(interp, sizeof interp, reason);
+    if (exec_fd == -1) {
         return -1;
     }
-    if (prog_fd < 3) {
+    const int bundled = exec_fd >= 0;
+    char *real_argv[12];
+    char *const *rargv = argv;
+    if (bundled) {
+        size_t j = 2;
+        real_argv[0] = interp;
+        real_argv[1] = argv[0];
+        while (argv[j - 1] != NULL) {
+            if (j + 1 >= sizeof real_argv / sizeof real_argv[0]) {
+                close(exec_fd);
+                *reason = "too many arguments for the bundled exec";
+                return -1;
+            }
+            real_argv[j] = argv[j - 1];
+            j++;
+        }
+        real_argv[j] = NULL;
+        rargv = real_argv;
+        /* the interpreter receives the caller's argv shifted by one slot:
+         * the same tripwire must clear the composed line too */
+        if (has_token(rargv, token)) {
+            close(exec_fd);
+            *reason = "token must never travel in argv or env";
+            return -1;
+        }
+    } else {
+        exec_fd = exec_open(program, reason);
+        if (exec_fd < 0) {
+            return -1;
+        }
+    }
+    if (exec_fd < 3) {
         /* A validated fd on 0..2 (closed-stdio engine) would be clobbered
          * by the child's dup2, silently degrading to a path exec:
          * relocate; the freed low slot then trips the guard below — a
          * refusal by design (an engine must keep 0..2 occupied). */
-        int high = fcntl(prog_fd, F_DUPFD_CLOEXEC, 3);
-        close(prog_fd);
-        prog_fd = high;
-        if (prog_fd < 0) {
+        int high = fcntl(exec_fd, F_DUPFD_CLOEXEC, 3);
+        close(exec_fd);
+        exec_fd = high;
+        if (exec_fd < 0) {
             *reason = "cannot relocate program descriptor";
             return -1;
         }
@@ -252,7 +348,7 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
 
     int fds[2];
     if (pipe2(fds, O_CLOEXEC) != 0) {
-        close(prog_fd);
+        close(exec_fd);
         *reason = "pipe failed";
         return -1;
     }
@@ -261,7 +357,7 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
          * stdin plumbing cannot be trusted. */
         close(fds[0]);
         close(fds[1]);
-        close(prog_fd);
+        close(exec_fd);
         *reason = "low descriptors unavailable";
         return -1;
     }
@@ -277,7 +373,7 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     if (pid < 0) {
         close(fds[0]);
         close(fds[1]);
-        close(prog_fd);
+        close(exec_fd);
         *reason = "fork failed";
         return -1;
     }
@@ -290,18 +386,22 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
         sigprocmask(SIG_UNBLOCK, &all, NULL); /* the peer owns its signals */
         /* Belt beyond O_CLOEXEC: no descriptor we do not own may survive
          * into the child. */
-        child_close_high_fds(prog_fd);
-        execveat(prog_fd, "", argv, envp, AT_EMPTY_PATH);
+        child_close_high_fds(exec_fd);
+        execveat(exec_fd, "", rargv, envp, AT_EMPTY_PATH);
         /* ELF images exec from the validated descriptor; the kernel's
-         * script loader cannot (ENOENT on empty path), so descriptor-exec
-         * failure falls back to the path exec — fine for shebang test
-         * fakes; production peers ride the fast path. */
-        execve(program, argv, envp);
-        _exit(127); /* only reachable if both execs failed */
+         * script loader cannot (ENOENT on empty path), so a non-bundled
+         * descriptor-exec failure falls back to the path exec — fine for
+         * shebang test fakes; production peers ride the fast path. The
+         * bundled interpreter never falls back: its validated descriptor
+         * is the only thing packaged mode will run. */
+        if (!bundled) {
+            execve(program, argv, envp);
+        }
+        _exit(127); /* only reachable if the execs failed */
     }
 
     close(fds[0]);
-    close(prog_fd); /* the child holds its own copy; ours is spent */
+    close(exec_fd); /* the child holds its own copy; ours is spent */
     /* A pipe write with every reader gone raises SIGPIPE before write()
      * returns EPIPE. MASKING IS NOT ENOUGH: the pending signal is
      * delivered on restore. SIG_IGN at raise time discards it outright;

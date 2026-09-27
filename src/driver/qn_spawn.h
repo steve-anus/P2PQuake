@@ -11,6 +11,16 @@
  * path-exec fallback. Nothing is ever searched on PATH (hijack class);
  * a missing or unfit program is a clean refusal, never a fallback.
  *
+ * In the packaged layout an app-local interpreter sits beside the engine
+ * image (<exe-dir>/runtime/node): when present it must validate as an
+ * ELF and is execed through its own descriptor with the peer entry as
+ * its first argument; a broken or tampered runtime there refuses the
+ * spawn instead of degrading to the shebang fallback (the entry itself
+ * is read by path from inside the interpreter — the documented posture
+ * for script programs). Absent, the source-tree layout applies. If this
+ * process image cannot be located at all, the spawn refuses even for an
+ * override-only start.
+ *
  * Children are reaped exactly once by this module; a hung pre-authentication
  * child is SIGKILLed after the watchdog deadline, and at most
  * QN_SPAWN_MAX_HANDSHAKES token deliveries happen per engine run — an
