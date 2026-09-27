@@ -52,6 +52,30 @@ int qn_transport_prepare_dir(const char *dir)
     return 0;
 }
 
+/* A listener that is answering (or queueing) a nonblocking connect is
+ * LIVE; a dead socket file left by a crash refuses outright. Binding
+ * through a live listener would steal its path: two same-box engines
+ * then share one identity dir silently (hyperswarm self-meet seals
+ * joins), so the bind is refused instead. */
+static int qn_transport_probe_live(const char *path)
+{
+    struct sockaddr_un sa;
+    int fd, r, e;
+
+    fd = (int)socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if (fd < 0)
+        return 1; /* cannot probe: fail closed, never steal */
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    memcpy(sa.sun_path, path, strlen(path) + 1u);
+    r = connect(fd, (struct sockaddr *)&sa,
+                (socklen_t)(offsetof(struct sockaddr_un, sun_path) +
+                            strlen(path) + 1u));
+    e = errno;
+    close(fd);
+    return r == 0 || (r < 0 && e == EINPROGRESS);
+}
+
 int qn_transport_listen(const char *path, const char **reason)
 {
     char dirbuf[4096];
@@ -88,6 +112,11 @@ int qn_transport_listen(const char *path, const char **reason)
          * name (regular file, foreign owner, symlink) is a refusal. */
         if (!S_ISSOCK(st.st_mode) || st.st_uid != geteuid()) {
             *reason = "foreign file";
+            close(fd);
+            return -1;
+        }
+        if (qn_transport_probe_live(path)) {
+            *reason = "listener already live";
             close(fd);
             return -1;
         }

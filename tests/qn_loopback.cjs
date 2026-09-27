@@ -24,6 +24,10 @@ const ENGINE = process.env.QN_ENGINE ||
   path.join(ROOT, 'src', 'vendor', 'quakespasm', 'Quake', 'quakespasm');
 const FAKE = path.join(__dirname, 'fake_peer_qn.cjs');
 const GAMEDATA = process.env.QN_GAMEDATA || path.join(ROOT, 'gamedata');
+const relIfShorter = (p) => {
+  const r = path.relative(process.cwd(), p);
+  return r && r.length < p.length && !r.startsWith('..') ? r : p;
+};
 
 /* The scripted player's host: the fake peer mints the join code; this
  * file computes the expected display form with its own base32
@@ -133,12 +137,19 @@ function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnloop-'));
   /* stdbuf -oL: the engine's stdout is block-buffered when piped; without
    * the line-flush its console lines would never reach this capture. */
-  const child = spawn('stdbuf', ['-oL', ENGINE,
+  /* com_cmdline is capped at 256 and the tail vanishes silently: launch
+   * on repo-relative paths (make check runs from the repo root). */
+  const eng = [
     '-qn', '-qn-peer', FAKE, '-qn-dir', dir,
-    '-basedir', GAMEDATA, '-dedicated',
+    '-qn-statedir', path.join(dir, 'state'),
+    '-basedir', relIfShorter(GAMEDATA), '-dedicated',
     ...(process.env.QN_HOST16 ? ['16'] : []),
     '+listen', '+map', 'lqdm1',
-  ], {
+  ];
+  const wantEcho = [relIfShorter(ENGINE), ...eng].join(' ');
+  if (wantEcho.length >= 256)
+    console.error(`qn_loopback: launch too long for com_cmdline (${wantEcho.length})`);
+  const child = spawn('stdbuf', ['-oL', relIfShorter(ENGINE), ...eng], {
     env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -153,6 +164,12 @@ function main() {
     const l = raw.trim();
     if (!l) return;
     lines.push(l);
+    if (l.startsWith('Command line: ') &&
+        l.slice('Command line: '.length).length !== wantEcho.length) {
+      bannedHit = ['cmdline-truncated', l];
+      doneResolve(1);
+      return;
+    }
     for (const [name, f] of banned) {
       if (f(l)) { bannedHit = [name, l]; doneResolve(1); return; }
     }

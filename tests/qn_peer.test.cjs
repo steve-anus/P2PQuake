@@ -109,7 +109,10 @@ test('payload-bearing lobby control frames are inert (spec 2.3: empty)', async (
 const FAKE_ENGINE = path.join(__dirname, '..', 'bin', 'fake-engine');
 
 function spawnPeer(t, sockPath, extra = []) {
-  const child = spawn(FAKE_ENGINE, ['--uds', sockPath, ...extra], {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-st-'));
+  t.after(() => { fs.rmSync(stateDir, { recursive: true, force: true }); });
+  const child = spawn(FAKE_ENGINE,
+    ['--uds', sockPath, '--dir', stateDir, ...extra], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, QN_FAKE_ENGINE_NODE: process.execPath,
       QN_FAKE_ENGINE_SCRIPT: PEER },

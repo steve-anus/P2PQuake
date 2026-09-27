@@ -20,6 +20,12 @@ const ENGINE = process.env.QN_ENGINE ||
   path.join(ROOT, 'src', 'vendor', 'quakespasm', 'Quake', 'quakespasm');
 const FAKE = path.join(__dirname, 'fake_daemon_lobby.cjs');
 const GAMEDATA = process.env.QN_GAMEDATA || path.join(ROOT, 'gamedata');
+/* com_cmdline[256] truncates silently (common.c): keep launch strings
+ * short; the echo check below catches any residual drift. */
+const relIfShorter = (p) => {
+  const r = path.relative(process.cwd(), p);
+  return r && r.length < p.length && !r.startsWith('..') ? r : p;
+};
 const BUDGET_MS = 45000;
 
 let assertions = 0;
@@ -49,11 +55,16 @@ async function main() {
   if (!(fs.statSync(FAKE).mode & 0o100)) die('fake daemon must be executable (mode *75)');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnlobby-'));
 
-  const child = spawn('stdbuf', ['-oL', ENGINE,
+  const tok = [
     '-qn', '-qn-peer', FAKE, '-qn-dir', dir,
-    '-basedir', GAMEDATA, '-dedicated',
+    '-qn-statedir', path.join(dir, 'state'),
+    '-basedir', relIfShorter(GAMEDATA), '-dedicated',
     '+listen', '+map', 'lqdm1',
-  ], {
+  ];
+  const wantEcho = [relIfShorter(ENGINE), ...tok].join(' ');
+  if (wantEcho.length >= 256)
+    die('launch too long for com_cmdline (' + wantEcho.length + ')');
+  const child = spawn('stdbuf', ['-oL', relIfShorter(ENGINE), ...tok], {
     env: { ...process.env, QN_LOBBY_DUMP: '1',
       SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -68,6 +79,11 @@ async function main() {
   });
   const outText = () => out.join('');
   const errText = () => err.join('');
+  {
+    const m = (outText() + errText()).match(/Command line: (.*)/);
+    if (m && m[1].trim().length !== wantEcho.length)
+      die('cmdline truncated in engine echo');
+  }
 
   await waitFor(() => errText().includes('script complete ok'), 'fake script completion');
   await new Promise((r) => setTimeout(r, 800));                 // let the last swap flush

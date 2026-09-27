@@ -726,10 +726,41 @@ async function run(opts) {
 }
 
 // ---- CLI ----
+// Durable state default (identity key, epochs): $XDG_STATE_HOME/p2pquake,
+// else ~/.p2pquake, with a per-instance subdir tagged by the socket dir so
+// same-box engines never share an identity (the engine derives the same
+// tag from its -qn-dir; the hash must match net_qn.c qn_fnv1a byte-for-
+// byte — it hashes the UTF-8 bytes of the absolute socket dir).
+function qnFnv1aHex(s) {
+  let h = 0x811c9dc5;
+  const buf = Buffer.from(s, 'utf8');
+  for (let i = 0; i < buf.length; i++) {
+    h ^= buf[i];
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+function defaultStateDir(uds) {
+  const xdg = process.env.XDG_STATE_HOME;
+  const abs = path.resolve(uds);
+  const sockDir = path.dirname(abs);
+  let root;
+  if (typeof xdg === 'string' && xdg.startsWith('/')) {
+    root = path.join(xdg, 'p2pquake');
+  } else if (typeof process.env.HOME === 'string' && process.env.HOME.startsWith('/')) {
+    root = path.join(process.env.HOME, '.p2pquake');
+  } else {
+    /* mirror the engine's exotic-env collapse into the socket dir;
+     * os.homedir() must NOT be consulted here: it can answer from the
+     * passwd entry where the engine sees no usable HOME (spec 5.2) */
+    root = sockDir;
+  }
+  return path.join(root, qnFnv1aHex(sockDir));
+}
 function parseFlags(argv) {
   const o = { tokenTimeoutMs: 5000, name: 'player',
     gamedata: path.join(__dirname, '..', '..', 'gamedata.sha256'),
-    gamedir: 'id1', dir: path.join(os.homedir(), '.p2pquake') };
+    gamedir: 'id1' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => (i + 1 < argv.length ? argv[++i] : null);
@@ -746,7 +777,11 @@ function parseFlags(argv) {
     else return null;
   }
   if (!o.uds) return null;
-  if (typeof o.gamedata !== 'string' || typeof o.dir !== 'string')
+  if (o.dir === undefined) o.dir = defaultStateDir(o.uds);
+  /* an explicit empty --dir would authenticate first and die only at
+   * key load: refuse it at the flag gate */
+  if (typeof o.gamedata !== 'string' || typeof o.dir !== 'string'
+      || o.dir.length === 0)
     return null;                                   // fs args: strings only, no coercion
   if (typeof o.name !== 'string' ||
       !/^[\x20-\x7e]{1,20}$/.test(o.name)) return null;      // display name: printable, bounded
@@ -783,6 +818,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  qnFnv1aHex, defaultStateDir,
   assertRuntime, readToken, dialAndAuth, usageExit, NODE_MAJOR_TESTED,
   ensureIdentity, makeEpochStore, computeIdentity, extractBuildId, makeRedactor,
   PlaneA, parseFlags, run,

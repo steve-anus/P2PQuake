@@ -28,6 +28,11 @@
  *                          p2pquake, else /tmp/p2pquake-<uid>; ownership
  *                          and the 0700 mode are re-validated by the
  *                          transport on every use)
+ *   -qn-statedir <abspath> daemon state root for identity keys and
+ *                          advert epochs (default: $XDG_STATE_HOME/
+ *                          p2pquake, else $HOME/.p2pquake): durable,
+ *                          per-instance subdirs keyed by the socket dir,
+ *                          0700/ownership validated like the socket dir
  *   -qn-name <text>        display name forwarded to the daemon
  *   -qn-pin <64hex>        pin the client lane to one host identity key
  *                          (spec section 4.1); a malformed pin fails the
@@ -356,9 +361,10 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 	argv[i++] = "--uds";
 	argv[i++] = (char *) uds;
 	/* The daemon's state directory (identity key, pinning epochs) is
-	 * this process's p2p state: two engines sharing a socket dir share
-	 * nothing else, and two engines on one box must not share the
-	 * noise identity -- hyperswarm refuses a swarm that meets its own
+	 * this process's p2p state: distinct socket dirs imply distinct
+	 * identities, and a second engine on one dir is refused outright
+	 * by the transport's live-listener probe. Two engines on one box
+	 * must not share the noise identity -- hyperswarm refuses a swarm that meets its own
 	 * public key, so a common identity.key would silently seal every
 	 * same-box join. The transport already enforces the 0700/ownership
 	 * posture on this dir that the daemon will write 0600 keys into. */
@@ -381,8 +387,92 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 	argv[i] = NULL;
 }
 
-static char qn_statedir[256];	/* resolved -qn-dir; also the daemon's
-				   --dir state root (identity, epochs) */
+static char qn_statedir[256];	/* resolved daemon --dir state root (identity,
+				   epochs): durable, per-instance, under
+				   $XDG_STATE_HOME/p2pquake or ~/.p2pquake */
+static char qn_sockdir[256];	/* socket directory (-qn-dir default) */
+
+/* FNV-1a over the socket dir path names the instance within the shared
+ * state root: same operator, two engines, two identities (hyperswarm
+ * refuses a swarm meeting its own public key, so a shared identity.key
+ * would silently seal every same-box join). The daemon's manual default
+ * derives the same tag from its --uds (spec 4). */
+typedef char qn_hash32_check[(sizeof (uint32_t) == 4) ? 1 : -1];
+static uint32_t qn_fnv1a (const char *s)
+{
+	uint32_t h = 2166136261u;	/* the daemon's qnFnv1aHex (qn-peer.cjs)
+					   agrees only on true 32-bit arithmetic */
+	while (*s)
+	{
+		h ^= (unsigned char)*s++;
+		h *= 16777619u;
+	}
+	return h;
+}
+
+static qboolean qn_open_state_dir (void)
+{
+	const char *root = NULL;
+	char		inst[288];
+	int p;
+
+	p = COM_CheckParm ("-qn-statedir");
+	if (p && p == com_argc - 1)
+	{
+		qn_note ("-qn-statedir needs a value");
+		return false;
+	}
+	if (p)
+		root = com_argv[p + 1];
+	if (root != NULL && root[0] != '/')
+	{
+		qn_note ("state directory must be an absolute path");
+		return false;
+	}
+	if (root == NULL)
+	{
+		const char *xdg = getenv ("XDG_STATE_HOME");
+		const char *home = getenv ("HOME");
+		static char rbuf[256];
+		int r;
+		if (xdg != NULL && xdg[0] == '/')
+			r = q_snprintf (rbuf, sizeof (rbuf), "%s/p2pquake", xdg);
+		else if (home != NULL && home[0] == '/')
+			r = q_snprintf (rbuf, sizeof (rbuf), "%s/.p2pquake", home);
+		else	/* exotic env: fall back to the socket dir */
+			r = (int) q_strlcpy (rbuf, qn_sockdir, sizeof (rbuf));
+		if (r >= (int) sizeof (rbuf))
+		{	/* never mangle an environment path into a different
+			   directory the operator did not choose */
+			qn_note ("state directory too long");
+			return false;
+		}
+		root = rbuf;
+	}
+	/* the gate is against qn_statedir: that buffer, not inst, is what
+	 * travels to the daemon as --dir; validating one path and handing
+	 * over a truncated copy is exactly the silent split we refuse.
+	 * Gate BEFORE creating anything: a doomed root must not leave a
+	 * stray directory the operator never asked for. */
+	if (q_snprintf (inst, sizeof (inst), "%s/%08x", root,
+	                qn_fnv1a (qn_sockdir)) >= (int) sizeof (qn_statedir))
+	{
+		qn_note ("state directory too long");
+		return false;
+	}
+	if (qn_transport_prepare_dir (root) != 0)
+	{
+		qn_note ("refused state root");
+		return false;
+	}
+	if (qn_transport_prepare_dir (inst) != 0)
+	{
+		qn_note ("refused state instance dir");
+		return false;
+	}
+	q_strlcpy (qn_statedir, inst, sizeof (qn_statedir));
+	return true;
+}
 
 static qboolean qn_open_socket_dir (void)
 {
@@ -392,17 +482,28 @@ static qboolean qn_open_socket_dir (void)
 	int p;
 
 	p = COM_CheckParm ("-qn-dir");
-	if (p && p < com_argc - 1)
+	if (p && p == com_argc - 1)
+	{
+		qn_note ("-qn-dir needs a value");
+		return false;
+	}
+	if (p)
 		dir = com_argv[p + 1];
 	if (dir == NULL)
 	{
 		const char *xdg = getenv ("XDG_RUNTIME_DIR");
+		int r;
 		if (xdg != NULL && *xdg != '\0')
-			q_snprintf (fallback, sizeof (fallback), "%s/p2pquake",
-			          xdg);
+			r = q_snprintf (fallback, sizeof (fallback),
+			          "%s/p2pquake", xdg);
 		else
-			q_snprintf (fallback, sizeof (fallback),
+			r = q_snprintf (fallback, sizeof (fallback),
 			          "/tmp/p2pquake-%lu", (unsigned long) getuid ());
+		if (r >= (int) sizeof (fallback))
+		{
+			qn_note ("socket directory too long");
+			return false;
+		}
 		/* The transport re-validates ownership and the 0700 mode of
 		 * whatever this resolves to; a hostile preexisting dir is
 		 * refused there, not here. */
@@ -418,13 +519,33 @@ static qboolean qn_open_socket_dir (void)
 		qn_note ("refused socket directory");
 		return false;
 	}
-	q_strlcpy (qn_statedir, dir, sizeof (qn_statedir));
+	if (q_strlcpy (qn_sockdir, dir, sizeof (qn_sockdir))
+	    >= sizeof (qn_sockdir))
+	{
+		/* the tag and the exotic-env state root hash this copy:
+		 * a truncated sockdir silently merges instances */
+		qn_note ("socket directory too long");
+		return false;
+	}
+	{	/* one canonical spelling: the daemon's manual default
+		   derives its tag from dirname(--uds); strip trailing
+		   slashes so "-qn-dir /x/" and "/x" are one identity */
+		size_t l = Q_strlen (qn_sockdir);
+		while (l > 1 && qn_sockdir[l - 1] == '/')
+			qn_sockdir[--l] = '\0';
+	}
 	q_snprintf (qn_sockpath, sizeof (qn_sockpath), "%s/engine.sock", dir);
 	qn_listenfd = qn_transport_listen (qn_sockpath, &reason);
 	if (qn_listenfd < 0)
 	{
 		/* reason is a fixed literal from the transport module */
 		qn_note (reason != NULL ? reason : "listen failed");
+		return false;
+	}
+	if (!qn_open_state_dir ())
+	{
+		close (qn_listenfd);
+		qn_listenfd = -1;
 		return false;
 	}
 	return true;
@@ -476,6 +597,13 @@ static qboolean qn_ensure_daemon (void)
 	if (qn_listenfd < 0 && !qn_open_socket_dir ())
 	{
 		qn_demand_reported = qn_demand;
+		return false;
+	}
+	if (!qn_statedir[0])
+	{	/* the daemon would take "--dir ''" and die after paying a
+		   full node boot and authenticating: refuse at the latch */
+		qn_demand_reported = qn_demand;
+		qn_note ("state unavailable; not spawning");
 		return false;
 	}
 	if (qn_token_live || qn_spawn_running (&qn_child))

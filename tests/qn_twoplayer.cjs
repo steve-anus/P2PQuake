@@ -86,16 +86,21 @@ class Engine {
     this.procs = [];
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const shq = (s) => (/[ 	]/.test(s) ? "'" + s.replace(/'/g, "'\''") + "'" : s);
+    const tokens = [relIfShorter(ENGINE), ...args];
+    if (tokens.join(' ').length >= 256)
+      throw new Error(`${name}: launch too long for com_cmdline (256 cap)`);
+    this.argvTokens = tokens;
+    this.cmdErr = null;
     const child = opts.pty
       ? spawn('stdbuf', ['-i0', 'script', '-qef',
                          '-O', path.join(dir, 'console.txt'), '-c',
-                         [ENGINE, ...args].map(shq).join(' ')], {
+                         tokens.map(shq).join(' ')], {
           detached: true,
       env: { ...process.env, SDL_VIDEODRIVER: 'offscreen',
                  SDL_AUDIODRIVER: 'dummy', ...env },
           stdio: ['pipe', 'pipe', 'pipe'],
         })
-      : spawn('stdbuf', ['-oL', relIfShorter(ENGINE), ...args], {
+      : spawn('stdbuf', ['-oL', ...tokens], {
           detached: true,
       env: { ...process.env, SDL_VIDEODRIVER: 'offscreen',
                  SDL_AUDIODRIVER: 'dummy', ...env },
@@ -130,6 +135,13 @@ class Engine {
   }
 
   onLine(l) {
+    if (!this.cmdErr && l.startsWith('Command line: ')) {
+      const echo = l.slice('Command line: '.length);
+      const want = (this.argvTokens || []).join(' ');
+      if (echo.length !== want.length)
+        this.cmdErr = `cmdline truncated (${echo.length}/${want.length}): `
+          + 'got ...' + echo.slice(-32) + ' want ...' + want.slice(-32);
+    }
     this.lines.push(l);
     for (const w of this.watchers) w(l);
   }
@@ -142,6 +154,12 @@ class Engine {
         reject(new Error(`${this.name}: timeout waiting for ${what}`));
       }, timeout);
       const handler = (l) => {
+        if (this.cmdErr) {
+          clearTimeout(timer);
+          this.watchers = this.watchers.filter((p) => p !== handler);
+          reject(new Error(`${this.name}: ${this.cmdErr}`));
+          return;
+        }
         if (!pred(l)) return;
         clearTimeout(timer);
         this.watchers = this.watchers.filter((p) => p !== handler);
@@ -367,7 +385,7 @@ async function main() {
     const senv = { ...env, QN_LANE_STATS: '1' };
     const hdir = path.join(base, 'lhhost');
     const host = new Engine('lh-host', hdir,
-      ['-qn', '-qn-peer', peerArg(), '-qn-dir', hdir,
+      ['-qn', '-qn-peer', peerArg(), '-qn-dir', hdir, '-qn-statedir', hdir + '/state',
        '-basedir', relIfShorter(GAMEDATA),
        '+host_maxfps', '300', '+listen', '+maxplayers', '2',
        '+deathmatch', '0', '+coop', '0', '+map', 'lqdm1'],
@@ -385,10 +403,10 @@ async function main() {
       `_cl_name "${LH_NAME}"\necho QNCFGOK\n`);
     const mkCl = (respawn) => {
       if (respawn) {
-        try { fs.rmSync(path.join(cdir, 'identity.key'), { force: true }); } catch (e) { /* none */ }
+        try { fs.rmSync(path.join(cdir, 'state'), { recursive: true, force: true }); } catch (e) { /* none */ }
       }
       const e = new Engine('lh-cl', cdir,
-        ['-qn', '-qn-peer', peerArg(), '-qn-dir', cdir,
+        ['-qn', '-qn-peer', peerArg(), '-qn-dir', cdir, '-qn-statedir', cdir + '/state',
          '-basedir', relIfShorter(GAMEDATA),
          '+exec', `${LANE_TMP}/qnname-${path.basename(cdir)}.cfg`,
          '+connect', `qn:${code}`], senv);
@@ -446,7 +464,7 @@ async function main() {
   }
 
   const host = new Engine('host', path.join(base, 'host'),
-    ['-qn', '-qn-peer', peerArg(), '-qn-dir', path.join(base, 'host'),
+    ['-qn', '-qn-peer', peerArg(), '-qn-dir', path.join(base, 'host'), '-qn-statedir', path.join(base, 'host', 'state'),
      '-basedir', relIfShorter(GAMEDATA), '-dedicated', '+listen',
      ...(process.env.QN_COOP
        ? ['+coop', '1', '+deathmatch', '0', '+map', 'lq_e1m1']
@@ -476,17 +494,17 @@ async function main() {
   // itself carries the QNCFGOK attestation echo, and the host-console
   // verbatim display below proves the delivered cvar bytes.
   const clientArgs = (name, dir) =>
-    ['-qn', '-qn-peer', peerArg(), '-qn-dir', dir,
+    ['-qn', '-qn-peer', peerArg(), '-qn-dir', dir, '-qn-statedir', dir + '/state',
      '-basedir', relIfShorter(GAMEDATA),
      '+exec', nameCfg(dir, name), '+connect', `qn:${code}`];
 
-  // Respawn rotates the persistent identity (identity.key lives in the
-  // engine dir): the host's room keeps a stalled member until its ping
-  // loop GCs the dead lane, and a same-identity rejoin would be refused
+  // Respawn rotates the persistent identity by wiping the engine state
+  // dir: the host's room keeps a stalled member until its ping loop GCs
+  // the dead lane, and a same-identity rejoin would be refused
   // DUP_IDENTITY inside that window. The old lane's close still removes
   // the stale member; the engine name (SV side) is unchanged.
   const mkEngine = (label, gameName, dir, respawn) => {
-    if (respawn) { try { fs.rmSync(path.join(dir, 'identity.key'), { force: true }); } catch (e) { /* none */ } }
+    if (respawn) { try { fs.rmSync(path.join(dir, 'state'), { recursive: true, force: true }); } catch (e) { /* none */ } }
     const e = new Engine(label, dir, clientArgs(gameName, dir), env);
     procs.push(e);
     return e;

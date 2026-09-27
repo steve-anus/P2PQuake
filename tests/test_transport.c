@@ -296,6 +296,16 @@ static void test_sockets(void)
     }
     qn_transport_close(&t);
     close(cfd);
+
+    /* re-listen while the original listener still owns the path is
+     * refused outright: a second engine stealing a live path would run
+     * both daemons on one identity dir (hyperswarm self-meet). */
+    {
+        int busy = qn_transport_listen(path, &reason);
+        CHECK(busy == -1);
+        CHECK(reason && strcmp(reason, "listener already live") == 0);
+        if (busy >= 0) close(busy);
+    }
     close(lfd);
 
     /* re-listen over our own stale socket file: replaced, not refused */

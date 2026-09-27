@@ -43,7 +43,10 @@ There is no path around that junction.
 
 Transport: one Unix-domain `SOCK_STREAM` socket owned by the engine
 (listening), mode `0600`, path `$XDG_RUNTIME_DIR/p2pquake/engine.sock`
-(fallback `~/.p2pquake/engine.sock`). One qn-peer instance per match.
+(fallback `/tmp/p2pquake-<uid>/engine.sock`; the engine's `-qn-dir
+<abspath>` overrides). Ownership and the `0700` directory mode are
+re-validated by the transport on every use. One qn-peer instance per
+match.
 
 ### 2.1 Frame layout
 
@@ -451,8 +454,19 @@ including starts that die before authentication.
 
 ### 5.2 Long-term identity
 
-Each qn-peer owns one Ed25519 keypair, generated on first run at
-`~/.p2pquake/` (dir `0700`, key file `0600`). Display names are payload
+Each qn-peer owns one Ed25519 keypair, generated on first run under the
+daemon's state root — default `$XDG_STATE_HOME/p2pquake/` else
+`~/.p2pquake/`, engine `-qn-statedir <abspath>` overrides — in a
+per-instance subdirectory named by the lowercase 8-hex-digit FNV-1a of
+the absolute Plane A socket directory (the engine and the daemon's own
+default derive the same tag, so manual and engine-spawned runs of one
+socket path share identity, provided the paths are the canonical spelling
+— no trailing slashes, no `.`/`..` components; the engine strips trailing
+slashes to help this hold). A second engine on one socket dir is refused
+by the transport's live-listener probe rather than stealing the bind.
+Same-box engines with distinct socket dirs therefore hold distinct
+identities. Dir `0700`, key file `0600`; roster epoch
+files live in the same instance dir. Display names are payload
 fields, sanitised to printable ASCII ≤20 bytes, and carry zero trust
 (§3.2). Identity decisions use only (Noise verified transport key ∧ §3.2
 signature ∧ §3.4 KEY_BIND binding).
