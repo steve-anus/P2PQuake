@@ -6,7 +6,7 @@ QS_DIR   := src/vendor/quakespasm
 DRIVER_SRC := $(wildcard src/driver/*.c)
 TEST_SRC   := $(filter-out tests/fake-engine.c,$(wildcard tests/*.c))
 CC ?= gcc
-# explicit NODE= > repo-local bin/node/bin/node (tools/setup-node.sh) > PATH
+# explicit NODE= > repo-local bin/node/bin/node (tools/setup-nodejs.sh) > PATH
 NODE ?= $(firstword $(wildcard $(CURDIR)/bin/node/bin/node) $(shell command -v node 2>/dev/null))
 NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
 
@@ -26,7 +26,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer resident-rejoin race-rejoin bootstrap-node relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
 
 all: engine peer
 
@@ -109,6 +109,15 @@ loopback-fatal: engine
 twoplayer: engine
 	$(NODE) tests/qn_twoplayer.cjs
 
+resident-rejoin: engine
+	QN_LANVARIANT=resident $(NODE) tests/qn_twoplayer.cjs
+
+race-rejoin: engine
+	QN_LANVARIANT=race $(NODE) tests/qn_twoplayer.cjs
+
+bootstrap-node: fake-engine
+	$(NODE) tests/qn_bootstrapnode.cjs
+
 lobby-browser: engine
 	$(NODE) tests/qn_lobbybrowser.cjs
 
@@ -167,6 +176,7 @@ check:
 	$(MAKE) --no-print-directory loopback-fatal
 	$(MAKE) --no-print-directory loopback-public
 	$(MAKE) --no-print-directory twoplayer
+	$(MAKE) --no-print-directory resident-rejoin
 	$(MAKE) --no-print-directory relay
 	$(MAKE) --no-print-directory lobby-browser
 	$(MAKE) --no-print-directory visibility
