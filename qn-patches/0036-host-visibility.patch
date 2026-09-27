@@ -21,7 +21,7 @@
  	memset (qn_sockets, 0, sizeof (qn_sockets));
  	if (qn_state == QN_RUNNING)
  		QN_SetState (QN_STANDBY);
-@@ -757,6 +764,121 @@
+@@ -757,6 +764,129 @@
  		(void) qn_transport_send (&qn_tr, type, NULL, 0);
  }
  
@@ -84,10 +84,18 @@
 +
 +	if (!want)
 +	{
-+		if (qn_ann_up && qn_live ())
-+			(void) qn_transport_send (&qn_tr, QN_T_LOBBY_WITHDRAW,
-+			                          NULL, 0);
-+		qn_ann_up = false;
++		if (qn_ann_up)
++		{
++			if (!qn_live ())
++				qn_ann_up = false;	/* plane dying anyway */
++			else if (qn_transport_send (&qn_tr, QN_T_LOBBY_WITHDRAW,
++			                             NULL, 0) != 1)
++				/* a lost withdraw keeps a "private" room listed:
++				 * same convention as the sibling lane sends */
++				qn_teardown ("lobby withdraw send failed");
++			else
++				qn_ann_up = false;
++		}
 +		return;
 +	}
 +
@@ -143,7 +151,7 @@
  void QN_LobbyWatch (void)
  {
  	if (qn_lobby_watched)
-@@ -1229,6 +1351,11 @@
+@@ -1229,6 +1359,11 @@
  		qn_sv_was_active = false;
  	}
  
@@ -155,7 +163,7 @@
  	/* ca_disconnected covers the connect attempt itself -- CL only
  	 * leaves it once NET_Connect returns -- so closing the lane on
  	 * that edge alone would tear down the join before the daemon's
-@@ -1363,6 +1490,7 @@
+@@ -1363,6 +1498,7 @@
  		{
  			qn_host_lane_up = false;
  			qn_host_ready_shown = false;
@@ -163,7 +171,7 @@
  			qn_join_code_text[0] = '\0';
  			qn_own_code_set = false;
  			qn_sv_was_active = false;
-@@ -1769,6 +1897,8 @@
+@@ -1769,6 +1905,8 @@
  	Con_Printf ("host lane %s\n", qn_host_lane_up ? "up" : "down");
  	Con_Printf ("client lane %s\n", qn_client_lane_up ? "up" : "down");
  	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");

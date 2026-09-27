@@ -605,6 +605,9 @@ async function run(opts) {
       const swarm = makeSwarm({ firewall: (peerKey) => room.firewall(peerKey) });
       room.swarm = swarm;
       swarm.on('connection', (conn) => room.accept(conn));
+      // Invariant: the engine sends the first LOBBY_ANNOUNCE in the same
+      // pump tick as HOST_UP; lane (and room.code) must be set before the
+      // first await or that announce falls through the host-role gate.
       lane = { role: 'host', swarm, room };
       const disc = swarm.join(topic, { server: true, client: false });
       await disc.flushed(); // only then is the room reachable (and the code displayable)
