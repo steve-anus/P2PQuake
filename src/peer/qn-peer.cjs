@@ -280,7 +280,7 @@ function ensureIdentity(dir) {
 
 // Per-(subject, match) monotonic roster epoch store, so a reused topic never
 // restarts a counter at zero (spec §3.4a).
-function makeEpochStore(dir) {
+function makeEpochStore(dir, onSaved) {
   return {
     load(subjectHex, matchHex) {
       try {
@@ -296,6 +296,7 @@ function makeEpochStore(dir) {
         fs.fsyncSync(fd);                            // durable before the visible swap
       } finally { fs.closeSync(fd); }
       fs.renameSync(f + '.tmp', f);                      // lost write leaves the old value
+      if (onSaved) { try { onSaved(); } catch { /* hygiene only */ } }
     },
   };
 }
@@ -725,6 +726,113 @@ async function run(opts) {
   });
 }
 
+const INSTANCE_META = 'instance.json';
+const STALE_INSTANCE_MS = 180 * 24 * 3600 * 1000;
+
+/* Kernel liveness triple: pid lies after reuse and start-ticks lie
+ * across reboots — pid + /proc start-ticks + boot_id together do not. */
+function procLiveness() {
+  try {
+    const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    return {
+      pid: process.pid,
+      boot: fields[19],                            // field 22: ticks since boot
+      bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+    };
+  } catch { return {}; }                           // sockDir-only fallback
+}
+
+/* Dirs self-describe so hygiene can judge liveness exactly; failure is
+ * cosmetic and never blocks the session. Atomic swap mirrors epochStore;
+ * re-stamped on every epoch save so long-lived daemons keep a fresh
+ * liveness record. A meta recorded by another live pid is never clobbered
+ * (only reachable through a constructed fnv1a tag collision). */
+function writeInstanceMeta(dir, uds) {
+  const f = path.join(dir, INSTANCE_META);
+  const prev = readInstanceMeta(dir);
+  if (prev.meta && typeof prev.meta.pid === 'number' && prev.meta.pid !== process.pid &&
+      typeof prev.meta.boot === 'string' && typeof prev.meta.bootId === 'string' &&
+      pidLooksLive(prev.meta.pid, prev.meta.boot, prev.meta.bootId))
+    return;
+  const body = JSON.stringify(
+    Object.assign({ sockDir: path.dirname(path.resolve(uds)) }, procLiveness())) + '\n';
+  const tmp = f + '.' + process.pid + '.tmp';
+  try {
+    const fd = fs.openSync(tmp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, body);
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, f);
+  } catch {
+    try { fs.unlinkSync(tmp); } catch { /* absent */ }
+  }
+}
+
+function readInstanceMeta(dir) {
+  const f = path.join(dir, INSTANCE_META);
+  let st;
+  try { st = fs.lstatSync(f); }
+  catch (e) { return e && e.code === 'ENOENT' ? { absent: true } : { keep: true }; }
+  if (!st.isFile() || st.size > 4096) return { keep: true };
+  let meta;
+  try { meta = JSON.parse(fs.readFileSync(f, 'utf8')); }
+  catch { return { keep: true }; }
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return { keep: true };
+  return { meta };
+}
+
+function pidLooksLive(pid, boot, bootId) {
+  let curBootId;
+  try { curBootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); }
+  catch { return true; }                            // no /proc: assume live
+  if (curBootId !== bootId) return false;
+  let stat;
+  try { stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8'); }
+  catch (e) { return !(e && e.code === 'ENOENT'); } // present-but-locked: keep
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] === boot;
+}
+
+/* The 180-day floor is deliberate: these dirs hold the long-lived identity
+ * the roster's bans key off — reaping a live identity would be a
+ * ban-evasion bug. Everything short of a proven-dormant dir is kept:
+ * only ENOENT meta (pre-meta era) or a fully-parsed meta whose recorded
+ * daemon pid is dead (pid+start-ticks+boot_id) and whose socket dir is
+ * gone may be reaped; corrupt, symlinked, oversized or malformed meta
+ * keeps. */
+function reapStaleInstances(root, currentDir, nowMs) {
+  const r = path.resolve(root);
+  const cur = path.resolve(currentDir);
+  if (cur !== r && !cur.startsWith(r + path.sep)) return [];
+  let names;
+  try { names = fs.readdirSync(r); } catch { return []; }
+  const reaped = [];
+  for (const n of names) {
+    if (!/^[0-9a-f]{8}$/.test(n)) continue;
+    const p = path.join(r, n);
+    if (p === cur) continue;
+    let st;
+    try { st = fs.lstatSync(p); } catch { continue; }
+    if (!st.isDirectory()) continue;                // lstat: excludes symlinks
+    if (nowMs - st.mtimeMs < STALE_INSTANCE_MS) continue;
+    const m = readInstanceMeta(p);
+    if (m.keep) continue;
+    if (!m.absent) {
+      const { sockDir, pid, boot, bootId } = m.meta;
+      if (typeof sockDir !== 'string' || sockDir.length === 0) continue;
+      if (pid !== undefined || boot !== undefined || bootId !== undefined) {
+        if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0
+            || typeof boot !== 'string' || typeof bootId !== 'string') continue;
+        if (pidLooksLive(pid, boot, bootId)) continue;
+      }
+      if (fs.existsSync(sockDir)) continue;
+    }
+    try { fs.rmSync(p, { recursive: true, force: true }); reaped.push(n); } catch { /* busy */ }
+  }
+  return reaped;
+}
+
 // ---- CLI ----
 // Durable state default (identity key, epochs): $XDG_STATE_HOME/p2pquake,
 // else ~/.p2pquake, with a per-instance subdir tagged by the socket dir so
@@ -804,8 +912,22 @@ async function main(argv) {
   const token = await readToken(process.stdin, o.tokenTimeoutMs);
   const sock = await dialAndAuth(o.uds, token);
   const keys = ensureIdentity(o.dir);
+  writeInstanceMeta(o.dir, o.uds);
+  {
+    /* Sweep only inside a p2pquake-shaped state root; an explicit --dir
+     * outside that layout never authorizes deletion of its neighbours. */
+    const dirAbs = path.resolve(o.dir);
+    const root = path.dirname(dirAbs);
+    const rootName = path.basename(root);
+    if (/^[0-9a-f]{8}$/.test(path.basename(dirAbs))
+        && (rootName === 'p2pquake' || rootName === '.p2pquake')) {
+      const reaped = reapStaleInstances(root, dirAbs, Date.now());
+      for (const n of reaped)
+        process.stderr.write('qn-peer: pruned dormant instance dir ' + n + '\n');
+    }
+  }
   const redactor = makeRedactor();
-  const epochs = makeEpochStore(o.dir);
+  const epochs = makeEpochStore(o.dir, () => writeInstanceMeta(o.dir, o.uds));
   return run({ sock, keys, identity, name: Buffer.from(o.name), pinned: null,
     clock: P.realClock, redactor, epochs });
 }
@@ -818,7 +940,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  qnFnv1aHex, defaultStateDir,
+  qnFnv1aHex, defaultStateDir, writeInstanceMeta, reapStaleInstances,
   assertRuntime, readToken, dialAndAuth, usageExit, NODE_MAJOR_TESTED,
   ensureIdentity, makeEpochStore, computeIdentity, extractBuildId, makeRedactor,
   PlaneA, parseFlags, run,

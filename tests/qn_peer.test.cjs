@@ -18,6 +18,107 @@ const Q = require('../src/peer/qn-peer.cjs');
 
 const PEER = path.join(__dirname, '..', 'src', 'peer', 'qn-peer.cjs');
 
+test('stale instance hygiene: liveness triple, fail-closed meta, root safety', (t) => {
+  const { writeInstanceMeta, reapStaleInstances } = Q;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mk = (n) => { const d = path.join(root, n); fs.mkdirSync(d); return d; };
+  const put = (d, body) => fs.writeFileSync(path.join(d, 'instance.json'), body);
+  const statSelf = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8');
+  const myBoot = statSelf.slice(statSelf.lastIndexOf(')') + 2).split(' ')[19];
+  const myBootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  const goneSock = path.join(root, 'gone-sock');
+  const liveSock = mk('live-sock');
+  const oldMs = Date.now() - 200 * 24 * 3600 * 1000;
+  const oldD = [];
+  const aged = (n, metaBody) => {
+    const d = mk(n);
+    if (metaBody !== undefined) put(d, metaBody);
+    oldD.push(d);
+    return d;
+  };
+  const deadMeta = (o) => JSON.stringify(o) + '\n';
+  aged('11111111');                                   // pre-meta era, no meta at all
+  aged('22222222', deadMeta({ sockDir: goneSock }));  // sockDir-only, socket dir gone
+  aged('33333333', deadMeta({ sockDir: liveSock }));  // socket dir alive
+  aged('66666666', deadMeta({ sockDir: goneSock, pid: process.pid, boot: myBoot, bootId: myBootId }));
+  aged('77777777', deadMeta({ sockDir: goneSock, pid: process.pid, boot: myBoot, bootId: 'stale-boot' }));
+  aged('88888888', deadMeta({ sockDir: goneSock, pid: 2000000000, boot: '0', bootId: myBootId }));
+  aged('99999999', '{oops');                          // corrupt
+  aged('00000001', '');                               // empty (crash-mid-write)
+  aged('00000002', 'x'.repeat(5000));                 // absurd size
+  aged('00000003', deadMeta({ sockDir: 5 }));         // wrong type
+  aged('00000004', deadMeta({ sockDir: goneSock, pid: 7 })); // partial liveness triple
+  const metaLink = aged('00000006');
+  fs.symlinkSync('/dev/null', path.join(metaLink, 'instance.json')); // symlinked meta
+  for (const d of oldD) fs.utimesSync(d, new Date(oldMs), new Date(oldMs));
+  const current = mk('aaaaaaaa');
+  fs.writeFileSync(path.join(current, 'identity.key'), 'x');
+  mk('44444444');                                     // recent (fresh mtime)
+  mk('zzzzzzzz');                                     // non-hex name
+  const symTarget = mk('sym-target');
+  fs.writeFileSync(path.join(symTarget, 'keep.me'), 'x');
+  fs.symlinkSync(symTarget, path.join(root, '55555555')); // 8-hex-named symlink
+  const reaped = reapStaleInstances(root, current, Date.now());
+  assert.deepEqual(new Set(reaped),
+    new Set(['11111111', '22222222', '77777777', '88888888']));
+  for (const keep of ['aaaaaaaa', '33333333', '44444444', '66666666', '99999999',
+    '00000001', '00000002', '00000003', '00000004', '00000006',
+    '55555555', 'sym-target', 'zzzzzzzz', 'live-sock'])
+    assert.ok(fs.existsSync(path.join(root, keep)), keep + ' must survive');
+  assert.equal(fs.readFileSync(path.join(symTarget, 'keep.me'), 'utf8'), 'x');
+  /* current-dir survives even when it looks reapable, under any spelling */
+  put(current, deadMeta({ sockDir: goneSock }));
+  fs.utimesSync(current, new Date(oldMs), new Date(oldMs));
+  assert.deepEqual(reapStaleInstances(root, current + '/', Date.now()), []);
+  assert.ok(fs.existsSync(current));
+  assert.deepEqual(reapStaleInstances(root, path.relative(process.cwd(), current), Date.now()), []);
+  assert.ok(fs.existsSync(current));
+  /* foreign or unresolvable roots are refused outright */
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-root-'));
+  t.after(() => fs.rmSync(foreign, { recursive: true, force: true }));
+  assert.deepEqual(reapStaleInstances(root, path.join(foreign, 'aaaaaaaa'), Date.now()), []);
+  assert.deepEqual(reapStaleInstances(path.join(root, 'nope'), current, Date.now()), []);
+  /* meta write: atomic swap, 0600, full liveness triple, idempotent */
+  writeInstanceMeta(current, path.join(liveSock, 'qn.sock'));
+  const mf = path.join(current, 'instance.json');
+  const m = JSON.parse(fs.readFileSync(mf, 'utf8'));
+  assert.equal(m.sockDir, liveSock);
+  assert.equal(m.pid, process.pid);
+  assert.equal(m.boot, myBoot);
+  assert.equal(m.bootId, myBootId);
+  assert.equal(fs.lstatSync(mf).mode & 0o777, 0o600);
+  assert.ok(!fs.existsSync(mf + '.' + process.pid + '.tmp'));
+  writeInstanceMeta(current, path.join(liveSock, 'qn.sock'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(mf, 'utf8')), m);
+});
+
+test('instance meta: live other-pid never clobbered; epoch save re-stamps', (t) => {
+  const { writeInstanceMeta, makeEpochStore } = Q;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const d = path.join(root, 'cccccccc');
+  fs.mkdirSync(d);
+  const statP = fs.readFileSync('/proc/' + process.ppid + '/stat', 'utf8');
+  const bootP = statP.slice(statP.lastIndexOf(')') + 2).split(' ')[19];
+  const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  const foreign = JSON.stringify({ sockDir: d, pid: process.ppid, boot: bootP, bootId });
+  fs.writeFileSync(path.join(d, 'instance.json'), foreign + '\n');
+  writeInstanceMeta(d, path.join(root, 'other', 'qn.sock'));
+  assert.equal(fs.readFileSync(path.join(d, 'instance.json'), 'utf8').trim(), foreign);
+  const dead = JSON.stringify({ sockDir: d, pid: 2000000000, boot: '0', bootId });
+  fs.writeFileSync(path.join(d, 'instance.json'), dead + '\n');
+  writeInstanceMeta(d, path.join(root, 'other', 'qn.sock'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'instance.json'), 'utf8')).pid,
+    process.pid);
+  let hits = 0;
+  const es = makeEpochStore(d, () => { hits++; });
+  es.save('aa', 'bbbb', 7n);
+  assert.equal(hits, 1);
+  assert.equal(es.load('aa', 'bbbb'), 7n);
+  assert.ok(fs.existsSync(path.join(d, 'instance.json')));
+});
+
 function mkSocketPath() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpeer-test-'));
   fs.chmodSync(dir, 0o700); // UDS hygiene rule, mirrored on the engine side
