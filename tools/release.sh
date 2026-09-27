@@ -9,8 +9,9 @@
 #     runtime/node        pinned interpreter (execveat target of packaged spawn)
 #     src/peer/*.cjs      daemon (kept at depth 2: manifest path is
 #                         __dirname/../../gamedata.sha256)
-#     gamedata.sha256     verified byte-exact against gamedata/id1/
-#     gamedata/id1/**     game assets
+#     gamedata.sha256     verified byte-exact against id1/
+#     id1/**              game assets (package root: quakespasm's basedir
+#                         is the binary's own directory — zero flags needed)
 #     node_modules/**     production deps only (npm prune --omit=dev)
 #     LICENSE.md          shipped verbatim from the repo root
 #     VERSION
@@ -75,14 +76,17 @@ STAGE=$(mktemp -d "$TMPBASE/qnrelease-XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 ver=${tag#v}
 PKG="$STAGE/p2pquake-$ver"
-mkdir -p "$PKG"/{gamedata/id1,src/peer,runtime,node_modules}
+mkdir -p "$PKG"/{id1,src/peer,runtime,node_modules}
 
 echo "==> gamedata (byte-exact, manifest-verified)"
-cp -a gamedata/id1/. "$PKG/gamedata/id1/"
-rm -f "$PKG/gamedata/id1/config.cfg"
-rm -rf "$PKG"/gamedata/id1/qn-lane-tmp*
+# id1 sits directly at the package root: the engine's basedir is the binary's
+# own directory, so ./quakespasm needs no flags. The manifest keeps its
+# package-root home (the daemon resolves it at __dirname/../../).
+cp -a gamedata/id1/. "$PKG/id1/"
+rm -f "$PKG/id1/config.cfg"
+rm -rf "$PKG"/id1/qn-lane-tmp*
 cp gamedata.sha256 "$PKG/gamedata.sha256"
-(cd "$PKG/gamedata/id1" && sha256sum -c ../../gamedata.sha256 >/dev/null) \
+(cd "$PKG/id1" && sha256sum -c ../gamedata.sha256 >/dev/null) \
   || { echo "release.sh: gamedata failed the manifest check" >&2; exit 1; }
 
 echo "==> peer daemon"
