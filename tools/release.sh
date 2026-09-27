@@ -12,6 +12,7 @@
 #     gamedata.sha256     verified byte-exact against gamedata/id1/
 #     gamedata/id1/**     game assets
 #     node_modules/**     production deps only (npm prune --omit=dev)
+#     LICENSE.md          shipped verbatim from the repo root
 #     VERSION
 # Output lands in dist/<ver>/ (zip + sha256sums.txt + detached signature).
 # Signing key comes from QN_SIGN_KEY (ssh-keygen -Y); --dry-run generates
@@ -99,6 +100,8 @@ fi
   || { echo "release.sh: production node_modules missing hyperdht" >&2; exit 1; }
 
 echo "==> engine binary + launcher + runtime"
+[ -f LICENSE.md ] || { echo "release.sh: LICENSE.md missing" >&2; exit 1; }
+cp LICENSE.md "$PKG/LICENSE.md"
 cp "$ENGINE_BIN" "$PKG/quakespasm"
 strip --strip-debug "$PKG/quakespasm" 2>/dev/null || strip "$PKG/quakespasm"
 chmod 0755 "$PKG/quakespasm"
