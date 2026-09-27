@@ -11,3 +11,5 @@ gamedata/id1/config.cfg
 src/driver/qn_buildid.h
 **/history.txt
 gamedata/id1/qn-lane-tmp*
+# release.sh output.
+dist/

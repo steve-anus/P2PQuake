@@ -1,0 +1,138 @@
+#!/bin/bash
+# release.sh — assemble, verify, pack, and sign the portable Linux build.
+#
+# Builds AT a tag (working tree must be clean and equal to it), runs the
+# full battery, then assembles a self-contained directory:
+#   p2pquake-<ver>/
+#     quakespasm          engine binary (stripped; path-leak gate)
+#     qn-peer             node launcher the engine execs via <exe-dir>/qn-peer
+#     runtime/node        pinned interpreter (execveat target of packaged spawn)
+#     src/peer/*.cjs      daemon (kept at depth 2: manifest path is
+#                         __dirname/../../gamedata.sha256)
+#     gamedata.sha256     verified byte-exact against gamedata/id1/
+#     gamedata/id1/**     game assets
+#     node_modules/**     production deps only (npm prune --omit=dev)
+#     VERSION
+# Output lands in dist/<ver>/ (zip + sha256sums.txt + detached signature).
+# Signing key comes from QN_SIGN_KEY (ssh-keygen -Y); --dry-run generates
+# an ephemeral key and keeps the zip marked unsigned-for-distribution.
+set -euo pipefail
+
+usage() { echo "usage: release.sh [--dry-run] <tag>" >&2; exit 2; }
+
+dryrun=0
+tag=""
+for a in "$@"; do
+  case "$a" in
+    --dry-run) dryrun=1 ;;
+    -*) usage ;;
+    *) [ -n "$tag" ] && usage; tag="$a" ;;
+  esac
+done
+[ -n "$tag" ] || usage
+
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$REPO_ROOT"
+TMPBASE=${TMPDIR:-/tmp}
+
+command -v zip >/dev/null || { echo "release.sh: zip missing" >&2; exit 1; }
+command -v strip >/dev/null || { echo "release.sh: strip missing" >&2; exit 1; }
+command -v ssh-keygen >/dev/null || { echo "release.sh: ssh-keygen missing" >&2; exit 1; }
+command -v npm >/dev/null || { echo "release.sh: npm missing" >&2; exit 1; }
+
+tag_commit=$(git rev-parse "$tag^{commit}" 2>/dev/null) \
+  || { echo "release.sh: '$tag' does not resolve to a commit" >&2; exit 1; }
+[ -z "$(git status --porcelain)" ] \
+  || { echo "release.sh: working tree not clean" >&2; exit 1; }
+[ "$(git rev-parse HEAD)" = "$tag_commit" ] \
+  || { echo "release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
+
+NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-node.sh | cut -d= -f2)
+[ "${#NODE_PIN}" = 64 ] \
+  || { echo "release.sh: could not read the node pin from setup-node.sh" >&2; exit 1; }
+
+echo "==> battery at $tag"
+make check
+
+echo "==> engine build"
+make engine
+ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
+[ -x "$ENGINE_BIN" ] || { echo "release.sh: engine binary missing" >&2; exit 1; }
+
+echo "==> runtime/node (pinned fetch, no PATH node dependency)"
+tools/setup-node.sh
+[ -x bin/node/bin/node ] || { echo "release.sh: bin/node/bin/node missing" >&2; exit 1; }
+echo "$NODE_PIN  bin/node/bin/node" | sha256sum -c - \
+  || { echo "release.sh: runtime node does not match the pin" >&2; exit 1; }
+
+STAGE=$(mktemp -d "$TMPBASE/qnrelease-XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+ver=${tag#v}
+PKG="$STAGE/p2pquake-$ver"
+mkdir -p "$PKG"/{gamedata/id1,src/peer,runtime,node_modules}
+
+echo "==> gamedata (byte-exact, manifest-verified)"
+cp -a gamedata/id1/. "$PKG/gamedata/id1/"
+rm -f "$PKG/gamedata/id1/config.cfg"
+rm -rf "$PKG"/gamedata/id1/qn-lane-tmp*
+cp gamedata.sha256 "$PKG/gamedata.sha256"
+(cd "$PKG/gamedata/id1" && sha256sum -c ../../gamedata.sha256 >/dev/null) \
+  || { echo "release.sh: gamedata failed the manifest check" >&2; exit 1; }
+
+echo "==> peer daemon"
+cp src/peer/*.cjs "$PKG/src/peer/"
+cp package.json package-lock.json "$PKG/"
+if [ -d node_modules ]; then
+  cp -a node_modules "$PKG/node_modules.tmp"
+  rm -rf "$PKG/node_modules"
+  mv "$PKG/node_modules.tmp" "$PKG/node_modules"
+  (cd "$PKG" && npm prune --omit=dev --no-audit --no-fund >/dev/null)
+else
+  (cd "$PKG" && npm ci --omit=dev --no-audit --no-fund >/dev/null)
+fi
+[ -d "$PKG/node_modules/hyperdht" ] \
+  || { echo "release.sh: production node_modules missing hyperdht" >&2; exit 1; }
+
+echo "==> engine binary + launcher + runtime"
+cp "$ENGINE_BIN" "$PKG/quakespasm"
+strip --strip-debug "$PKG/quakespasm" 2>/dev/null || strip "$PKG/quakespasm"
+chmod 0755 "$PKG/quakespasm"
+if strings "$PKG/quakespasm" | grep -qE "/home/|/Users/|/root/"; then
+  echo "release.sh: engine binary leaks the build home path" >&2
+  exit 1
+fi
+printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).\nrequire("./src/peer/qn-peer.cjs");\n' > "$PKG/qn-peer"
+chmod 0755 "$PKG/qn-peer"
+cp bin/node/bin/node "$PKG/runtime/node"
+chmod 0755 "$PKG/runtime/node"
+echo "$tag" > "$PKG/VERSION"
+
+echo "==> package + hashes"
+DIST="dist/$ver"
+mkdir -p "$DIST"
+ZIP="p2pquake-$ver-linux-x64.zip"
+rm -f "$DIST/$ZIP" "$DIST/$ZIP.sig" "$DIST/sha256sums.txt"
+(cd "$STAGE" && zip -qrX "$REPO_ROOT/$DIST/$ZIP" "p2pquake-$ver")
+(cd "$DIST" && sha256sum "$ZIP" > sha256sums.txt)
+
+if [ "$dryrun" = 1 ]; then
+  KEY="$STAGE/signkey"
+  ssh-keygen -q -t ed25519 -N "" -f "$KEY" -C "qn-dryrun" >/dev/null
+  (cd "$DIST" && ssh-keygen -Y sign -f "$KEY" -n file "$ZIP" >/dev/null)
+  echo "==> DRY RUN: signed with an ephemeral key (not for distribution)"
+else
+  [ -n "${QN_SIGN_KEY:-}" ] \
+    || { echo "release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
+  (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -n file "$ZIP")
+fi
+if [ "$dryrun" = 1 ]; then
+  (cd "$DIST" && ssh-keygen -Y verify -f "$KEY.pub" -I qn-dryrun -n file \
+    -s "$ZIP.sig" < "$ZIP" >/dev/null) \
+    && echo "release.sh: dry-run signature verifies against the ephemeral key"
+elif [ -n "${QN_SIGN_KEY_PUB:-}" ]; then
+  (cd "$DIST" && ssh-keygen -Y verify -f "$QN_SIGN_KEY_PUB" -I "${QN_SIGN_ID:-}" \
+    -n file -s "$ZIP.sig" < "$ZIP" >/dev/null) \
+    && echo "release.sh: signature verifies against QN_SIGN_KEY_PUB"
+fi
+
+echo "release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums.txt)"
