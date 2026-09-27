@@ -662,6 +662,16 @@ static int qn_slot_by_key (const uint8_t key8[8])
 	return -1;
 }
 
+static qboolean qn_key8_set (const uint8_t k[8])
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		if (k[i])
+			return true;
+	return false;
+}
+
 /* First live client-role slot: the engine plays one client at a time
  * (the datagram layer owns at most one outbound qsocket per connect),
  * so first match is the only match while a connect is pending. */
@@ -1189,10 +1199,13 @@ static void qn_dispatch (const qn_frame_t *f)
 		if (qn_client_lane_up)
 		{
 			/* Client lane: the announced peer is the host.
-			 * Stamp its key onto our client socket; it must
-			 * not join the host-side table. */
+			 * Key its identity onto our client socket; it must
+			 * not join the host-side table.  Only ever fill
+			 * a keyless slot: roster members are announced
+			 * on this lane too, and re-keying would hand CL's
+			 * live slot to the PEER_DOWN key sweep. */
 			int i = qn_client_slot ();
-			if (i >= 0)
+			if (i >= 0 && !qn_key8_set (qn_sockets[i].addr.key))
 				memcpy (qn_sockets[i].addr.key, t.val, 8);
 		}
 		else
@@ -1217,7 +1230,10 @@ static void qn_dispatch (const qn_frame_t *f)
 			 * table entry for the rest of the run. */
 			for (i = 0; i < MAX_QN_SOCKETS; i++)
 			{
-				if (!qn_sockets[i].inuse ||
+				/* client-role slots are CL's own server channel:
+				 * roster departures never own its death (the
+				 * daemon's FATAL does); the sweep is host-side. */
+				if (!qn_sockets[i].inuse || qn_sockets[i].isclient ||
 				    memcmp (qn_sockets[i].addr.key, t.val, 8) != 0)
 					continue;
 				if (qn_sockets[i].alias)
