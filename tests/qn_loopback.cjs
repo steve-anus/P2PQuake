@@ -109,6 +109,7 @@ if (process.env.QN_FATAL) {
 }
 if (process.env.QN_REDIAL_CHURN)
   want.push(['churn-done', (l) => l === 'LBSTEP churn-done ok']);
+
 const banned = [
   ['forged-packet', (l) => l.includes('Forged packet received')],
   ['read-error',    (l) => l.includes('Read error')],
@@ -125,7 +126,7 @@ if (process.env.QN_BADNAME) {
     (l) => /Unknown command .quit.|couldn't exec quit/.test(l)]);
 }
 
-function main() {
+async function main() {
   if (!fs.existsSync(ENGINE)) {
     console.error(`qn_loopback: no engine binary at ${ENGINE} (run "make engine")`);
     return Promise.resolve(1);
@@ -134,23 +135,22 @@ function main() {
     console.error(`qn_loopback: ${FAKE} must be executable (mode *75)`);
     return Promise.resolve(1);
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnloop-'));
+  const pb = !!process.env.QN_PUBLIC_BROWSER;
+
+  function runOne(opts) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix));
+  const eng = opts.front(dir);
+  const wantList = opts.want;
   /* stdbuf -oL: the engine's stdout is block-buffered when piped; without
    * the line-flush its console lines would never reach this capture. */
   /* com_cmdline is capped at 256 and the tail vanishes silently: launch
    * on repo-relative paths (make check runs from the repo root). */
-  const eng = [
-    '-qn', '-qn-peer', FAKE, '-qn-dir', dir,
-    '-qn-statedir', path.join(dir, 'state'),
-    '-basedir', relIfShorter(GAMEDATA), '-dedicated',
-    ...(process.env.QN_HOST16 ? ['16'] : []),
-    '+listen', '+map', 'lqdm1',
-  ];
   const wantEcho = [relIfShorter(ENGINE), ...eng].join(' ');
   if (wantEcho.length >= 256)
     console.error(`qn_loopback: launch too long for com_cmdline (${wantEcho.length})`);
   const child = spawn('stdbuf', ['-oL', relIfShorter(ENGINE), ...eng], {
-    env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' },
+    env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy',
+      ...(opts.env || {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -173,13 +173,10 @@ function main() {
     for (const [name, f] of banned) {
       if (f(l)) { bannedHit = [name, l]; doneResolve(1); return; }
     }
-    for (const [name, f] of want) {
+    for (const [name, f] of wantList) {
       if (f(l)) { seen.set(name, (seen.get(name) || 0) + 1); break; }
     }
-    const terminal = process.env.QN_FUZZ ? 'fuzz-done'
-      : process.env.QN_FATAL ? 'daemon-fatal'
-      : process.env.QN_REDIAL_CHURN ? 'churn-done'
-      : process.env.QN_REFUSE ? 'peer-done' : 'peer-admin-gauntlet';
+    const terminal = opts.terminal;
     if (seen.get(terminal) && !child.killed) {
       /* everything arrived; give the engine a beat to settle, then win */
       setTimeout(() => doneResolve(0), 300);
@@ -208,7 +205,7 @@ function main() {
   /* worst-case paced cycle (crash-consume send + reply send, each up
    * to the 3.2 s tick phase) bounds near 7 s: budget above it so the
    * test flakes on engine timing, not on counting arithmetic */
-  const budgetMs = fuzzing ? 120000 :
+  const budgetMs = opts.budget ? opts.budget : fuzzing ? 120000 :
     churnCycles ? churnCycles * 7000 + 30000 : 45000;
   const killer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} },
                             budgetMs);
@@ -220,11 +217,11 @@ function main() {
     return new Promise((res) => setTimeout(res, 900)).then(() => {
       try { child.kill('SIGKILL'); } catch {}
       clearTimeout(killer);
-      const missing = want.map(([n]) => n).filter((n) => !seen.get(n));
+      const missing = wantList.map(([n]) => n).filter((n) => !seen.get(n));
       /* churn and FATAL modes re-run boot/honest markers by design
        * (fresh accepted sessions / supervisor respawn cycles): the
        * duplicate gate covers the single-boot flows only */
-      const dupeCheck = want.filter(([n]) =>
+      const dupeCheck = wantList.filter(([n]) =>
         !(process.env.QN_REDIAL_CHURN) && !(process.env.QN_FATAL) &&
         !(process.env.QN_REFUSE));
       const dupes = dupeCheck.map(([n]) => n).filter((n) => (seen.get(n) || 0) > 1);
@@ -240,13 +237,13 @@ function main() {
         (process.env.QN_REDIAL_CHURN ? `(mode churn, target ` +
           process.env.QN_REDIAL_CHURN + `)` :
          process.env.QN_FATAL ? `(mode fatal)` :
-         process.env.QN_FUZZ ? `(mode fuzz)` : `(mode plain)`));
+         process.env.QN_FUZZ ? `(mode fuzz)` : (opts.label || `(mode plain)`)));
       if (missing.length) console.log('  MISSING: ' + missing.join(', '));
       if (dupes.length) console.log('  DUPLICATED: ' + dupes.join(', '));
       if (bannedHit) console.log('  BANNED LINE: [' + bannedHit[0] + '] ' + bannedHit[1]);
       if (orphans && rc) console.log('  ORPHAN fake peer pids: ' + orphans.replace(/\n/g, ' '));
       if (rc === 0) {
-        console.log(`LOOPBACK OK: ${want.length} assertions, ${seen.size} markers seen`);
+        console.log(`LOOPBACK OK: ${wantList.length} assertions, ${seen.size} markers seen`);
         fs.rmSync(dir, { recursive: true, force: true });
       } else {
         console.log('  --- observed lines ---');
@@ -255,6 +252,91 @@ function main() {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
       return rc;
     });
+  });
+  }
+
+  const PBW = {
+    announce: ['pb-announce', (l) => l === 'LBSTEP lobby-announce ok'],
+    list:     ['pb-list', (l) => l === 'LBSTEP lobby-list-sent ok'],
+    swap:     ['pb-swap', (l) => l === 'QNLOBBY n=2'],
+    join:     ['pb-join', (l) => l === 'LBSTEP join-code-dial ok'],
+    accept:   ['pb-accept', (l) => l === 'LBSTEP client-accept ok'],
+    signon:   ['pb-signon', (l) => l === 'LBSTEP client-signon ok'],
+  };
+  const pbRows = (a, b) => [
+    ['pb-row-first', (l) => l === 'QNLOBBY row title=FIRST ROW map=lqdm1 mode=1 players=3/8 mine=' + a],
+    ['pb-row-other', (l) => l === 'QNLOBBY row title=OTHER ROW map=lqdm1 mode=1 players=3/8 mine=' + b],
+  ];
+
+  if (!pb) {
+    const legacyTerminal = process.env.QN_FUZZ ? 'fuzz-done'
+      : process.env.QN_FATAL ? 'daemon-fatal'
+      : process.env.QN_REDIAL_CHURN ? 'churn-done'
+      : process.env.QN_REFUSE ? 'peer-done' : 'peer-admin-gauntlet';
+    return runOne({
+      prefix: 'qnloop-',
+      front: (dir) => ['-qn', '-qn-peer', FAKE, '-qn-dir', dir,
+        '-qn-statedir', path.join(dir, 'state'),
+        '-basedir', relIfShorter(GAMEDATA), '-dedicated',
+        ...(process.env.QN_HOST16 ? ['16'] : []),
+        '+listen', '+map', 'lqdm1'],
+      want, terminal: legacyTerminal,
+    });
+  }
+
+  /* Mirror of the fake's fixture code (tests/fake_peer_qn.cjs); the fake
+   * byte-checks the dialed code against its OWN copy, so this encoder
+   * cannot satisfy the lane by itself. */
+  const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const LISTED_GROUPED = (() => {
+    let val = 0, bits = 0, s = '';
+    for (const byte of Buffer.alloc(10, 0x2b)) {
+      val = (val << 8) | byte; bits += 8;
+      while (bits >= 5) { bits -= 5; s += CROCKFORD[(val >>> bits) & 31]; }
+    }
+    return s.slice(0, 4) + '-' + s.slice(4, 8) + '-'
+         + s.slice(8, 12) + '-' + s.slice(12, 16);
+  })();
+
+  /* public lobby browser, two roles two engines: the host run proves the
+   * public announce edge and honest row rendering (own room marked
+   * mine); the client run proves snapshot intake and that the listed
+   * row's own bytes -- never a typed string -- drive the dial. */
+  {
+    const cd = path.join(GAMEDATA, 'id1', 'qn-lane-tmp');
+    fs.mkdirSync(cd, { recursive: true });
+    fs.writeFileSync(path.join(cd, 'j.cfg'),
+      Array(330).fill('wait').join('\n') + '\nconnect qn:'
+      + LISTED_GROUPED + '\n');
+  }
+  const hostRc = await runOne({
+    prefix: 'qnpb-h-',
+    front: (dir) => ['-qn', '-qn-peer', FAKE, '-qn-dir', dir,
+      '-qn-statedir', path.join(dir, 'st'),
+      '-basedir', relIfShorter(GAMEDATA), '-dedicated',
+      '+listen', '+map', 'lqdm1', '+qn_visibility', '1'],
+    want: want.concat([PBW.announce, PBW.list, PBW.swap], pbRows(1, 0)),
+    terminal: 'peer-admin-gauntlet',
+    env: { QN_LOBBY_DUMP: '1', QN_PB_ROLE: 'host' },
+    label: '(mode public-browser host)',
+  });
+  if (hostRc) return hostRc;
+  const clientNames = new Set(['standby', 'spawned', 'authenticated',
+    'peer-token', 'peer-plane-a']);
+  return runOne({
+    prefix: 'qnpb-c-',
+    front: (dir) => ['-qn', '-qn-peer', FAKE, '-qn-dir', dir,
+      '-qn-statedir', path.join(dir, 'st'),
+      '-basedir', relIfShorter(GAMEDATA),
+      '+cl_startdemos', '0', '+exec', 'qn-lane-tmp/j.cfg'],
+    want: want.filter(([n]) => clientNames.has(n))
+      .concat([PBW.list, PBW.swap], pbRows(0, 0),
+        [PBW.join, PBW.accept, PBW.signon]),
+    terminal: 'pb-signon',
+    env: { QN_LOBBY_DUMP: '1', QN_PB_ROLE: 'client',
+             SDL_VIDEODRIVER: 'offscreen' },
+    budget: 90000,
+    label: '(mode public-browser client)',
   });
 }
 

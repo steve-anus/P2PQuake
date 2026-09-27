@@ -19,6 +19,22 @@ const PLAYER_PUB = Buffer.alloc(32, 0x41);      /* the scripted player's identit
 const PROBE_PUB = Buffer.from(PLAYER_PUB);
 PROBE_PUB[0] ^= 0xff;   /* a second identity: datagram-level replies only */
 const HOST_CODE = Buffer.from([0x73, 0x79, 0x71, 0x7e, 0x76, 0x74, 0x72, 0x70, 0x6f, 0x6d]);
+const LISTED_CODE = Buffer.alloc(10, 0x2b);        /* a stranger's room, as listed */
+const PB = !!process.env.QN_PUBLIC_BROWSER;
+const PB_ROLE = process.env.QN_PB_ROLE || 'host';
+
+/* engine-side trust is width/mask only (the daemon verified): the
+ * scripted rows are canonical advert TLVs + 64 opaque sig bytes */
+function lobbyRow(title, code) {
+  return Buffer.concat([F.encodeTLV([
+    [0x01, Buffer.from('lqdm1', 'latin1')],
+    [0x02, Buffer.from(title, 'latin1')],
+    [0x03, Buffer.from([8])],
+    [0x04, Buffer.from([1])],
+    [0x05, code],
+    [0x0b, Buffer.from([3])],
+  ]), Buffer.alloc(64)]);
+}
 
 /* quake datagram layer constants (Quake/net_defs.h, net_dgrm.c) */
 const LEN_MASK = 0x0000ffff;
@@ -30,7 +46,7 @@ const clc_stringcmd = 4;
 const SVC_SERVERINFO = 11, SVC_SIGNONNUM = 25, SVC_PRINT = 8;
 
 const step = (n) => console.error(`LBSTEP ${n} ok`);
-const fail = (why) => { console.log(`LBSTEP FAIL ${why}`); process.exit(1); };
+const fail = (why) => { console.error(`LBSTEP FAIL ${why}`); process.exit(1); };
 
 function parseUds(argv) {
   const i = argv.indexOf('--uds');
@@ -81,6 +97,10 @@ class Peer {
     this.state = 'await-host-up';
     this.sendSeq = 0;                 /* our qsocket sendSequence */
     this.recvSeq = 0;                 /* our qsocket receiveSequence */
+    if (PB && PB_ROLE === 'client') this.sendLobbyFixture();
+    /* client role: the snapshot feed rides authenticated Plane-A, the way a
+     * page-open drives it; the lane's dial rides the shipped
+     * connect qn:<code> surface — no watch command, no watch claim. */
     this.assembled = [];              /* reassembled host message bytes */
     this.pending = null;              /* unacked outbound message */
     this.outbound = [];               /* queued follow-up messages */
@@ -88,9 +108,17 @@ class Peer {
     this.steps = new Set();
     this.prints = [];                 /* every SVC_PRINT payload seen, raw */
     this.gauntletDone = false;
+    this.pbRecvSeq = 0;                    /* engine client-lane seqs */
     sock.on('data', (c) => this.feed(c));
     sock.on('close', () => {
       if (this.state === 'done') process.exit(0);   /* session over, by choice */
+      if (PB && PB_ROLE === 'client' && this.pbJoined) {
+        step('done');                                /* join witnessed; the
+                                                      * browser client is
+                                                      * done when the
+                                                      * engine leaves */
+        process.exit(0);
+      }
       fail('engine closed Plane A in state ' + this.state);
     });
     sock.on('error', () => process.exit(3));
@@ -146,9 +174,91 @@ class Peer {
         continue;
       }
       if (f.type === T.HOST_UP) { this.onHostUp(f); continue; }
+      if (PB && f.type === T.LOBBY_ANNOUNCE) {
+        if (PB_ROLE !== 'host') fail('LOBBY_ANNOUNCE on ' + PB_ROLE + ' role');
+        this.onLobbyAnnounce(f); continue;
+      }
+      if (PB && f.type === T.JOIN_OPEN) {
+        if (PB_ROLE !== 'client') fail('JOIN_OPEN on ' + PB_ROLE + ' role');
+        this.onJoinOpen(f); continue;
+      }
+      if (PB && f.type === T.CLIENT_CMD) {
+        if (PB_ROLE !== 'client') fail('CLIENT_CMD on ' + PB_ROLE + ' role');
+        this.onClientCmd(f); continue;
+      }
       if (f.type === T.SV_DATA) { this.onSvData(f); continue; }
       if (f.type === T.FATAL) fail('FATAL cause ' + (f.payload[0] ?? '?'));
     }
+  }
+  sendLobbyFixture() {
+    if (this.pbListSent) return;
+    this.send(T.LOBBY_LIST, lobbyRow('FIRST ROW', HOST_CODE));
+    this.send(T.LOBBY_LIST, lobbyRow('OTHER ROW', LISTED_CODE));
+    this.send(T.LOBBY_LIST, Buffer.alloc(0));
+    this.pbListSent = true;
+    step('lobby-list-sent');
+  }
+  onLobbyAnnounce(f) {
+    const t = new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value]));
+    if (t.size !== 5) fail('lobby announce tag count ' + t.size);
+    const map = (t.get(1) || Buffer.alloc(0)).toString('latin1');
+    if (map !== 'lqdm1') fail('lobby announce map ' + JSON.stringify(map));
+    if (!t.get(2) || !t.get(2).length) fail('lobby announce title empty');
+    if (!t.get(3) || t.get(3)[0] < 2) fail('lobby announce maxp');
+    if (!t.get(4) || t.get(4)[0] !== 1) fail('lobby announce mode');
+    if (!t.get(5)) fail('lobby announce players');
+    if (t.get(5)[0] > t.get(3)[0]) fail('lobby announce players exceed maxp');
+    if (this.pbListSent) return;   /* re-announces: fixture is content-stable */
+    step('lobby-announce');
+    this.sendLobbyFixture();
+  }
+  svData(body) {                        /* server->client datagrams ride
+                                         * SV_DATA: that is what feeds the
+                                         * engine's one client slot */
+    this.send(T.SV_DATA, F.encodeTLV([[1, PLAYER_PUB], [2, body]]));
+  }
+  onClientCmd(f) {
+    const t = new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value]));
+    const body = t.get(1);
+    if (!body || body.length < 4) return fail('CLIENT_CMD without body');
+    const head = body.readUInt32BE(0);
+    const flags = head & ~LEN_MASK;
+    if (flags & F_CTL) {
+      if (body[4] === CCREQ_CONNECT) {
+        if (!body.includes(Buffer.from('QUAKE', 'latin1')))
+          fail('CCREQ without QUAKE magic');
+        if (this.pbAccepted) return;        /* retransmit: replayed below */
+        const port = Buffer.alloc(4);
+        port.writeUInt32BE(27500, 0);
+        this.svData(ctlPacket(Buffer.concat([Buffer.from([CCREP_ACCEPT]), port])));
+        this.pbAccepted = true;
+        step('client-accept');
+      }
+      return;
+    }
+    if (flags & F_DATA) {
+      const seq = body.readUInt32BE(4);
+      const reliable = !(flags & F_UNRELIABLE);
+      if (reliable && seq === this.pbRecvSeq) {
+        this.svData((() => { const h = Buffer.alloc(8);
+          h.writeUInt32BE((8 | F_ACK) >>> 0, 0);
+          h.writeUInt32BE(seq >>> 0, 4); return h; })());
+        this.pbRecvSeq++;
+        if (!this.pbSignon && body.length > 8) {
+          this.pbSignon = true;             /* the app layer lives on this lane */
+          step('client-signon');
+        }
+      }
+    }
+  }
+  onJoinOpen(f) {
+    if (!this.pbListSent) fail('JOIN_OPEN before lobby list');
+    if (f.payload.length !== 10 || !f.payload.equals(LISTED_CODE))
+      fail('JOIN_OPEN code ' + f.payload.toString('hex') +
+           ' is not the listed row code ' + LISTED_CODE.toString('hex'));
+    step('join-code-dial');
+    this.pbJoined = true;
+    if (this.finishSession) this.finishSession();
   }
   onHostUp(f) {
     if (this.state !== 'await-host-up') fail('HOST_UP in ' + this.state);
@@ -300,50 +410,55 @@ class Peer {
         /* spec 6.4 stufftext gate: rejects first, the allowlisted
          * phrase last. The engine's own QN: notes (deduped per fixed
          * string) are the orchestrator's markers. */
-        this.send(T.STUFFTEXT, Buffer.from('quit\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('exec autoexec.cfg\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('reconnect\nquit\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('reconnect; quit\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('Reconnect\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('reconnect extra\0', 'latin1'));
-        this.send(T.STUFFTEXT, Buffer.from('reconnect'));	/* missing NUL */
-        this.send(T.STUFFTEXT, Buffer.from('reconnect\0', 'latin1'));
-        this.state = 'done';
-        step('done');
-        if (!process.env.QN_REFUSE && !process.env.QN_FATAL &&
-            !process.env.QN_REDIAL_CHURN && !process.env.QN_FUZZ) {
-          /* Host-console-class verbs must never dispatch from the
-           * client wire. This lane runs deathmatch (forced for
-           * maxclients>1), so the live pre-fix traces are ping's table
-           * header and pause's broadcast (both client-stream); every
-           * other verb is upstream-gated or print-silent here -- their
-           * refusal is proven by the predicate units, and the reliable
-           * queue proves each one's ACK delivery to the dispatch path.
-           * Sent through the reliable queue: raw same-tick bursts are
-           * lawfully droppable and would test nothing.
-           * QN_GAUNTLET is a lab knob; CI must never set it. */
-          const verbs = (process.env.QN_GAUNTLET ||
-            'ping,god,ban 1.2.3.4,ban,status,give all,notarget,fly,' +
-            'noclip,setpos 0 0 0,kill,pause,kick LoopbackPlayer,kick ghost')
-            .split(',');
-          for (const v of verbs.filter(Boolean))
-            this.sendMessage(stringCmd(v));
-          this.gauntletCheck = () => {
-            if (this.gauntletDone) return;
-            if (this.pending || this.outbound.length) {
-              setTimeout(this.gauntletCheck, 500);   /* queue in flight:
-                                                        never mark early */
-              return;
-            }
-            this.gauntletDone = true;
-            const stream = this.prints.map((b) => b.toString('latin1')).join('\n');
-            for (const t of ['Client ping times', 'paused the game',
-                             'unpaused the game'])
-              if (stream.includes(t)) fail('admin verb executed: ' + t);
-            step('admin-gauntlet');
-          };
-          setTimeout(this.gauntletCheck, 2500);  /* watchdog; drain is primary */
-        }
+        this.finishSession = () => {
+          if (this.state === 'done') return;
+          this.send(T.STUFFTEXT, Buffer.from('quit\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('exec autoexec.cfg\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('reconnect\nquit\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('reconnect; quit\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('Reconnect\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('reconnect extra\0', 'latin1'));
+          this.send(T.STUFFTEXT, Buffer.from('reconnect'));	/* missing NUL */
+          this.send(T.STUFFTEXT, Buffer.from('reconnect\0', 'latin1'));
+          this.state = 'done';
+          step('done');
+          if (!process.env.QN_REFUSE && !process.env.QN_FATAL &&
+              !process.env.QN_REDIAL_CHURN && !process.env.QN_FUZZ) {
+            /* Host-console-class verbs must never dispatch from the
+             * client wire. This lane runs deathmatch (forced for
+             * maxclients>1), so the live pre-fix traces are ping's table
+             * header and pause's broadcast (both client-stream); every
+             * other verb is upstream-gated or print-silent here -- their
+             * refusal is proven by the predicate units, and the reliable
+             * queue proves each one's ACK delivery to the dispatch path.
+             * Sent through the reliable queue: raw same-tick bursts are
+             * lawfully droppable and would test nothing.
+             * QN_GAUNTLET is a lab knob; CI must never set it. */
+            const verbs = (process.env.QN_GAUNTLET ||
+              'ping,god,ban 1.2.3.4,ban,status,give all,notarget,fly,' +
+              'noclip,setpos 0 0 0,kill,pause,kick LoopbackPlayer,kick ghost')
+              .split(',');
+            for (const v of verbs.filter(Boolean))
+              this.sendMessage(stringCmd(v));
+            this.gauntletCheck = () => {
+              if (this.gauntletDone) return;
+              if (this.pending || this.outbound.length) {
+                setTimeout(this.gauntletCheck, 500);   /* queue in flight:
+                                                          never mark early */
+                return;
+              }
+              this.gauntletDone = true;
+              const stream = this.prints.map((b) => b.toString('latin1')).join('\n');
+              for (const t of ['Client ping times', 'paused the game',
+                               'unpaused the game'])
+                if (stream.includes(t)) fail('admin verb executed: ' + t);
+              step('admin-gauntlet');
+            };
+            setTimeout(this.gauntletCheck, 2500);  /* watchdog; drain is primary */
+          }
+        };
+        if (PB && PB_ROLE === 'client') this.pbChatDone = true;
+        else this.finishSession();
         if (process.env.QN_REFUSE) {
           /* §6.2 relay: the joiner must see the fixed reason (the real
            * daemon's onRefused shape; stay alive so the engine catches
@@ -502,7 +617,8 @@ async function main() {
   new Peer(sock);
   /* paced churn cycles (each must cross the 2.0 s replacement window)
    * run far past the honest budget: scale the suicide timer with them */
-  setTimeout(() => process.exit(4), process.env.QN_FUZZ ? 90000 :
+  setTimeout(() => { console.error('LBSTEP FAIL suicide'); process.exit(4); }, process.env.QN_FUZZ ? 90000 :
+    PB && PB_ROLE === 'client' ? 90000 :
     process.env.QN_REDIAL_CHURN ?
       (Math.max(1, parseInt(process.env.QN_REDIAL_CHURN, 10)) * 5000 + 30000)
       : 40000);

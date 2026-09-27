@@ -326,3 +326,73 @@ test('ordered-adjacent duplicate tag refuses (TLV duplicate arm)', () => {
   parts.splice(9, 0, tlv(0x09, e1));
   assert.throws(() => L.decodeAdvert(signed(Buffer.concat(parts))), L.LobbyError);
 });
+
+
+/* ---- bounded randomized mutation over the signed-advert surface ----
+ * Seeded (deterministic) mutations. decodeAdvert must either refuse with
+ * a LobbyError, or return data whose signature genuinely covers the bytes
+ * AND whose fields all sit within the protocol field masks. A
+ * non-LobbyError throw, a mutation accepted without a verifying
+ * signature, or any mutation of the caller's buffer fails the lane. */
+test('mutation fuzz: 20000 seeded mutations never accept unverified bytes', () => {
+  let rs = 924845291 >>> 0;
+  const rnd = (n) => { rs = (Math.imul(rs, 1664525) + 1013904223) >>> 0; return rs % n; };
+  const goodArr = Uint8Array.from(good);
+  const PRINT = /^[\x20-\x7e]+$/;
+  let accepted = 0, refused = 0;
+  for (let i = 0; i < 20000; i++) {
+    let buf = Buffer.from(goodArr);
+    let resign = false;
+    const kind = rnd(5);
+    if (kind === 0 || kind === 3) { // flip 1..3 bytes anywhere in the canonical body
+      const n = 1 + rnd(3);
+      for (let k = 0; k < n; k++) buf[rnd(Math.max(1, buf.length - 64))] ^= 1 << rnd(8);
+      resign = true;
+    } else if (kind === 1) { // flip signature bytes; never re-sign
+      buf[buf.length - 1 - rnd(64)] ^= 1 << rnd(8);
+    } else if (kind === 2) { // truncate at a seeded offset (>=64 keeps sig present)
+      const cut = 64 + rnd(Math.max(1, buf.length - 64 + 1));
+      buf = buf.subarray(0, cut);
+    } else { // duplicate one TLV entry at the end of the body
+      const start = 1 + rnd(Math.max(1, buf.length - 66));
+      const len = 1 + rnd(24);
+      const dup = Buffer.from(buf.subarray(start, start + len));
+      buf = Buffer.concat([buf.subarray(0, buf.length - 64), dup,
+                           buf.subarray(buf.length - 64)]);
+      resign = true;
+    }
+    if (resign) {
+      const canonical = buf.subarray(0, buf.length - 64);
+      const digest = crypto.createHash('sha256')
+        .update(Buffer.concat([Buffer.from('QNLA', 'latin1'), canonical])).digest();
+      E.signWith(kp.privateKey, digest).copy(buf, buf.length - 64);
+    }
+    const snapshot = Buffer.from(buf);
+    let res = null, err = null;
+    try { res = L.decodeAdvert(buf); } catch (e) { err = e; }
+    assert.ok(err === null || err instanceof L.LobbyError,
+      'non-LobbyError escaped: ' + (err && err.stack));
+    assert.deepStrictEqual(buf, snapshot, 'decodeAdvert mutated its input');
+    if (res === null) { refused++; continue; }
+    accepted++;
+    // accepted must be independently verifiable over these very bytes
+    const canonical = buf.subarray(0, buf.length - 64);
+    const digest = crypto.createHash('sha256')
+      .update(Buffer.concat([Buffer.from('QNLA', 'latin1'), canonical])).digest();
+    assert.ok(E.verifyWith(res.pubkey, digest, buf.subarray(buf.length - 64)),
+      'accepted advert does not verify over its own bytes');
+    // and every mask must hold on the returned fields
+    assert.ok(res.map && res.map.length <= 16 && PRINT.test(res.map));
+    assert.ok(res.title && res.title.length <= 20 && PRINT.test(res.title));
+    assert.ok(Buffer.isBuffer(res.code) && res.code.length === 10,
+      'accepted code field must be the 10 packed bytes of the identity');
+    assert.ok(res.maxPlayers >= 2 && res.maxPlayers <= 8);
+    assert.ok(res.mode <= 1);
+    assert.ok(res.players <= res.maxPlayers);
+    assert.ok(res.epoch >= 1n);
+    assert.equal(res.ttl, L.ADVERT_TTL);
+    assert.equal(res.pubkey.length, 32);
+  }
+  assert.ok(accepted > 100, 'fuzz never reached the accept arm: ' + accepted);
+  assert.ok(refused > 100, 'fuzz never reached the refuse arm: ' + refused);
+});

@@ -25,7 +25,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery
+.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
 
 all: engine peer
 
@@ -75,6 +75,16 @@ loopback: engine
 # changelevel reconnect cycle, crash-style rejoin and stale-code refusal.
 # honest-failure battery: one loopback run per daemon refuse cause,
 # each asserting the engine's exact fixed player-facing string.
+# Lobby browser end to end: the host run proves the public announce edge
+# and honest row rendering (own room marked); the client run proves
+# snapshot intake and that the listed row's own bytes -- never a typed
+# string -- drive the dial through the datagram layer.
+loopback-public: engine
+	@QN_PUBLIC_BROWSER=1 $(NODE) tests/qn_loopback.cjs
+
+hostile: engine
+	@$(NODE) tests/qn_hostile.cjs
+
 loopback-fatal: engine
 	@for c in 0 1 2 3 4 5 6 255; do \
 	  echo "loopback-fatal cause $$c:"; \
@@ -153,11 +163,13 @@ check:
 	$(MAKE) --no-print-directory e2e
 	$(MAKE) --no-print-directory loopback
 	$(MAKE) --no-print-directory loopback-fatal
+	$(MAKE) --no-print-directory loopback-public
 	$(MAKE) --no-print-directory twoplayer
 	$(MAKE) --no-print-directory relay
 	$(MAKE) --no-print-directory lobby-browser
 	$(MAKE) --no-print-directory visibility
 	$(MAKE) --no-print-directory discovery
+	$(MAKE) --no-print-directory hostile
 
 asan:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then echo "asan: NOT-READY — no driver/test sources"; exit 1; fi
