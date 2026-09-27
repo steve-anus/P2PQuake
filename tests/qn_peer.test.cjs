@@ -209,14 +209,14 @@ test('payload-bearing lobby control frames are inert (spec 2.3: empty)', async (
 
 const FAKE_ENGINE = path.join(__dirname, '..', 'bin', 'fake-engine');
 
-function spawnPeer(t, sockPath, extra = []) {
+function spawnPeer(t, sockPath, extra = [], script = PEER) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-st-'));
   t.after(() => { fs.rmSync(stateDir, { recursive: true, force: true }); });
   const child = spawn(FAKE_ENGINE,
     ['--uds', sockPath, '--dir', stateDir, ...extra], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: { ...process.env, QN_FAKE_ENGINE_NODE: process.execPath,
-      QN_FAKE_ENGINE_SCRIPT: PEER },
+      QN_FAKE_ENGINE_SCRIPT: script },
   });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
@@ -586,4 +586,45 @@ test('parseFlags: display fields are validated strings, never coerced literals',
     'spaces ride the printable band');
   assert.equal(Q.parseFlags(['--uds', '/x', '--name', 'x'.repeat(20)]).name,
     'x'.repeat(20), 'band upper edge accepted');
+});
+
+test('packaged launcher boots the daemon: require wrapper must reach main()', async (t) => {
+  // The engine execs <exe-dir>/qn-peer (a require wrapper) as node's entry
+  // script; with only require() the module's require.main guard is false and
+  // main() never runs — the daemon exits 0 silently. Regression lane for
+  // exactly that class: drive the launcher byte-for-byte through fake-engine.
+  const pkg = path.join(__dirname, '..', 'bin', 'qnpt-launch-pkg');
+  fs.rmSync(pkg, { recursive: true, force: true });
+  fs.mkdirSync(path.join(pkg, 'src', 'peer'), { recursive: true });
+  for (const f of fs.readdirSync(path.join(__dirname, '..', 'src', 'peer')))
+    fs.copyFileSync(path.join(__dirname, '..', 'src', 'peer', f),
+      path.join(pkg, 'src', 'peer', f));
+  fs.copyFileSync(path.join(__dirname, '..', 'gamedata.sha256'),
+    path.join(pkg, 'gamedata.sha256'));
+  const launcher = path.join(pkg, 'qn-peer');
+  const gen = require('node:child_process');
+  gen.execFileSync('bash', ['-c',
+    `printf '#!/usr/bin/env node\\n// Engine-execed daemon launcher (packaged layout).\\nrequire("./src/peer/qn-peer.cjs").cliMain();\\n' > ${JSON.stringify(launcher)}`]);
+  fs.chmodSync(launcher, 0o755);
+  t.after(() => fs.rmSync(pkg, { recursive: true, force: true }));
+
+  const token = crypto.randomBytes(32);
+  const eng = fakeEngine(t, token);
+  await eng.ready;
+  const p = spawnPeer(t, eng.sockPath, [], launcher);
+  p.child.stdin.write(token);
+  const f = await eng.firstFrame;
+  assert.equal(f.type, F.TYPES.AUTH, 'launcher-spawned daemon speaks AUTH');
+  assert.equal(f.seq, 1);
+  assert.deepEqual(f.payload, token);
+  assert.equal(p.child.exitCode, null, 'daemon stays alive (silent exit 0 = wrapper lost main)');
+  p.child.kill(); await p.exits;
+  await eng.teardown();
+});
+
+test('release.sh launcher and the daemon export cannot drift apart', () => {
+  const sh = fs.readFileSync(path.join(__dirname, '..', 'tools', 'release.sh'), 'utf8');
+  assert.match(sh, /require\("\.\/src\/peer\/qn-peer\.cjs"\)\.cliMain\(\);/,
+    'staged launcher must invoke the exported cliMain bootstrap');
+  assert.equal(typeof Q.cliMain, 'function', 'daemon exports cliMain');
 });

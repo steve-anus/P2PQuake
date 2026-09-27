@@ -113,7 +113,7 @@ if strings "$PKG/quakespasm" | grep -qE "/home/|/Users/|/root/"; then
   echo "release.sh: engine binary leaks the build home path" >&2
   exit 1
 fi
-printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).\nrequire("./src/peer/qn-peer.cjs");\n' > "$PKG/qn-peer"
+printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).\n// require() alone never runs main(): the module guard checks require.main,\n// which is this launcher. cliMain() is the single CLI bootstrap.\nrequire("./src/peer/qn-peer.cjs").cliMain();\n' > "$PKG/qn-peer"
 chmod 0755 "$PKG/qn-peer"
 cp bin/node/bin/node "$PKG/runtime/node"
 chmod 0755 "$PKG/runtime/node"

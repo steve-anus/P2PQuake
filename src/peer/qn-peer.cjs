@@ -932,17 +932,19 @@ async function main(argv) {
     clock: P.realClock, redactor, epochs });
 }
 
-if (require.main === module) {
+function cliMain() {
   main(process.argv.slice(2)).then((code) => process.exit(code)).catch(() => {
     process.stderr.write('qn-peer: fatal, exiting fail-closed\n');
     process.exit(1);
   });
 }
 
+if (require.main === module) cliMain();
+
 module.exports = {
   qnFnv1aHex, defaultStateDir, writeInstanceMeta, reapStaleInstances,
   assertRuntime, readToken, dialAndAuth, usageExit, NODE_MAJOR_TESTED,
   ensureIdentity, makeEpochStore, computeIdentity, extractBuildId, makeRedactor,
-  PlaneA, parseFlags, run,
+  PlaneA, parseFlags, run, cliMain,
   relayThroughFromEnv, applyRelayForcing, relayForcingState,
 };
