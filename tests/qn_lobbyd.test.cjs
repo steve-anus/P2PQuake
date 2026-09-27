@@ -62,7 +62,7 @@ const CODE10 = Buffer.alloc(10, 0x2b);
 
 function mkHost(opts = {}) {
   const clock = opts.clock || fakeClock();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnlobbyd-'));
+  const dir = mkdtempTracked('qnlobbyd-');
   const swarms = [];
   const logs = [];
   const h = D.makeHostLobby({
@@ -76,6 +76,18 @@ function mkHost(opts = {}) {
   });
   return { h, clock, swarms, logs };
 }
+
+const TMP_MADE = [];
+function mkdtempTracked(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_MADE.push(d);
+  return d;
+}
+process.on('exit', () => {
+  for (const d of TMP_MADE) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 test('announceFields: accept and full rejection matrix', () => {
   assert.deepEqual(D.announceFields(tlvPayload(GOOD)), GOOD);
@@ -127,7 +139,7 @@ test('host: sub-second re-announce debounces, latest content wins, epoch advance
 
 test('host: cadence re-signs inside ttl; epochs persist across instances', async () => {
   const clock = fakeClock();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnlobbyd-'));
+  const dir = mkdtempTracked('qnlobbyd-');
   const mk = () => D.makeHostLobby({
     keys: mkKeys(0x31), epochs: Q.makeEpochStore(dir), clock,
     swarmFactory: () => Object.assign(new EventEmitter(), { destroy() {} }),

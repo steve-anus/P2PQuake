@@ -53,7 +53,7 @@ async function main() {
   if (!fs.existsSync(ENGINE)) die('missing engine (' + ENGINE + ')');
   if (!fs.existsSync(FAKE)) die('missing fake daemon (' + FAKE + ')');
   if (!(fs.statSync(FAKE).mode & 0o100)) die('fake daemon must be executable (mode *75)');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qnlobby-'));
+  const dir = mkdtempTracked('qnlobby-');
 
   const tok = [
     '-qn', '-qn-peer', FAKE, '-qn-dir', dir,
@@ -119,5 +119,17 @@ async function main() {
   console.log(`LOBBYBROWSER OK: ${assertions} assertions`);
   process.exit(0);
 }
+
+const TMP_MADE = [];
+function mkdtempTracked(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_MADE.push(d);
+  return d;
+}
+process.on('exit', () => {
+  for (const d of TMP_MADE) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 main().catch((e) => die('crash: ' + (e && e.stack || e)));

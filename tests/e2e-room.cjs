@@ -30,10 +30,22 @@ const note = (n) => { results.set(n, true); console.log('OK  ', n); };
 const failNote = (n, why) => { results.set(n, false); console.log('FAIL', n, '—', why); };
 
 function mkTmpDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p2pquake-e2e-'));
+  const dir = mkdtempTracked('p2pquake-e2e-');
   fs.chmodSync(dir, 0o700);
   return dir;
 }
+
+const TMP_MADE = [];
+function mkdtempTracked(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_MADE.push(d);
+  return d;
+}
+process.on('exit', () => {
+  for (const d of TMP_MADE) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 // ---- the engine side of Plane A: owns the socket, generates the token ----
 class FakeEngine {

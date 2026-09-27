@@ -138,7 +138,7 @@ async function main() {
   const pb = !!process.env.QN_PUBLIC_BROWSER;
 
   function runOne(opts) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix));
+  const dir = mkdtempTracked(opts.prefix);
   const eng = opts.front(dir);
   const wantList = opts.want;
   /* stdbuf -oL: the engine's stdout is block-buffered when piped; without
@@ -339,5 +339,17 @@ async function main() {
     label: '(mode public-browser client)',
   });
 }
+
+const TMP_MADE = [];
+function mkdtempTracked(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_MADE.push(d);
+  return d;
+}
+process.on('exit', () => {
+  for (const d of TMP_MADE) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 main().then((code) => process.exit(code)).catch(() => process.exit(1));

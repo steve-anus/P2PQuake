@@ -38,7 +38,7 @@ const children = [];
 let finished = false;
 
 function mkDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qndisc-'));
+  const dir = mkdtempTracked('qndisc-');
   fs.chmodSync(dir, 0o700);
   return dir;
 }
@@ -223,5 +223,17 @@ function fakeEngineSafe(sockPath, token) {
   fs.mkdirSync(path.dirname(sockPath), { recursive: true, mode: 0o700 });
   return fakeEngine(sockPath, token);
 }
+
+const TMP_MADE = [];
+function mkdtempTracked(prefix) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  TMP_MADE.push(d);
+  return d;
+}
+process.on('exit', () => {
+  for (const d of TMP_MADE) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+});
 
 main().catch((e) => die('crash: ' + (e && e.stack || e)));

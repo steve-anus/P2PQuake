@@ -156,6 +156,7 @@ check:
 	@if [ -z "$(DRIVER_SRC)" ] || [ -z "$(TEST_SRC)" ]; then \
 	  echo "check: NOT-READY — no driver/test sources yet (spec comes first)"; exit 1; \
 	fi
+	@tools/clean-lanes.sh
 	@mkdir -p bin
 	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
 	./bin/qn_tests
