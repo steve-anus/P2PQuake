@@ -134,7 +134,7 @@ verify_zip() {
 if [ "$dryrun" = 1 ]; then
   KEY="$STAGE/signkey"
   ssh-keygen -q -t ed25519 -N "" -f "$KEY" -C "qn-dryrun" >/dev/null
-  (cd "$DIST" && ssh-keygen -Y sign -f "$KEY" -i qn-dryrun -n file "$ZIP" >/dev/null)
+  (cd "$DIST" && ssh-keygen -Y sign -f "$KEY" -n file "$ZIP" >/dev/null)
   verify_zip "$KEY.pub" "qn-dryrun"
   echo "==> DRY RUN: signed + verified with an ephemeral key (not for distribution)"
 else
@@ -145,7 +145,7 @@ else
   IDENTITY="${QN_SIGN_ID:-$(awk '{print $NF}' "$QN_SIGN_KEY_PUB" 2>/dev/null | tail -1)}"
   [ -n "$IDENTITY" ] \
     || { echo "release.sh: set QN_SIGN_ID (signing identity)" >&2; exit 1; }
-  (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -i "$IDENTITY" -n file "$ZIP")
+  (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -n file "$ZIP")
   verify_zip "$QN_SIGN_KEY_PUB" "$IDENTITY"
   echo "release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
 fi
