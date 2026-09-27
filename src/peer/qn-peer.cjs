@@ -419,6 +419,10 @@ async function run(opts) {
   const log = (s) => process.stderr.write('qn-peer: ' + redactor.redact(s) + '\n');
   let lane = null; // {role, swarm, room}
   let hostLobby = null, viewerLobby = null;
+  let joinAttempt = 0;   // unverified join failures retry within the budget
+  let joinRetry = {};    // token swap cancels a pending scheduled retry
+  let joinT0 = 0;        // wall-clock origin of the current join request
+  let joinOpen = false;  // engine still wants the join (JOIN_OPEN..JOIN_CLOSE)
   const announced = new Set(); // client side: members already surfaced to the engine
 
   const destroyLane = () => {
@@ -490,6 +494,8 @@ async function run(opts) {
     switch (f.type) {
       case F.TYPES.HOST_UP: {
         if (lane) return fatal(2); // second lane opener while one is live (§4.1)
+        joinRetry = {};
+        joinOpen = false; // role pivot supersedes any in-flight join request
         const t1 = new Map(F.decodeTLV(f.payload).map((x) => [x.tag, x.value]));
         const map = t1.get(1), hostname = t1.get(2), maxp = t1.get(3);
         const okTags = map && map.length >= 1 && map.length <= 16 &&
@@ -514,9 +520,16 @@ async function run(opts) {
       case F.TYPES.JOIN_OPEN: {
         if (lane) return fatal(2);
         if (f.payload.length !== 10) return fatal(2);
+        joinAttempt = 0;
+        joinRetry = {};
+        joinT0 = Date.now();
+        joinOpen = true;
+        joinedOnce = false; // a fresh JOIN_OPEN is a fresh join, not a mid-match verdict
         return openClientLane(Buffer.from(f.payload));
       }
       case F.TYPES.JOIN_CLOSE:
+        joinRetry = {};
+        joinOpen = false;
         if (lane && lane.role === 'client') destroyLane();
         return;
       case F.TYPES.LOBBY_ANNOUNCE: {
@@ -623,13 +636,15 @@ async function run(opts) {
   };
 
   const openClientLane = async (code) => {
+    if (lane) return fatal(2); // timer-path guard: never clobber a live lane
+    let room = null;
     try {
       redactor.register(code);
       const topic = R.topicOf(code);
-      const room = new P.ClientRoom({
+      room = new P.ClientRoom({
         swarm: null, matchId: R.matchIdOf(code), code, keys: opts.keys,
         identity: opts.identity, name: opts.name, pinned: opts.pinned,
-        clock: opts.clock, log,
+        clock: opts.clock, log, timeouts: testTimeouts(),
         epochStart: opts.pinned
           ? opts.epochs.load(opts.pinned.toString('hex'), topic.toString('hex'))
           : -1n,
@@ -686,8 +701,27 @@ async function run(opts) {
           onHostLaneLost: () => { log('client: host connection lost'); fatal(4); },
           onJoinFailed: () => {
             // no host ever surfaced for this code: hang up clean exactly as
-            // a pre-join refusal does -- the relayed cause is the verdict
+            // a pre-join refusal does -- the relayed cause is the verdict.
+            // Under load the surfacing itself can overshoot its bound while
+            // the host is alive (observed flake): retry the whole
+            // lookup-and-dial before declaring, engine budget permitting.
             if (exiting) return;
+            const backoff = 200 + 300 * (joinAttempt + 1);
+            if (joinOpen && !joinedOnce && joinAttempt < JOIN_ATTEMPTS &&
+                Date.now() - joinT0 < JOIN_WALL_BUDGET_MS &&
+                Date.now() - joinT0 + backoff + JOIN_ATTEMPT_WORST_MS < JOIN_END_BUDGET_MS) {
+              joinAttempt++;
+              log('client: no host surfaced (attempt ' + joinAttempt +
+                '/' + JOIN_ATTEMPTS + '), retrying');
+              destroyLane();
+              const tok = (joinRetry = {});
+              const wait = setTimeout(() => {
+                if (tok === joinRetry && joinOpen && !lane && !exiting && !joinedOnce)
+                  void openClientLane(Buffer.from(code));
+              }, backoff);
+              wait.unref();
+              return;
+            }
             exiting = true;
             log('client: no host found for this code');
             try { a.send(F.TYPES.JOIN_NO, Buffer.from([2])); } catch { /* gone */ }
@@ -711,8 +745,30 @@ async function run(opts) {
     } catch (e) {
       log('client: lane open failed (' + e.name + ')');
       // an unresolvable topic is overwhelmingly a wrong or stale code (§6.2/2);
-      // hang up clean so the engine is not left respawning a doomed daemon
+      // hang up clean so the engine is not left respawning a doomed daemon.
+      // DHT transport hiccups share that shape under load: retry the whole
+      // attempt first, same bound as the no-host-surfaced path.
       if (exiting) return;
+      if (room) {
+        try { room.clock.clearTimeout(room.joinDeadlineTimer); } catch { /* cosmetic */ }
+        try { redactor.release(room.code); } catch { /* balanced via destroyLane */ }
+      }
+      const backoff = 200 + 300 * (joinAttempt + 1);
+      if (joinOpen && !joinedOnce && joinAttempt < JOIN_ATTEMPTS &&
+          Date.now() - joinT0 < JOIN_WALL_BUDGET_MS &&
+          Date.now() - joinT0 + backoff + JOIN_ATTEMPT_WORST_MS < JOIN_END_BUDGET_MS) {
+        joinAttempt++;
+        log('client: lane open failed (attempt ' + joinAttempt +
+          '/' + JOIN_ATTEMPTS + '), retrying');
+        destroyLane();
+        const tok = (joinRetry = {});
+        const wait = setTimeout(() => {
+          if (tok === joinRetry && joinOpen && !lane && !exiting && !joinedOnce)
+            void openClientLane(Buffer.from(code));
+        }, backoff);
+        wait.unref();
+        return;
+      }
       exiting = true;
       try { a.send(F.TYPES.JOIN_NO, Buffer.from([2])); } catch { /* gone */ }
       destroyLane();
@@ -727,6 +783,36 @@ async function run(opts) {
 }
 
 const INSTANCE_META = 'instance.json';
+function clampInt(raw, dflt, lo, hi, name) {
+  if (raw === undefined) return dflt;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) {
+    process.stderr.write('qn-peer: ignoring invalid ' + name + '\n');
+    return dflt;
+  }
+  return Math.min(hi, Math.max(lo, n));
+}
+const JOIN_ATTEMPTS = clampInt(process.env.QN_JOIN_ATTEMPTS, 3, 0, 8, 'QN_JOIN_ATTEMPTS');
+const JOIN_WALL_BUDGET_MS = clampInt(process.env.QN_JOIN_WALL_BUDGET, 11000, 0, 60000, 'QN_JOIN_WALL_BUDGET');
+const JOIN_END_BUDGET_MS = clampInt(process.env.QN_JOIN_END_BUDGET, 15000, 5000, 30000, 'QN_JOIN_END_BUDGET');
+const JOIN_ATTEMPT_WORST_MS = 7300; // one attempt's lookup bound + pump/propagation margin
+const TEST_TIMEOUT_KEYS = ['keyBindMs', 'joinOkMs', 'pingMs', 'deadMs',
+  'idleMs', 'rosterMs', 'lookupMs'];
+function testTimeouts() {
+  const raw = process.env.QN_TEST_TIMEOUTS;
+  if (!raw) return undefined;
+  const out = {};
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch { return undefined; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  for (const k of TEST_TIMEOUT_KEYS) {
+    const v = parsed[k];
+    if (Number.isFinite(v) && v >= 1 && v <= 600000) out[k] = v;
+  }
+  if (!Object.keys(out).length) return undefined;
+  process.stderr.write('qn-peer: TEST TIMEOUTS ACTIVE: ' + JSON.stringify(out) + '\n');
+  return out;
+}
 const STALE_INSTANCE_MS = 180 * 24 * 3600 * 1000;
 
 /* Kernel liveness triple: pid lies after reuse and start-ticks lie

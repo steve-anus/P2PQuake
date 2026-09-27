@@ -78,13 +78,13 @@ function fakeEngine(sockPath, token) {
   return { st };
 }
 
-function spawnDaemon(sockPath, dir, token, bootEnv) {
+function spawnDaemon(sockPath, dir, token, bootEnv, envExtras = {}) {
   if (!fs.existsSync(FAKE_ENGINE)) die('missing bin/fake-engine (run make fake-engine)');
   const gamedata = path.join(ROOT, 'gamedata.sha256');
   const child = spawn(FAKE_ENGINE,
     ['--uds', sockPath, '--gamedata', gamedata, '--gamedir', 'id1', '--dir', dir, '--name', 'LaneHost'],
     { env: { ...process.env, QN_FAKE_ENGINE_NODE: process.execPath,
-             QN_FAKE_ENGINE_SCRIPT: PEER, QN_DHT_BOOTSTRAP: bootEnv },
+             QN_FAKE_ENGINE_SCRIPT: PEER, QN_DHT_BOOTSTRAP: bootEnv, ...envExtras },
       stdio: ['pipe', 'pipe', 'pipe'] });
   children.push(child);
   const lines = [];
@@ -115,6 +115,8 @@ async function main() {
 
   const tnet = await createTestnet(3);
   const boot = tnet.bootstrap.map((b) => `${b.host}:${b.port}`).join(',');
+  for (const k of ['QN_TEST_TIMEOUTS', 'QN_JOIN_ATTEMPTS',
+    'QN_JOIN_WALL_BUDGET', 'QN_JOIN_END_BUDGET']) delete process.env[k];
   console.log('DISCOVERY: bootstrap=' + boot);
 
   const hostDir = mkDir();
@@ -191,6 +193,30 @@ async function main() {
   ok(() => assert.ok(renamed.epoch === firstEpoch + 1n || renamed.epoch === firstEpoch + 2n,
     'epoch ' + renamed.epoch), 're-announce epoch advanced');
 
+  // Join retry: an unannounced code surfaces no host. The daemon retries
+  // the lookup-and-dial (the load-induced surfacing flake) before the
+  // final verdict, then hangs up clean with JOIN_NO cause 2.
+  {
+    const sock = path.join(mkDir(), 'retry.s');
+    const token = crypto.randomBytes(32);
+    const engR = fakeEngineSafe(sock, token);
+    const dR = spawnDaemon(sock, mkDir(), token, boot, {
+      QN_TEST_TIMEOUTS: '{"lookupMs":250}',
+      QN_JOIN_ATTEMPTS: '3',
+      QN_JOIN_WALL_BUDGET: '60000',
+    });
+    await engR.st.authedP;
+    engR.st.send(F.TYPES.JOIN_OPEN, Buffer.alloc(10, 0x5a));
+    await waitFor(() => dR.logText().includes('(attempt 1/3)'), 'join retry 1', 15000, dR.logText);
+    await waitFor(() => dR.logText().includes('(attempt 3/3)'), 'join retry 3', 15000, dR.logText);
+    await waitFor(() => dR.logText().includes('client: no host found for this code'),
+      'join terminal verdict', 15000, dR.logText);
+    ok(() => assert.ok(engR.st.frames.some((f) => f.type === F.TYPES.JOIN_NO &&
+      f.payload.length === 1 && f.payload[0] === 2), 'JOIN_NO cause 2'),
+      'retry exhausted JOIN_NO');
+    await waitFor(() => dR.child.exitCode === 0, 'clean daemon exit', 5000, dR.logText);
+  }
+
   // teardown withdraws
   engH.st.send(F.TYPES.HOST_DOWN, Buffer.alloc(0));
   await waitFor(() => dH.logText().includes('lobby: withdrawn'), 'withdraw on host-down');
@@ -199,7 +225,7 @@ async function main() {
   for (const c of children) { try { c.kill('SIGKILL'); } catch { /* gone */ } }
   if (typeof tnet.destroy === 'function') { try { await tnet.destroy(); } catch { /* gone */ } }
   clearTimeout(hard);
-  console.log(`DISCOVERY OK: ${assertions} assertions, 2 daemons, bootstrap=${boot}`);
+  console.log(`DISCOVERY OK: ${assertions} assertions, 3 daemons, bootstrap=${boot}`);
   process.exit(0);                                        // lingering server handles
 }
 
