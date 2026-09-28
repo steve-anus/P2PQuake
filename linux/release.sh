@@ -15,7 +15,7 @@
 #     node_modules/**     production deps only (npm prune --omit=dev)
 #     LICENSE.md          shipped verbatim from the repo root
 #     VERSION
-# Output lands in dist/<ver>/ (zip + sha256sums.txt + detached signature).
+# Output lands in dist/<ver>/ (zip + platform-named sha256sums file + .sig).
 # Signing key comes from QN_SIGN_KEY (ssh-keygen -Y); --dry-run generates
 # an ephemeral key and keeps the zip marked unsigned-for-distribution.
 set -euo pipefail
@@ -33,7 +33,7 @@ for a in "$@"; do
 done
 [ -n "$tag" ] || usage
 
-REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
 TMPBASE=${TMPDIR:-/tmp}
 
@@ -145,9 +145,9 @@ echo "==> package + hashes"
 DIST="dist/$ver"
 mkdir -p "$DIST"
 ZIP="p2pquake-$ver-linux-x64.zip"
-rm -f "$DIST/$ZIP" "$DIST/$ZIP.sig" "$DIST/sha256sums.txt"
+rm -f "$DIST/$ZIP" "$DIST/$ZIP.sig" "$DIST/sha256sums-linux-x64.txt"
 (cd "$STAGE" && zip -qrX "$REPO_ROOT/$DIST/$ZIP" "p2pquake-$ver")
-(cd "$DIST" && sha256sum "$ZIP" > sha256sums.txt)
+(cd "$DIST" && sha256sum "$ZIP" > sha256sums-linux-x64.txt)
 
 verify_zip() {
   local pub="$1" identity="$2" allowed="$STAGE/allowed_signers"
@@ -171,6 +171,10 @@ else
     || { echo "linux/release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
   [ -n "${QN_SIGN_KEY_PUB:-}" ] \
     || { echo "linux/release.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
+  case "$QN_SIGN_KEY" in "~/"*) QN_SIGN_KEY="$HOME/${QN_SIGN_KEY#\~/}";; esac
+  case "$QN_SIGN_KEY_PUB" in "~/"*) QN_SIGN_KEY_PUB="$HOME/${QN_SIGN_KEY_PUB#\~/}";; esac
+  case "$QN_SIGN_KEY" in /*) ;; *) QN_SIGN_KEY="$REPO_ROOT/$QN_SIGN_KEY" ;; esac
+  case "$QN_SIGN_KEY_PUB" in /*) ;; *) QN_SIGN_KEY_PUB="$REPO_ROOT/$QN_SIGN_KEY_PUB" ;; esac
   IDENTITY="${QN_SIGN_ID:-$(sed -E 's/^[^ ]+ [^ ]+ //' "$QN_SIGN_KEY_PUB" 2>/dev/null | head -n1)}"
   case "$IDENTITY" in
     ''|*' '*) echo "linux/release.sh: signing identity must be one token — set QN_SIGN_ID" >&2; exit 1 ;;
@@ -180,4 +184,4 @@ else
   echo "linux/release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
 fi
 
-echo "linux/release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums.txt)"
+echo "linux/release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums-linux-x64.txt)"

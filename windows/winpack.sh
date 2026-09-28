@@ -3,7 +3,7 @@
 # Layout: quakespasm.exe, runtime/node.exe, peer/, node_modules/, id1/,
 #         gamedata.sha256, VERSION, README.md
 set -eu
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
 NODE_NUM="${NODE_VER#v}"
 VER=$(cat VERSION)
@@ -39,9 +39,9 @@ cp gamedata.sha256 "$PKG/gamedata.sha256"
 ( cd "$PKG/id1" && sha256sum -c ../gamedata.sha256 >/dev/null )
 cp VERSION "$PKG/VERSION"; cp README.md "$PKG/README.md"
 ZIP="p2pquake-${VER}-win-x64.zip"
-( cd "$OUT" && rm -f "$ZIP" "$ZIP.sig" && python3 -m zipfile -c "$ZIP" "p2pquake-${VER}-win-x64" )
+( cd "$OUT" && rm -f "$ZIP" "$ZIP.sig" sha256sums-win-x64.txt && python3 -m zipfile -c "$ZIP" "p2pquake-${VER}-win-x64" )
 echo "==> checksums"
-( cd "$OUT" && sha256sum "$ZIP" > sha256sums.txt )
+( cd "$OUT" && sha256sum "$ZIP" > sha256sums-win-x64.txt )
 if [ "${1:-}" = "--dry-run" ]; then
   KEYDIR=$(mktemp -d)
   ssh-keygen -q -t ed25519 -N '' -f "$KEYDIR/signkey" -C qn-dryrun
@@ -52,6 +52,10 @@ else
   [ -n "${QN_SIGN_KEY_PUB:-}" ] \
     || { echo "winpack.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
   KEY="$QN_SIGN_KEY"; PUB="$QN_SIGN_KEY_PUB"
+  case "$KEY" in "~/"*) KEY="$HOME/${KEY#\~/}";; esac
+  case "$PUB" in "~/"*) PUB="$HOME/${PUB#\~/}";; esac
+  case "$KEY" in /*) ;; *) KEY="$PWD/$KEY" ;; esac
+  case "$PUB" in /*) ;; *) PUB="$PWD/$PUB" ;; esac
   IDENTITY="${QN_SIGN_ID:-$(sed -E 's/^[^ ]+ [^ ]+ //' "$PUB" 2>/dev/null | head -n1)}"
 fi
 case "$IDENTITY" in

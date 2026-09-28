@@ -8,7 +8,7 @@ to blind relays.
 ## Playing
 
 1. Download the newest release for your platform from the project's releases page.
-2. Unpack it somewhere you own - `/opt` is preferred, any
+2. Unpack it somewhere you own - `/opt` is preferred on Linux, any
    folder works on Windows. Everything the game needs is inside,
    including the peer runtime; nothing else has to be installed.
 3. Open a terminal, cd into the unpacked folder and start the game:  
@@ -114,7 +114,7 @@ flac/vorbis/opus are not wired into the cross build yet.
 Both platform archives are built from a tagged checkout:
 `linux/release.sh <tag>` (which runs the full test suite and the
 shipped-bytes checks itself before packaging) and `windows/winpack.sh`
-after `make win64`. Each emits `sha256sums.txt` plus a detached
+after `make win64`. Each emits `sha256sums-<OS-x64>.txt` plus a detached
 signature, and aborts the build if its own signature fails to verify
 against the public key.
 
@@ -125,12 +125,12 @@ linux builds. The full `make check` suite is the gate for every release,
 Windows code included.
 
 Archives are named `p2pquake-<version>-<OS-x64>.zip` and ship with
-`sha256sums.txt` and a detached SSH signature (`<zip>.sig`). The trust
+`sha256sums-<OS-x64>.txt` and a detached SSH signature (`<zip>.sig`). The trust
 anchor is `RELEASE-PUBKEY` at the root of this repository — read it from
 a source you already trust, not from the same download as the archive:
 
 ```
-sha256sum -c sha256sums.txt
+sha256sum -c sha256sums-<OS-x64>.txt
 printf 'p2pquake-releases %s\n' "$(cat RELEASE-PUBKEY)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I p2pquake-releases -n file \
     -s p2pquake-<version>-<OS-x64>.zip.sig \
