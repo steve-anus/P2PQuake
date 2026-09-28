@@ -1,4 +1,4 @@
-# p2pquake
+# P2PQuake
 
 Serverless peer-to-peer Quake: a patched QuakeSpasm engine plus a Node
 match peer that discovers peers over a DHT, authenticates sessions with
