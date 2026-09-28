@@ -55,7 +55,7 @@
  
  /* Synthetic address family tag: no Linux/BSD AF_* occupies 'q'. The
   * datagram layer only ever passes struct qsockaddr through, so any
-@@ -348,16 +356,76 @@
+@@ -348,16 +356,100 @@
   * ------------------------------------------------------- daemon control
   */
  
@@ -66,6 +66,8 @@
 + * entry can never be redirected by a swapped -qn-peer value. */
 +static char qn_win_entry_path[512];
 +static const char *qn_win_entry;
++static char qn_win_gamedata_path[512];
++static const char *qn_win_gamedata;
 +
 +static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 +{
@@ -74,6 +76,7 @@
 +	struct stat st;
 +
 +	qn_win_entry = NULL;
++	qn_win_gamedata = NULL;
 +	if (n < t)
 +	{
 +		qn_note ("peer program must be the packaged runtime node");
@@ -105,6 +108,23 @@
 +		return false;
 +	}
 +	qn_win_entry = qn_win_entry_path;
++	/* The packaged layout is flat (peer/, runtime/), so the daemon's
++	 * default manifest lookup (../../gamedata.sha256, sized for the
++	 * posix src/peer/ tree) lands one dir above the package: name it
++	 * explicitly instead, from the same validated package root. */
++	if (q_snprintf (qn_win_gamedata_path, sizeof (qn_win_gamedata_path),
++		"%.*sgamedata.sha256", (int) (n - t), prog)
++		>= (int) sizeof (qn_win_gamedata_path))
++	{
++		qn_note ("gamedata manifest path too long");
++		return false;
++	}
++	if (stat (qn_win_gamedata_path, &st) != 0 || !S_ISREG (st.st_mode))
++	{
++		qn_note ("gamedata manifest missing from the package");
++		return false;
++	}
++	qn_win_gamedata = qn_win_gamedata_path;
 +	return true;
 +}
 +#endif
@@ -114,7 +134,7 @@
   * anywhere near argv, env, or any log line (spec section 4). */
  static void qn_paravec (const char *prog, const char *uds, const char *dir,
 -                        const char *name, char *argv[8])
-+                        const char *name, char *argv[12])
++                        const char *name, char *argv[14])
  {
  	static char nm[32];
  	int i = 0;
@@ -129,11 +149,15 @@
 +		return;	/* cannot name our own image: no join */
 +	argv[i++] = (char *) "--self-image";
 +	argv[i++] = qn_win_image;
++	if (qn_win_gamedata == NULL)
++		return;	/* resolve stage refuses without it: belt */
++	argv[i++] = (char *) "--gamedata";
++	argv[i++] = (char *) qn_win_gamedata;
 +#endif
  	argv[i++] = "--uds";
  	argv[i++] = (char *) uds;
  	/* The daemon's state directory (identity key, pinning epochs) is
-@@ -410,6 +478,18 @@
+@@ -410,6 +502,18 @@
  	return h;
  }
  
@@ -152,7 +176,7 @@
  static qboolean qn_open_state_dir (void)
  {
  	const char *root = NULL;
-@@ -424,13 +504,28 @@
+@@ -424,13 +528,28 @@
  	}
  	if (p)
  		root = com_argv[p + 1];
@@ -182,7 +206,7 @@
  		const char *xdg = getenv ("XDG_STATE_HOME");
  		const char *home = getenv ("HOME");
  		static char rbuf[256];
-@@ -448,6 +543,7 @@
+@@ -448,6 +567,7 @@
  			return false;
  		}
  		root = rbuf;
@@ -190,7 +214,7 @@
  	}
  	/* the gate is against qn_statedir: that buffer, not inst, is what
  	 * travels to the daemon as --dir; validating one path and handing
-@@ -491,6 +587,21 @@
+@@ -491,6 +611,21 @@
  		dir = com_argv[p + 1];
  	if (dir == NULL)
  	{
@@ -212,7 +236,7 @@
  		const char *xdg = getenv ("XDG_RUNTIME_DIR");
  		int r;
  		if (xdg != NULL && *xdg != '\0')
-@@ -507,9 +618,10 @@
+@@ -507,9 +642,10 @@
  		/* The transport re-validates ownership and the 0700 mode of
  		 * whatever this resolves to; a hostile preexisting dir is
  		 * refused there, not here. */
@@ -224,7 +248,7 @@
  	{
  		qn_note ("socket directory must be an absolute path");
  		return false;
-@@ -531,10 +643,18 @@
+@@ -531,10 +667,18 @@
  		   derives its tag from dirname(--uds); strip trailing
  		   slashes so "-qn-dir /x/" and "/x" are one identity */
  		size_t l = Q_strlen (qn_sockdir);
@@ -244,7 +268,7 @@
  	qn_listenfd = qn_transport_listen (qn_sockpath, &reason);
  	if (qn_listenfd < 0)
  	{
-@@ -544,7 +664,7 @@
+@@ -544,7 +688,7 @@
  	}
  	if (!qn_open_state_dir ())
  	{
@@ -253,16 +277,16 @@
  		qn_listenfd = -1;
  		return false;
  	}
-@@ -583,7 +703,7 @@
+@@ -583,7 +727,7 @@
  	const char *reason = NULL;
  	const char *prog_over = NULL;
  	char prog[512];
 -	char *argv[8];
-+	char *argv[12];
++	char *argv[14];
  	const char *name = NULL;
  	int p;
  
-@@ -618,6 +738,20 @@
+@@ -618,6 +762,20 @@
  		qn_note (reason != NULL ? reason : "peer program refused");
  		return false;
  	}
@@ -283,7 +307,7 @@
  	p = COM_CheckParm ("-qn-name");
  	if (p && p < com_argc - 1)
  		name = com_argv[p + 1];
-@@ -662,6 +796,16 @@
+@@ -662,6 +820,16 @@
  	return -1;
  }
  
@@ -300,7 +324,7 @@
  /* First live client-role slot: the engine plays one client at a time
   * (the datagram layer owns at most one outbound qsocket per connect),
   * so first match is the only match while a connect is pending. */
-@@ -1189,10 +1333,13 @@
+@@ -1189,10 +1357,13 @@
  		if (qn_client_lane_up)
  		{
  			/* Client lane: the announced peer is the host.
@@ -317,7 +341,7 @@
  				memcpy (qn_sockets[i].addr.key, t.val, 8);
  		}
  		else
-@@ -1217,7 +1364,10 @@
+@@ -1217,7 +1388,10 @@
  			 * table entry for the rest of the run. */
  			for (i = 0; i < MAX_QN_SOCKETS; i++)
  			{
@@ -329,7 +353,7 @@
  				    memcmp (qn_sockets[i].addr.key, t.val, 8) != 0)
  					continue;
  				if (qn_sockets[i].alias)
-@@ -1355,9 +1505,9 @@
+@@ -1355,9 +1529,9 @@
  			 * through a listener nobody asked to keep open */
  			if (qn_listenfd >= 0)
  			{
@@ -341,7 +365,7 @@
  			}
  			qn_note ("daemon ended the session");
  		}
-@@ -1370,37 +1520,32 @@
+@@ -1370,37 +1544,32 @@
  
  	if (qn_listenfd >= 0 && qn_tr.fd < 0)
  	{
@@ -389,7 +413,7 @@
  	if (qn_tr.fd >= 0)
  	{
  		st = qn_transport_poll (&qn_tr, now_ms);
-@@ -1602,7 +1747,7 @@
+@@ -1602,7 +1771,7 @@
  		qn_transport_close (&qn_tr);
  	if (qn_listenfd >= 0)
  	{

@@ -363,6 +363,8 @@ static void crockford_encode10 (const uint8_t in[10], char out[17])
  * entry can never be redirected by a swapped -qn-peer value. */
 static char qn_win_entry_path[512];
 static const char *qn_win_entry;
+static char qn_win_gamedata_path[512];
+static const char *qn_win_gamedata;
 
 static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 {
@@ -371,6 +373,7 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 	struct stat st;
 
 	qn_win_entry = NULL;
+	qn_win_gamedata = NULL;
 	if (n < t)
 	{
 		qn_note ("peer program must be the packaged runtime node");
@@ -402,6 +405,23 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 		return false;
 	}
 	qn_win_entry = qn_win_entry_path;
+	/* The packaged layout is flat (peer/, runtime/), so the daemon's
+	 * default manifest lookup (../../gamedata.sha256, sized for the
+	 * posix src/peer/ tree) lands one dir above the package: name it
+	 * explicitly instead, from the same validated package root. */
+	if (q_snprintf (qn_win_gamedata_path, sizeof (qn_win_gamedata_path),
+		"%.*sgamedata.sha256", (int) (n - t), prog)
+		>= (int) sizeof (qn_win_gamedata_path))
+	{
+		qn_note ("gamedata manifest path too long");
+		return false;
+	}
+	if (stat (qn_win_gamedata_path, &st) != 0 || !S_ISREG (st.st_mode))
+	{
+		qn_note ("gamedata manifest missing from the package");
+		return false;
+	}
+	qn_win_gamedata = qn_win_gamedata_path;
 	return true;
 }
 #endif
@@ -410,7 +430,7 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
  * optional display name. Flags are not secrets; the AUTH token is never
  * anywhere near argv, env, or any log line (spec section 4). */
 static void qn_paravec (const char *prog, const char *uds, const char *dir,
-                        const char *name, char *argv[12])
+                        const char *name, char *argv[14])
 {
 	static char nm[32];
 	int i = 0;
@@ -425,6 +445,10 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 		return;	/* cannot name our own image: no join */
 	argv[i++] = (char *) "--self-image";
 	argv[i++] = qn_win_image;
+	if (qn_win_gamedata == NULL)
+		return;	/* resolve stage refuses without it: belt */
+	argv[i++] = (char *) "--gamedata";
+	argv[i++] = (char *) qn_win_gamedata;
 #endif
 	argv[i++] = "--uds";
 	argv[i++] = (char *) uds;
@@ -703,7 +727,7 @@ static qboolean qn_ensure_daemon (void)
 	const char *reason = NULL;
 	const char *prog_over = NULL;
 	char prog[512];
-	char *argv[12];
+	char *argv[14];
 	const char *name = NULL;
 	int p;
 
