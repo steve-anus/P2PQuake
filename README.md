@@ -1,5 +1,7 @@
 # P2PQuake
 
+<img width="1920" height="1080" alt="spasm0000" src="https://github.com/user-attachments/assets/0618b4a3-214d-4f2b-8f49-4e17f9d23cb8" />
+
 Serverless peer-to-peer Quake: a patched [QuakeSpasm](https://github.com/sezero/quakespasm) engine plus a Node
 match peer that discovers peers over a DHT, authenticates sessions with
 Noise, verifies game traffic with signed match envelopes, and falls back
