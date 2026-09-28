@@ -1,0 +1,79 @@
+--- a/Quake/Makefile.w64
++++ b/Quake/Makefile.w64
+@@ -46,6 +46,9 @@
+ 
+ CPUFLAGS=
+ LDFLAGS?= -m64 -mwindows -static-libgcc
++WIN_QN_CFLAGS ?=
++WIN_MPG_CFLAGS ?=
++CFLAGS += $(WIN_QN_CFLAGS) $(WIN_MPG_CFLAGS)
+ DFLAGS ?=
+ CFLAGS ?= -m64 -Wall -Wno-trigraphs -MMD
+ #CFLAGS += $(call check_gcc,-std=gnu11,)
+@@ -167,6 +170,12 @@
+ 
+ LIBS = $(COMMON_LIBS) $(NET_LIBS) $(CODEC_LINK) $(CODECLIBS)
+ 
++# p2pquake: named-pipe DACL + CSPRNG imports
++LIBS += -lbcrypt -ladvapi32
++# SDL2 (static from the official devel archive) drags its full win32 dep set
++LIBS += -lshlwapi -lole32 -loleaut32 -lsetupapi -lversion -limm32 \
++        -luuid -lwinmm -ldinput8 -luser32 -lgdi32 -lkernel32
++
+ # ---------------------------
+ # objects
+ # ---------------------------
+@@ -188,10 +197,19 @@
+ SYSOBJ_CDA = cd_sdl.o
+ SYSOBJ_INPUT = in_sdl.o
+ SYSOBJ_GL_VID= gl_vidsdl.o
+-SYSOBJ_NET = net_win.o net_wins.o net_wipx.o
++### p2pquake: the landriver's Plane A machinery is shared with the
++### standalone test harness, so its sources live in the project's driver
++### directory (same block as the unix Makefile). vpath finds them.
++QNDIR = ../../../driver
++vpath %.c $(QNDIR)
++CFLAGS += -I$(QNDIR)
++SYSOBJ_NET = net_bsd.o net_udp.o \
++	net_qn.o qn_transport.o qn_frame.o qn_spawn.o qn_stext.o qn_pad.o \
++	qn_causes.o qn_menu.o qn_maps.o qn_scmd.o \
++	qn_transport_win.o qn_spawn_win.o qn_winsock_win.o
+ SYSOBJ_SYS = pl_win.o sys_sdl_win.o
+ SYSOBJ_MAIN= main_sdl.o
+-SYSOBJ_RES = QuakeSpasm.res
++SYSOBJ_RES = # no Windows/ resource tree in this vendored snapshot
+ 
+ GLOBJS = \
+ 	gl_refrag.o \
+@@ -263,16 +281,20 @@
+ 
+ .PHONY:	clean debug release
+ 
++OBJDIR ?= build-w64
+ DEFAULT_TARGET = quakespasm.exe
+ all: $(DEFAULT_TARGET)
+ 
+-%.o:	%.c
++$(OBJDIR):
++	mkdir -p $(OBJDIR)
++
++$(OBJDIR)/%.o:	%.c | $(OBJDIR)
+ 	$(CC) $(DFLAGS) -c $(CFLAGS) $(SDL_CFLAGS) -o $@ $<
+ %.res:	../Windows/%.rc
+ 	$(WINDRES) -I../Windows --output-format=coff --target=pe-x86-64 -o $@ $<
+ 
+-quakespasm.exe: $(OBJS) $(SYSOBJ_RES)
+-	$(LINKER) $(OBJS) $(SYSOBJ_RES) $(LDFLAGS) $(LIBS) $(SDL_LIBS) -o $@
++quakespasm.exe: $(addprefix $(OBJDIR)/,$(OBJS)) $(SYSOBJ_RES) | $(OBJDIR)
++	$(LINKER) $(addprefix $(OBJDIR)/,$(OBJS)) $(SYSOBJ_RES) $(LDFLAGS) $(LIBS) $(SDL_LIBS) -o $@
+ 	$(call do_strip,$@)
+ 
+ release:	quakespasm.exe
+@@ -280,6 +302,6 @@
+ 	$(error Use "make DEBUG=1")
+ 
+ clean:
+-	$(RM) *.o *.d *.res $(DEFAULT_TARGET)
++	$(RM) $(OBJDIR)/*.o $(OBJDIR)/*.d $(DEFAULT_TARGET)
+ 
+ sinclude $(OBJS:.o=.d)

@@ -206,7 +206,7 @@ CFLAGS += -I$(QNDIR)
 SYSOBJ_NET = net_bsd.o net_udp.o \
 	net_qn.o qn_transport.o qn_frame.o qn_spawn.o qn_stext.o qn_pad.o \
 	qn_causes.o qn_menu.o qn_maps.o qn_scmd.o \
-	qn_transport_win.o qn_spawn_win.o
+	qn_transport_win.o qn_spawn_win.o qn_winsock_win.o
 SYSOBJ_SYS = pl_win.o sys_sdl_win.o
 SYSOBJ_MAIN= main_sdl.o
 SYSOBJ_RES = # no Windows/ resource tree in this vendored snapshot

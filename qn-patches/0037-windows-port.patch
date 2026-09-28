@@ -1,0 +1,470 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -1,9 +1,9 @@
+ /*
+  * net_qn.c -- p2pquake landriver: virtual sockets for the local qn-peer
+  * daemon. All game traffic over this driver travels through the engine's
+- * own qn-peer child over the Plane A Unix-domain socket (the frame
+- * grammar is src/protocol/qn_protocol.md); the daemon owns every remote
+- * byte.
++ * own qn-peer child over the Plane A endpoint: a Unix-domain socket on
++ * posix, a per-user named pipe on Windows (the frame grammar is
++ * src/protocol/qn_protocol.md); the daemon owns every remote byte.
+  *
+  * Postures:
+  *  - Standby (default): QN_Init registers the driver, which refuses every
+@@ -25,9 +25,11 @@
+  *   -qn-peer <abspath>     peer program (default: "qn-peer" beside the
+  *                          engine binary; never a PATH search)
+  *   -qn-dir <abspath>      socket directory (default: $XDG_RUNTIME_DIR/
+- *                          p2pquake, else /tmp/p2pquake-<uid>; ownership
+- *                          and the 0700 mode are re-validated by the
+- *                          transport on every use)
++ *                          p2pquake, else /tmp/p2pquake-<uid>; on Windows
++ *                          %LOCALAPPDATA%/p2pquake, and the endpoint is a
++ *                          named pipe embedding the instance tag of this
++ *                          directory; ownership and the 0700 mode are
++ *                          re-validated by the transport on every use)
+  *   -qn-statedir <abspath> daemon state root for identity keys and
+  *                          advert epochs (default: $XDG_STATE_HOME/
+  *                          p2pquake, else $HOME/.p2pquake): durable,
+@@ -45,19 +47,25 @@
+ #include "quakedef.h"
+ #include "net_defs.h"
+ 
+-#include <poll.h>
++#include <sys/stat.h>
+ 
+ #include "qn_causes.h"
+ #include "qn_frame.h"
+ #include "qn_spawn.h"
++#ifdef _WIN32
++#include "qn_spawn_win.h"
++#endif
+ #include "qn_stext.h"
+ #include "qn_transport.h"
+ #include "qn_buildid.h"
+ 
+ #include "net_qn.h"
+ 
++#ifndef _WIN32
+ extern char	**environ;	/* process environment, checked for the token
+ 				 * by qn_spawn_start before any exec */
++#endif
++
+ 
+ /* Synthetic address family tag: no Linux/BSD AF_* occupies 'q'. The
+  * datagram layer only ever passes struct qsockaddr through, so any
+@@ -348,16 +356,76 @@
+  * ------------------------------------------------------- daemon control
+  */
+ 
++#ifdef _WIN32
++/* Packaged win layout: <root>\runtime\node.exe launches
++ * <root>\peer\qn-peer.cjs. The daemon program must be exactly that
++ * runtime sibling (case-insensitive, either separator), so the script
++ * entry can never be redirected by a swapped -qn-peer value. */
++static char qn_win_entry_path[512];
++static const char *qn_win_entry;
++
++static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
++{
++	static const char tail[] = "runtime/node.exe";
++	size_t n = strlen (prog), t = sizeof (tail) - 1, i;
++	struct stat st;
++
++	qn_win_entry = NULL;
++	if (n < t)
++	{
++		qn_note ("peer program must be the packaged runtime node");
++		return false;
++	}
++	for (i = 0; i < t; i++)
++	{
++		char a = prog[n - t + i], b = tail[i];
++		if (a >= 'A' && a <= 'Z')
++			a += 'a' - 'A';
++		if (a == '\\')
++			a = '/';
++		if (a != b)
++		{
++			qn_note ("peer program must be the packaged runtime node");
++			return false;
++		}
++	}
++	if (q_snprintf (qn_win_entry_path, sizeof (qn_win_entry_path),
++		"%.*speer/qn-peer.cjs", (int) (n - t), prog)
++		>= (int) sizeof (qn_win_entry_path))
++	{
++		qn_note ("peer entry path too long");
++		return false;
++	}
++	if (stat (qn_win_entry_path, &st) != 0 || !S_ISREG (st.st_mode))
++	{
++		qn_note ("peer entry missing from the package");
++		return false;
++	}
++	qn_win_entry = qn_win_entry_path;
++	return true;
++}
++#endif
++
+ /* Build the daemon argv: program identity plus the socket path and an
+  * optional display name. Flags are not secrets; the AUTH token is never
+  * anywhere near argv, env, or any log line (spec section 4). */
+ static void qn_paravec (const char *prog, const char *uds, const char *dir,
+-                        const char *name, char *argv[8])
++                        const char *name, char *argv[12])
+ {
+ 	static char nm[32];
+ 	int i = 0;
+ 
+ 	argv[i++] = (char *) prog;
++#ifdef _WIN32
++	if (qn_win_entry == NULL)
++		return;	/* the resolve stage refuses without it: belt */
++	argv[i++] = (char *) qn_win_entry;
++	static char qn_win_image[520];
++	if (qnw_self_image (qn_win_image, sizeof qn_win_image) != 0)
++		return;	/* cannot name our own image: no join */
++	argv[i++] = (char *) "--self-image";
++	argv[i++] = qn_win_image;
++#endif
+ 	argv[i++] = "--uds";
+ 	argv[i++] = (char *) uds;
+ 	/* The daemon's state directory (identity key, pinning epochs) is
+@@ -410,6 +478,18 @@
+ 	return h;
+ }
+ 
++static qboolean qn_path_is_abs (const char *p)
++{
++#ifdef _WIN32
++	char c0 = p[0];
++	return ((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z'))
++		&& p[1] == ':' && (p[2] == '\\' || p[2] == '/');
++#else
++	return p[0] == '/';
++#endif
++}
++
++
+ static qboolean qn_open_state_dir (void)
+ {
+ 	const char *root = NULL;
+@@ -424,13 +504,28 @@
+ 	}
+ 	if (p)
+ 		root = com_argv[p + 1];
+-	if (root != NULL && root[0] != '/')
++	if (root != NULL && !qn_path_is_abs (root))
+ 	{
+ 		qn_note ("state directory must be an absolute path");
+ 		return false;
+ 	}
+ 	if (root == NULL)
+ 	{
++#ifdef _WIN32
++		static char rbuf[256];
++		const char *la = getenv ("LOCALAPPDATA");
++		int r;
++		if (la == NULL || !qn_path_is_abs (la))
++			r = (int) q_strlcpy (rbuf, qn_sockdir, sizeof (rbuf));
++		else
++			r = q_snprintf (rbuf, sizeof (rbuf), "%s/p2pquake", la);
++		if (r >= (int) sizeof (rbuf))
++		{
++			qn_note ("state directory too long");
++			return false;
++		}
++		root = rbuf;
++#else
+ 		const char *xdg = getenv ("XDG_STATE_HOME");
+ 		const char *home = getenv ("HOME");
+ 		static char rbuf[256];
+@@ -448,6 +543,7 @@
+ 			return false;
+ 		}
+ 		root = rbuf;
++#endif
+ 	}
+ 	/* the gate is against qn_statedir: that buffer, not inst, is what
+ 	 * travels to the daemon as --dir; validating one path and handing
+@@ -491,6 +587,21 @@
+ 		dir = com_argv[p + 1];
+ 	if (dir == NULL)
+ 	{
++#ifdef _WIN32
++		const char *la = getenv ("LOCALAPPDATA");
++		int r;
++		if (la == NULL || !qn_path_is_abs (la))
++		{
++			qn_note ("no LOCALAPPDATA: pass -qn-dir");
++			return false;
++		}
++		r = q_snprintf (fallback, sizeof (fallback), "%s/p2pquake", la);
++		if (r >= (int) sizeof (fallback))
++		{
++			qn_note ("socket directory too long");
++			return false;
++		}
++#else
+ 		const char *xdg = getenv ("XDG_RUNTIME_DIR");
+ 		int r;
+ 		if (xdg != NULL && *xdg != '\0')
+@@ -507,9 +618,10 @@
+ 		/* The transport re-validates ownership and the 0700 mode of
+ 		 * whatever this resolves to; a hostile preexisting dir is
+ 		 * refused there, not here. */
++#endif
+ 		dir = fallback;
+ 	}
+-	if (dir[0] != '/')
++	if (!qn_path_is_abs (dir))
+ 	{
+ 		qn_note ("socket directory must be an absolute path");
+ 		return false;
+@@ -531,10 +643,18 @@
+ 		   derives its tag from dirname(--uds); strip trailing
+ 		   slashes so "-qn-dir /x/" and "/x" are one identity */
+ 		size_t l = Q_strlen (qn_sockdir);
+-		while (l > 1 && qn_sockdir[l - 1] == '/')
++		while (l > 1 && (qn_sockdir[l - 1] == '/' || qn_sockdir[l - 1] == '\\'))
+ 			qn_sockdir[--l] = '\0';
+ 	}
++#ifdef _WIN32
++	/* The tag is embedded in the name: the daemon cannot re-hash the
++	 * dirname of a pipe path (it is constant), so the engine hands the
++	 * instance identity through the name itself. */
++	q_snprintf (qn_sockpath, sizeof (qn_sockpath),
++		"\\\\.\\pipe\\p2pquake-%08x", qn_fnv1a (qn_sockdir));
++#else
+ 	q_snprintf (qn_sockpath, sizeof (qn_sockpath), "%s/engine.sock", dir);
++#endif
+ 	qn_listenfd = qn_transport_listen (qn_sockpath, &reason);
+ 	if (qn_listenfd < 0)
+ 	{
+@@ -544,7 +664,7 @@
+ 	}
+ 	if (!qn_open_state_dir ())
+ 	{
+-		close (qn_listenfd);
++		qn_transport_close_listener (qn_listenfd);
+ 		qn_listenfd = -1;
+ 		return false;
+ 	}
+@@ -583,7 +703,7 @@
+ 	const char *reason = NULL;
+ 	const char *prog_over = NULL;
+ 	char prog[512];
+-	char *argv[8];
++	char *argv[12];
+ 	const char *name = NULL;
+ 	int p;
+ 
+@@ -618,6 +738,20 @@
+ 		qn_note (reason != NULL ? reason : "peer program refused");
+ 		return false;
+ 	}
++
++#ifdef _WIN32
++	if (!qn_win_prepare_entry (prog, &reason))
++	{
++		qn_demand_reported = qn_demand;
++		qn_note (reason != NULL ? reason : "peer entry refused");
++		return false;
++	}
++#endif
++	/* Windows accept gate: only the daemon image named here may
++		 * connect (the unix twin needs nothing: SO_PEERCRED uid equality
++		 * checks it). Armed before the spawn, so a connection can never
++		 * arrive unarmed. */
++	qn_transport_expect_peer (prog);
+ 	p = COM_CheckParm ("-qn-name");
+ 	if (p && p < com_argc - 1)
+ 		name = com_argv[p + 1];
+@@ -662,6 +796,16 @@
+ 	return -1;
+ }
+ 
++static qboolean qn_key8_set (const uint8_t k[8])
++{
++	int i;
++
++	for (i = 0; i < 8; i++)
++		if (k[i])
++			return true;
++	return false;
++}
++
+ /* First live client-role slot: the engine plays one client at a time
+  * (the datagram layer owns at most one outbound qsocket per connect),
+  * so first match is the only match while a connect is pending. */
+@@ -1189,10 +1333,13 @@
+ 		if (qn_client_lane_up)
+ 		{
+ 			/* Client lane: the announced peer is the host.
+-			 * Stamp its key onto our client socket; it must
+-			 * not join the host-side table. */
++			 * Key its identity onto our client socket; it must
++			 * not join the host-side table.  Only ever fill
++			 * a keyless slot: roster members are announced
++			 * on this lane too, and re-keying would hand CL's
++			 * live slot to the PEER_DOWN key sweep. */
+ 			int i = qn_client_slot ();
+-			if (i >= 0)
++			if (i >= 0 && !qn_key8_set (qn_sockets[i].addr.key))
+ 				memcpy (qn_sockets[i].addr.key, t.val, 8);
+ 		}
+ 		else
+@@ -1217,7 +1364,10 @@
+ 			 * table entry for the rest of the run. */
+ 			for (i = 0; i < MAX_QN_SOCKETS; i++)
+ 			{
+-				if (!qn_sockets[i].inuse ||
++				/* client-role slots are CL's own server channel:
++				 * roster departures never own its death (the
++				 * daemon's FATAL does); the sweep is host-side. */
++				if (!qn_sockets[i].inuse || qn_sockets[i].isclient ||
+ 				    memcmp (qn_sockets[i].addr.key, t.val, 8) != 0)
+ 					continue;
+ 				if (qn_sockets[i].alias)
+@@ -1355,9 +1505,9 @@
+ 			 * through a listener nobody asked to keep open */
+ 			if (qn_listenfd >= 0)
+ 			{
+-				close (qn_listenfd);
++				qn_transport_close_listener (qn_listenfd);
+ 				qn_listenfd = -1;
+-				unlink (qn_sockpath);
++				qn_transport_forget_listener (qn_sockpath);
+ 			}
+ 			qn_note ("daemon ended the session");
+ 		}
+@@ -1370,37 +1520,32 @@
+ 
+ 	if (qn_listenfd >= 0 && qn_tr.fd < 0)
+ 	{
+-		struct pollfd pt;
+-		/* poll() first: the accept wrapper does not distinguish an
+-		 * empty listener from a real failure, and an empty listener
+-		 * is the normal case, not a condition to report. */
+-		pt.fd = qn_listenfd;
+-		pt.events = POLLIN;
+-		pt.revents = 0;
+-		if (poll (&pt, 1, 0) == 1 && (pt.revents & POLLIN) != 0)
++		const char *reason = NULL;
++		int rdy = qn_transport_can_accept (qn_listenfd, &reason);
++		if (rdy == 1)
+ 		{
+-			const char *reason = NULL;
+ 			int fd = qn_transport_accept (qn_listenfd, &reason);
+ 			if (fd >= 0)
+ 			{
+ 				if (qn_token_live)
+ 					qn_transport_init (&qn_tr, fd, qn_token,
+-					                     now_ms);
++						                     now_ms);
+ 				else
+-					close (fd);	/* no session pending: drop */
++					qn_transport_drop (fd);	/* no session pending: drop */
+ 			}
+ 			else if (reason != NULL)
+-				qn_note (reason);
++					qn_note (reason);
+ 		}
+-		else if (pt.revents != 0)
++		else if (rdy < 0)
+ 		{
+-			/* listener error (never POLLIN-less success) */
+-			close (qn_listenfd);
++				/* listener error (never a readiness-less success) */
++			qn_transport_close_listener (qn_listenfd);
+ 			qn_listenfd = -1;
+ 			qn_demand_reported = 0;
+ 		}
+ 	}
+ 
++
+ 	if (qn_tr.fd >= 0)
+ 	{
+ 		st = qn_transport_poll (&qn_tr, now_ms);
+@@ -1602,7 +1747,7 @@
+ 		qn_transport_close (&qn_tr);
+ 	if (qn_listenfd >= 0)
+ 	{
+-		close (qn_listenfd);
++		qn_transport_close_listener (qn_listenfd);
+ 		qn_listenfd = -1;
+ 	}
+ 	qn_spawn_stop (&qn_child);
+--- a/Quake/net_udp.c
++++ b/Quake/net_udp.c
+@@ -34,6 +34,13 @@
+ static in_addr_t	myAddr;
+ 
+ #include "net_udp.h"
++#ifdef _WIN32
++/* net_sys.h's socketerror() demands the winsock error table; the file
++ * that owned it upstream is not part of this build, so this translation
++ * unit takes the non-static copy. */
++#define __wsaerr_static
++#include "wsaerror.h"
++#endif
+ 
+ //=============================================================================
+ 
+@@ -73,7 +80,11 @@
+ 		if (!(local = gethostbyname(buff)))
+ 		{
+ 			Con_SafePrintf("UDP_Init: WARNING: gethostbyname failed (%s)\n",
++#ifdef _WIN32
++						"winsock resolver error");
++#else
+ 						hstrerror(h_errno));
++#endif
+ 		}
+ 		else if (local->h_addrtype != AF_INET)
+ 		{
+@@ -159,7 +170,11 @@
+ {
+ 	sys_socket_t newsocket;
+ 	struct sockaddr_in address;
++#ifdef _WIN32
++	u_long _true = 1;
++#else
+ 	int _true = 1;
++#endif
+ 	int err;
+ 
+ 	if ((newsocket = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET)
+@@ -270,7 +285,11 @@
+ 	if (net_acceptsocket == INVALID_SOCKET)
+ 		return INVALID_SOCKET;
+ 
++#ifdef _WIN32
++	if (ioctlsocket (net_acceptsocket, FIONREAD, (u_long *) &available) == SOCKET_ERROR)
++#else
+ 	if (ioctl (net_acceptsocket, FIONREAD, &available) == -1)
++#endif
+ 	{
+ 		int err = SOCKETERRNO;
+ 		Sys_Error ("UDP: ioctlsocket (FIONREAD) failed (%s)", socketerror(err));
+@@ -289,7 +308,7 @@
+ 	socklen_t addrlen = sizeof(struct qsockaddr);
+ 	int ret;
+ 
+-	ret = recvfrom (socketid, buf, len, 0, (struct sockaddr *)addr, &addrlen);
++	ret = recvfrom (socketid, (char *) buf, len, 0, (struct sockaddr *)addr, &addrlen);
+ 	if (ret == SOCKET_ERROR)
+ 	{
+ 		int err = SOCKETERRNO;
+@@ -346,7 +365,7 @@
+ {
+ 	int	ret;
+ 
+-	ret = sendto (socketid, buf, len, 0, (struct sockaddr *)addr,
++	ret = sendto (socketid, (char *) buf, len, 0, (struct sockaddr *)addr,
+ 							sizeof(struct qsockaddr));
+ 	if (ret == SOCKET_ERROR)
+ 	{
