@@ -93,9 +93,9 @@ runtime DLLs and packages beside the same pinned node runtime
 (win32-x64) the peer runs on:
 
 ```
-tools/winbuild.sh --fetch   # llvm-mingw + SDL2 mingw-devel under $WINBUILD
+windows/winbuild.sh --fetch   # llvm-mingw + SDL2 mingw-devel under $WINBUILD
 make win64                  # cross-compile quakespasm.exe
-tools/winpack.sh            # stage + zip the self-contained win-x64 archive
+windows/winpack.sh            # stage + zip the self-contained win-x64 archive
 ```
 
 `WINBUILD` points at the toolchain directory (default: `winbuild/` in

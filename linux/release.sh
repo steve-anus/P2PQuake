@@ -33,26 +33,26 @@ for a in "$@"; do
 done
 [ -n "$tag" ] || usage
 
-REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO_ROOT"
 TMPBASE=${TMPDIR:-/tmp}
 
-command -v zip >/dev/null || { echo "release.sh: zip missing" >&2; exit 1; }
-command -v strip >/dev/null || { echo "release.sh: strip missing" >&2; exit 1; }
-command -v ssh-keygen >/dev/null || { echo "release.sh: ssh-keygen missing" >&2; exit 1; }
-command -v npm >/dev/null || { echo "release.sh: npm missing" >&2; exit 1; }
+command -v zip >/dev/null || { echo "linux/release.sh: zip missing" >&2; exit 1; }
+command -v strip >/dev/null || { echo "linux/release.sh: strip missing" >&2; exit 1; }
+command -v ssh-keygen >/dev/null || { echo "linux/release.sh: ssh-keygen missing" >&2; exit 1; }
+command -v npm >/dev/null || { echo "linux/release.sh: npm missing" >&2; exit 1; }
 
 tag_commit=$(git rev-parse "$tag^{commit}" 2>/dev/null) \
-  || { echo "release.sh: '$tag' does not resolve to a commit" >&2; exit 1; }
+  || { echo "linux/release.sh: '$tag' does not resolve to a commit" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] \
-  || { echo "release.sh: working tree not clean" >&2; exit 1; }
+  || { echo "linux/release.sh: working tree not clean" >&2; exit 1; }
 [ "$(git rev-parse HEAD)" = "$tag_commit" ] \
-  || { echo "release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
+  || { echo "linux/release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
 
 NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
 NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-nodejs.sh | cut -d= -f2)
 [ "${#NODE_PIN}" = 64 ] && [ -n "$NODE_VER" ] \
-  || { echo "release.sh: could not read the node pin from setup-nodejs.sh" >&2; exit 1; }
+  || { echo "linux/release.sh: could not read the node pin from setup-nodejs.sh" >&2; exit 1; }
 
 echo "==> battery at $tag"
 make check
@@ -63,7 +63,7 @@ make bootstrap-node
 echo "==> engine build"
 make engine
 ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
-[ -x "$ENGINE_BIN" ] || { echo "release.sh: engine binary missing" >&2; exit 1; }
+[ -x "$ENGINE_BIN" ] || { echo "linux/release.sh: engine binary missing" >&2; exit 1; }
 
 echo "==> runtime/node ($NODE_VER via pinned tarball; setup-nodejs.sh enforces the sha256)"
 # The pin is the TARBALL hash (nodejs.org SHASUMS256); --force makes the
@@ -73,7 +73,7 @@ if [ ! -x bin/node/bin/node ] || \
   tools/setup-nodejs.sh --force
 fi
 [ "$(bin/node/bin/node --version 2>/dev/null)" = "$NODE_VER" ] \
-  || { echo "release.sh: runtime node is not $NODE_VER" >&2; exit 1; }
+  || { echo "linux/release.sh: runtime node is not $NODE_VER" >&2; exit 1; }
 
 STAGE=$(mktemp -d "$TMPBASE/qnrelease-XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
@@ -90,7 +90,7 @@ rm -f "$PKG/id1/config.cfg"
 rm -rf "$PKG"/id1/qn-lane-tmp*
 cp gamedata.sha256 "$PKG/gamedata.sha256"
 (cd "$PKG/id1" && sha256sum -c ../gamedata.sha256 >/dev/null) \
-  || { echo "release.sh: gamedata failed the manifest check" >&2; exit 1; }
+  || { echo "linux/release.sh: gamedata failed the manifest check" >&2; exit 1; }
 
 echo "==> peer daemon"
 cp src/peer/*.cjs "$PKG/src/peer/"
@@ -104,20 +104,20 @@ else
   (cd "$PKG" && npm ci --omit=dev --no-audit --no-fund >/dev/null)
 fi
 [ -d "$PKG/node_modules/hyperdht" ] \
-  || { echo "release.sh: production node_modules missing hyperdht" >&2; exit 1; }
+  || { echo "linux/release.sh: production node_modules missing hyperdht" >&2; exit 1; }
 
 echo "==> engine binary + launcher + runtime"
-[ -f LICENSE.md ] || { echo "release.sh: LICENSE.md missing" >&2; exit 1; }
+[ -f LICENSE.md ] || { echo "linux/release.sh: LICENSE.md missing" >&2; exit 1; }
 cp LICENSE.md "$PKG/LICENSE.md"
-[ -f README.md ] || { echo "release.sh: README.md missing" >&2; exit 1; }
+[ -f README.md ] || { echo "linux/release.sh: README.md missing" >&2; exit 1; }
 cp README.md "$PKG/README.md"
-[ -f p2pquake.desktop ] || { echo "release.sh: p2pquake.desktop missing" >&2; exit 1; }
+[ -f p2pquake.desktop ] || { echo "linux/release.sh: p2pquake.desktop missing" >&2; exit 1; }
 cp p2pquake.desktop "$PKG/p2pquake.desktop"
 cp "$ENGINE_BIN" "$PKG/quakespasm"
 strip --strip-debug "$PKG/quakespasm" 2>/dev/null || strip "$PKG/quakespasm"
 chmod 0755 "$PKG/quakespasm"
 if strings "$PKG/quakespasm" | grep -qE "/home/|/Users/|/root/"; then
-  echo "release.sh: engine binary leaks the build home path" >&2
+  echo "linux/release.sh: engine binary leaks the build home path" >&2
   exit 1
 fi
 # Shipped-bytes hygiene (conventions: absence proven, all artifacts): our
@@ -126,13 +126,13 @@ fi
 # vendor strings (node's own /home/iojs), hence targeted personal scan.
 ME_USER="${USER:-$(id -un)}"; ME_HOME="$HOME"
 [ -n "$ME_USER" ] && [ -n "$ME_HOME" ] \
-  || { echo "release.sh: cannot determine identity for the leak scan" >&2; exit 1; }
+  || { echo "linux/release.sh: cannot determine identity for the leak scan" >&2; exit 1; }
 if grep -rlI -e "$ME_HOME" -e "/home/$ME_USER" -e "/Users/$ME_USER" -e "/root/$ME_USER" "$PKG"; then
-  echo "release.sh: shipped text leaks a personal home path (listed above)" >&2
+  echo "linux/release.sh: shipped text leaks a personal home path (listed above)" >&2
   exit 1
 fi
 if strings "$PKG/runtime/node" | grep -qE "$ME_HOME|/home/$ME_USER|/Users/$ME_USER|/root/$ME_USER"; then
-  echo "release.sh: shipped runtime leaks a personal home path" >&2
+  echo "linux/release.sh: shipped runtime leaks a personal home path" >&2
   exit 1
 fi
 printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).\n// require() alone never runs main(): the module guard checks require.main,\n// which is this launcher. cliMain() is the single CLI bootstrap.\nrequire("./src/peer/qn-peer.cjs").cliMain();\n' > "$PKG/qn-peer"
@@ -157,7 +157,7 @@ verify_zip() {
   esac
   (cd "$DIST" && ssh-keygen -Y verify -f "$allowed" -I "$identity" -n file \
     -s "$ZIP.sig" < "$ZIP") \
-    || { echo "release.sh: signature verification FAILED" >&2; exit 1; }
+    || { echo "linux/release.sh: signature verification FAILED" >&2; exit 1; }
 }
 
 if [ "$dryrun" = 1 ]; then
@@ -168,16 +168,16 @@ if [ "$dryrun" = 1 ]; then
   echo "==> DRY RUN: signed + verified with an ephemeral key (not for distribution)"
 else
   [ -n "${QN_SIGN_KEY:-}" ] \
-    || { echo "release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
+    || { echo "linux/release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
   [ -n "${QN_SIGN_KEY_PUB:-}" ] \
-    || { echo "release.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
+    || { echo "linux/release.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
   IDENTITY="${QN_SIGN_ID:-$(sed -E 's/^[^ ]+ [^ ]+ //' "$QN_SIGN_KEY_PUB" 2>/dev/null | head -n1)}"
   case "$IDENTITY" in
-    ''|*' '*) echo "release.sh: signing identity must be one token — set QN_SIGN_ID" >&2; exit 1 ;;
+    ''|*' '*) echo "linux/release.sh: signing identity must be one token — set QN_SIGN_ID" >&2; exit 1 ;;
   esac
   (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -n file "$ZIP")
   verify_zip "$QN_SIGN_KEY_PUB" "$IDENTITY"
-  echo "release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
+  echo "linux/release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
 fi
 
-echo "release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums.txt)"
+echo "linux/release.sh: OK — dist/$ver/$ZIP (+ .sig, sha256sums.txt)"

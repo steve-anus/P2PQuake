@@ -30,7 +30,7 @@ const L = require('../src/peer/qn_lobby.cjs');
 const ROOT = path.join(__dirname, '..');
 const PEER = path.join(ROOT, 'src', 'peer', 'qn-peer.cjs');
 const FAKE_ENGINE = path.join(ROOT, 'bin', 'fake-engine');
-const WRAPPER = path.join(ROOT, 'tools', 'bootstrap-node.sh');
+const WRAPPER = path.join(ROOT, 'linux', 'bootstrap-node.sh');
 const BUDGET_MS = Number(process.env.QN_BSN_BUDGET || 480000); // T4 rides the spec's 120 s advert floor
 
 const TRUTH = { map: 'lqdm1', title: 'BSN Lobby', maxPlayers: 6, mode: 1, players: 2 };

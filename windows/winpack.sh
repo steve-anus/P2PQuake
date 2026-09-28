@@ -3,7 +3,7 @@
 # Layout: quakespasm.exe, runtime/node.exe, peer/, node_modules/, id1/,
 #         gamedata.sha256, VERSION, README.md
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
 NODE_NUM="${NODE_VER#v}"
 VER=$(cat VERSION)
