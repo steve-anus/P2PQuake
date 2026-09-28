@@ -374,7 +374,7 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 
 	qn_win_entry = NULL;
 	qn_win_gamedata = NULL;
-	if (n < t)
+	if (n <= t || (prog[n - t - 1] != '/' && prog[n - t - 1] != '\\'))
 	{
 		qn_note ("peer program must be the packaged runtime node");
 		return false;
@@ -429,8 +429,8 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
 /* Build the daemon argv: program identity plus the socket path and an
  * optional display name. Flags are not secrets; the AUTH token is never
  * anywhere near argv, env, or any log line (spec section 4). */
-static void qn_paravec (const char *prog, const char *uds, const char *dir,
-                        const char *name, char *argv[14])
+static qboolean qn_paravec (const char *prog, const char *uds, const char *dir,
+                            const char *name, char *argv[14])
 {
 	static char nm[32];
 	int i = 0;
@@ -438,15 +438,27 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 	argv[i++] = (char *) prog;
 #ifdef _WIN32
 	if (qn_win_entry == NULL)
-		return;	/* the resolve stage refuses without it: belt */
+	{
+		argv[i] = NULL;
+		qn_note ("peer entry unavailable; not spawning");
+		return false;
+	}
 	argv[i++] = (char *) qn_win_entry;
 	static char qn_win_image[520];
 	if (qnw_self_image (qn_win_image, sizeof qn_win_image) != 0)
-		return;	/* cannot name our own image: no join */
+	{
+		argv[i] = NULL;
+		qn_note ("cannot name the engine image; not spawning");
+		return false;
+	}
 	argv[i++] = (char *) "--self-image";
 	argv[i++] = qn_win_image;
 	if (qn_win_gamedata == NULL)
-		return;	/* resolve stage refuses without it: belt */
+	{
+		argv[i] = NULL;
+		qn_note ("gamedata manifest unavailable; not spawning");
+		return false;
+	}
 	argv[i++] = (char *) "--gamedata";
 	argv[i++] = (char *) qn_win_gamedata;
 #endif
@@ -477,6 +489,7 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 		argv[i++] = nm;
 	}
 	argv[i] = NULL;
+	return true;
 }
 
 static char qn_statedir[256];	/* resolved daemon --dir state root (identity,
@@ -785,7 +798,11 @@ static qboolean qn_ensure_daemon (void)
 		qn_note ("entropy failure; not spawning");
 		return false;
 	}
-	qn_paravec (prog, qn_sockpath, qn_statedir, name, argv);
+	if (!qn_paravec (prog, qn_sockpath, qn_statedir, name, argv))
+	{
+		qn_demand_reported = qn_demand;
+		return false;	/* qn_paravec noted the reason */
+	}
 	/* The child inherits the engine's environment (it behaves as if the
 	 * user launched the daemon themselves): a node-backed peer must find
 	 * its interpreter via PATH. qn_spawn_start refuses if the AUTH token
