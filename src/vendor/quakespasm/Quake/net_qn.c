@@ -52,6 +52,9 @@
 #include "qn_causes.h"
 #include "qn_frame.h"
 #include "qn_spawn.h"
+#ifdef _WIN32
+#include "qn_spawn_win.h"
+#endif
 #include "qn_stext.h"
 #include "qn_transport.h"
 #include "qn_buildid.h"
@@ -407,7 +410,7 @@ static qboolean qn_win_prepare_entry (const char *prog, const char **reason)
  * optional display name. Flags are not secrets; the AUTH token is never
  * anywhere near argv, env, or any log line (spec section 4). */
 static void qn_paravec (const char *prog, const char *uds, const char *dir,
-                        const char *name, char *argv[10])
+                        const char *name, char *argv[12])
 {
 	static char nm[32];
 	int i = 0;
@@ -417,6 +420,11 @@ static void qn_paravec (const char *prog, const char *uds, const char *dir,
 	if (qn_win_entry == NULL)
 		return;	/* the resolve stage refuses without it: belt */
 	argv[i++] = (char *) qn_win_entry;
+	static char qn_win_image[520];
+	if (qnw_self_image (qn_win_image, sizeof qn_win_image) != 0)
+		return;	/* cannot name our own image: no join */
+	argv[i++] = (char *) "--self-image";
+	argv[i++] = qn_win_image;
 #endif
 	argv[i++] = "--uds";
 	argv[i++] = (char *) uds;
@@ -695,7 +703,7 @@ static qboolean qn_ensure_daemon (void)
 	const char *reason = NULL;
 	const char *prog_over = NULL;
 	char prog[512];
-	char *argv[10];
+	char *argv[12];
 	const char *name = NULL;
 	int p;
 

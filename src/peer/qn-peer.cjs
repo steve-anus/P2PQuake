@@ -315,9 +315,26 @@ function extractBuildId(image) {
 }
 
 function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
-  exePath = undefined }) {
+  exePath = undefined, selfImage = undefined }) {
   const manifest = shaBuf(fs.readFileSync(gamedataPath));
-  const fd = fs.openSync(exePath ?? `/proc/${ppid}/exe`, 'r');
+  /* §3.4a identity source is the running engine image. On posix that
+   * is /proc/<ppid>/exe (hash-by-fd of the actual image). There is no
+   * /proc on Windows: the spawning engine passes its own image path
+   * (--self-image); the daemon still opens, hashes and marker-checks
+   * the bytes itself, so a foreign or markerless image fails closed. */
+  let imagePath = exePath;
+  if (imagePath === undefined) {
+    if (process.platform === 'win32') {
+      if (typeof selfImage !== 'string' || selfImage.length === 0)
+        throw new Error('no engine image path (--self-image) on windows');
+      imagePath = selfImage;
+    } else {
+      if (selfImage !== undefined)
+        throw new Error('--self-image is a windows-only lane');
+      imagePath = `/proc/${ppid}/exe`;
+    }
+  }
+  const fd = fs.openSync(imagePath, 'r');
   const parts = [];
   try {
     const chunk = Buffer.alloc(1 << 20);
@@ -980,6 +997,7 @@ function parseFlags(argv) {
     else if (a === '--gamedata') o.gamedata = next();
     else if (a === '--gamedir') o.gamedir = next();
     else if (a === '--dir') o.dir = next();
+    else if (a === '--self-image') o.selfImage = next();
     else return null;
   }
   if (!o.uds) return null;
@@ -1002,7 +1020,8 @@ async function main(argv) {
   if (!o) return usageExit();
   let identity;
   try {
-    identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir });
+    identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir,
+      selfImage: o.selfImage });
   } catch {
     process.stderr.write('qn-peer: no engine build marker in parent image; not joining (\u00a73.4a)\n');
     throw new Error('local identity');

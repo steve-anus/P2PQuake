@@ -111,3 +111,50 @@ test('unix: defaultStateDir is untouched by the win branch', () => {
     else process.env.XDG_STATE_HOME = savedXdg;
   }
 });
+
+test('win: computeIdentity attests the engine image from --self-image', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qn-win-id2-'));
+  try {
+    const gd = path.join(dir, 'gamedata.sha256');
+    fs.writeFileSync(gd, 'deadbeef  id1/pak0.pak\n');
+    const img = path.join(dir, 'engine.exe');
+    fs.writeFileSync(img, Buffer.concat([
+      Buffer.from('QNBID:winpin.1\0', 'latin1'), Buffer.from('junk')]));
+    const saved = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = 'C:\\QNdev\\AppData\\Local';
+    let id = null, threw = null;
+    withPlatform('win32', () => {
+      try {
+        id = peer.computeIdentity({ gamedataPath: gd, gamedir: 'id1',
+          selfImage: img });
+      } catch (e) { threw = e; }
+    });
+    if (saved === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = saved;
+    assert.strictEqual(threw, null, String(threw));
+    assert.strictEqual(id.buildId.toString('utf8'), 'winpin.1');
+    assert.strictEqual(id.binarySha.length, 32);
+    assert.strictEqual(id.platform.toString('latin1'), 'win32-x64');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('win: markerless or unnamed parent image refuses the join outright', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qn-win-id3-'));
+  try {
+    const gd = path.join(dir, 'gamedata.sha256');
+    fs.writeFileSync(gd, 'x');
+    const noMark = path.join(dir, 'no.exe');
+    fs.writeFileSync(noMark, Buffer.from('nothing here'));
+    const call = (fn) => { let t = null; withPlatform('win32', () => {
+      try { fn(); } catch (e) { t = e; } }); return t; };
+    assert.ok(call(() => peer.computeIdentity({ gamedataPath: gd,
+      gamedir: 'id1', selfImage: noMark })), 'markerless must refuse');
+    assert.ok(call(() => peer.computeIdentity({ gamedataPath: gd,
+      gamedir: 'id1' })), 'missing --self-image must refuse');
+    let t = null; withPlatform('linux', () => {
+      try { peer.computeIdentity({ gamedataPath: gd, gamedir: 'id1',
+        selfImage: noMark }); } catch (e) { t = e; } });
+    assert.ok(t && /windows-only/.test(t.message),
+      'posix must refuse --self-image, never read it');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

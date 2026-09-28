@@ -142,6 +142,16 @@ static int qnw_pe_image_ok(HANDLE h)
             hdr[off + 2] == 0 && hdr[off + 3] == 0) ? 0 : -1;
 }
 
+int qnw_self_image(char *out, size_t cap)
+{
+    DWORD n = GetModuleFileNameA(NULL, out, (DWORD)cap - 1);
+    if (n == 0 || n >= (DWORD)cap - 1) {
+        return -1; /* truncation is a refusal, never a prefix probe */
+    }
+    out[n] = '\0';
+    return 0;
+}
+
 int qnw_prog_is_pe(const char *path)
 {
     HANDLE h = CreateFileA(path, FILE_READ_DATA | FILE_READ_ATTRIBUTES,

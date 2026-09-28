@@ -41,5 +41,9 @@ void qnw_spawn_kill(int slot);
  * check). 0 = ok, -1 = refuse. */
 int qnw_prog_is_pe(const char *path);
 
+/* Absolute path of this process image (engine exe). 0 on success, -1 on
+ * truncation or failure: callers must treat absence as a refusal. */
+int qnw_self_image(char *out, size_t cap);
+
 #endif /* _WIN32 */
 #endif /* QN_SPAWN_WIN_H */
