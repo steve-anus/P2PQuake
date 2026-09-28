@@ -7,21 +7,29 @@ to blind relays.
 
 ## Playing
 
-1. Download the newest release, `p2pquake-<version>-linux-x64.zip`, from
-   the project's releases page.
-2. Unpack it (under /opt). Everything the game needs is inside.
+1. Download the newest release for your platform from the project's releases page.
+2. Unpack it (under /opt on linux). Everything the game needs is inside.
 3. Open a terminal, cd into the unpacked folder and start the game:  
 
-   ```
-   ./quakespasm
-   ```  
+   - linux:
+
+     ```
+     ./quakespasm
+     ```
+
+   - Windows:
+
+     ```
+     quakespasm.exe
+     ```
+
 
    Two things worth knowing: everyone playing together should use the
    **same release** (codes only work between matching versions), and if
    the host's map list comes up empty the unpack did not finish —
    extract the zip again.
 
-### Optional: a desktop menu entry
+### Optional: a desktop menu entry (linux)
 
 The archive ships `p2pquake.desktop`, a launcher file that adds p2pquake
 to your desktop's applications menu. It is purely optional — the game
@@ -75,6 +83,26 @@ archive), the engine needs to know where the content and the peer live:
     -qn-peer "$PWD/src/peer/qn-peer.cjs"
 ```
 
+### Cross-building the Windows binary (from linux)
+
+The Windows engine is cross-compiled from a linux machine with
+llvm-mingw; the result is a static PE32+ build that needs no extra
+runtime DLLs and ships beside the same pinned node runtime
+(win32-x64) that the peer runs on:
+
+```
+tools/winbuild.sh --fetch   # llvm-mingw + SDL2 mingw-devel under $WINBUILD
+make win64                  # cross-compile quakespasm.exe
+tools/winpack.sh            # stage + zip the self-contained win-x64 archive
+```
+
+`WINBUILD` points at the toolchain directory (default: `winbuild/` in
+the repo checkout, git-ignored). Cross-building mpg123 is the one step
+not yet scripted: configure its source with `--host=x86_64-w64-mingw32
+--enable-static --disable-shared` and install it to
+`$WINBUILD/mpg123-out`. The Windows build ships WAV + MP3 streaming;
+flac/vorbis/opus are not wired into the cross build yet.
+
 ## Releases & verification
 
 Archives are named `p2pquake-<version>-linux-x64.zip` and ship with
@@ -84,11 +112,15 @@ Archives are named `p2pquake-<version>-linux-x64.zip` and ship with
 sha256sum -c sha256sums.txt
 printf '<identity> <your-trusted-pubkey-line>\n' > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I <identity> -n file \
-    -s p2pquake-<version>-linux-x64.zip.sig \
-    < p2pquake-<version>-linux-x64.zip
+    -s p2pquake-<version>-<os-x64>.zip.sig \
+    < p2pquake-<version>-<os-x64>.zip
 ```
 
 Release binaries are **not code-signed**.
+ On Windows the first run of
+`quakespasm.exe` may draw a SmartScreen prompt for that reason;
+confirming once is enough, and the commands above prove the bits you
+downloaded are the bits that were published.
 
 ## Licenses
 
