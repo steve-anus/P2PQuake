@@ -108,14 +108,16 @@ wired into the cross build yet.
 ## Releases & verification
 
 Archives are named `p2pquake-<version>-<OS-x64>.zip` and ship with
-`sha256sums.txt` and a detached SSH signature:
+`sha256sums.txt` and a detached SSH signature (`<zip>.sig`). The trust
+anchor is `RELEASE-PUBKEY` at the root of this repository — read it from
+a source you already trust, not from the same download as the archive:
 
 ```
 sha256sum -c sha256sums.txt
-printf '<identity> <your-trusted-pubkey-line>\n' > allowed_signers
-ssh-keygen -Y verify -f allowed_signers -I <identity> -n file \
-    -s p2pquake-<version>-<os-x64>.zip.sig \
-    < p2pquake-<version>-<os-x64>.zip
+printf 'p2pquake-releases %s\n' "$(cat RELEASE-PUBKEY)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I p2pquake-releases -n file \
+    -s p2pquake-<version>-<OS-x64>.zip.sig \
+    < p2pquake-<version>-<OS-x64>.zip
 ```
 
 Release binaries are **not code-signed**. On Windows the first run of

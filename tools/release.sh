@@ -171,9 +171,10 @@ else
     || { echo "release.sh: set QN_SIGN_KEY to the ssh signing key (or use --dry-run)" >&2; exit 1; }
   [ -n "${QN_SIGN_KEY_PUB:-}" ] \
     || { echo "release.sh: set QN_SIGN_KEY_PUB for verification" >&2; exit 1; }
-  IDENTITY="${QN_SIGN_ID:-$(awk '{print $NF}' "$QN_SIGN_KEY_PUB" 2>/dev/null | tail -1)}"
-  [ -n "$IDENTITY" ] \
-    || { echo "release.sh: set QN_SIGN_ID (signing identity)" >&2; exit 1; }
+  IDENTITY="${QN_SIGN_ID:-$(sed -E 's/^[^ ]+ [^ ]+ //' "$QN_SIGN_KEY_PUB" 2>/dev/null | head -n1)}"
+  case "$IDENTITY" in
+    ''|*' '*) echo "release.sh: signing identity must be one token — set QN_SIGN_ID" >&2; exit 1 ;;
+  esac
   (cd "$DIST" && ssh-keygen -Y sign -f "$QN_SIGN_KEY" -n file "$ZIP")
   verify_zip "$QN_SIGN_KEY_PUB" "$IDENTITY"
   echo "release.sh: signature verifies against $QN_SIGN_KEY_PUB as $IDENTITY"
