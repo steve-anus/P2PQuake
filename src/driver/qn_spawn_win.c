@@ -251,7 +251,8 @@ int qnw_spawn_exec(const char *program, char *const argv[],
     si.hStdOutput = nul;
     si.hStdError = nul;
     if (!CreateProcessA(program, cmdline, NULL, NULL, TRUE,
-                        CREATE_SUSPENDED, envblk, NULL, &si, &pi)) {
+                        CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                        envblk, NULL, &si, &pi)) {
         free(envblk);
         CloseHandle(img);
         CloseHandle(rd);
