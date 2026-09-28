@@ -32,21 +32,6 @@ int qnw_make_token(uint8_t out[32])
                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
 }
 
-static void qnw_norm(const char *in, char *out, size_t outlen)
-{
-    char tmp[4096];
-    size_t j = 0;
-
-    out[0] = '\0';
-    if (GetLongPathNameA(in, tmp, sizeof tmp) == 0)
-        snprintf(tmp, sizeof tmp, "%s", in);
-    if (strncmp(tmp, "\\\\?\\", 4) == 0)
-        memmove(tmp, tmp + 4, strlen(tmp + 4) + 1);
-    for (size_t i = 0; tmp[i] != '\0' && j + 1 < outlen; i++)
-        out[j++] = (tmp[i] >= 'a' && tmp[i] <= 'z') ? (char)(tmp[i] - 32) : tmp[i];
-    out[j] = '\0';
-}
-
 /* MSVCRT command-line quoting: quote when the arg is empty or contains
  * space/tab/quote; a run of n backslashes before a quote becomes 2n+1
  * backslashes then the literal quote; a trailing run doubles. */
@@ -184,7 +169,7 @@ int qnw_spawn_exec(const char *program, char *const argv[],
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     BY_HANDLE_FILE_INFORMATION fi, pf;
-    char cmdline[8192], want[4096], got_img[4096];
+    char cmdline[8192], got_img[4096];
     DWORD wrote = 0, envlen = 0;
     char *envblk = NULL;
 
@@ -195,8 +180,9 @@ int qnw_spawn_exec(const char *program, char *const argv[],
     sa.bInheritHandle = TRUE;
 
     img = CreateFileA(program, FILE_READ_DATA | FILE_READ_ATTRIBUTES,
-                      FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+                      FILE_SHARE_READ, NULL,
                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    /* no delete-share: pins the file object across open -> launch -> probe */
     if (img == INVALID_HANDLE_VALUE) {
         *reason = "program unreadable";
         return -1;
@@ -206,13 +192,6 @@ int qnw_spawn_exec(const char *program, char *const argv[],
         *reason = "program not a PE image";
         return -1;
     }
-    if (GetFinalPathNameByHandleA(img, want, sizeof want,
-                                  FILE_NAME_NORMALIZED) == 0) {
-        CloseHandle(img);
-        *reason = "program path unreadable";
-        return -1;
-    }
-    qnw_norm(want, want, sizeof want);
     if (qnw_build_cmdline(argv, cmdline, sizeof cmdline) != 0) {
         CloseHandle(img);
         *reason = "argv too wide";
@@ -285,8 +264,10 @@ int qnw_spawn_exec(const char *program, char *const argv[],
     CloseHandle(nul);
 
     job = CreateJobObjectA(NULL, NULL);
-    if (job == NULL)
+    if (job == NULL) {
+        *reason = "daemon job create failed";
         goto fail;
+    }
     {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION lim;
         DWORD len = (DWORD)sizeof got_img;
@@ -295,34 +276,49 @@ int qnw_spawn_exec(const char *program, char *const argv[],
         memset(&lim, 0, sizeof lim);
         lim.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation,
-                                     &lim, sizeof lim))
+                                     &lim, sizeof lim)) {
+            *reason = "daemon job limits failed";
             goto fail;
-        if (!AssignProcessToJobObject(job, pi.hProcess))
+        }
+        /* a parent already inside a non-nestable job lands the daemon in
+         * its job and rejects ours; that is environment, not tampering */
+        if (!AssignProcessToJobObject(job, pi.hProcess)) {
+            *reason = "daemon job assign failed (engine confined to a job?)";
             goto fail;
-        /* the thing I opened is the thing that ran: image path and file
-         * identity must match the pre-validated handle */
-        if (!QueryFullProcessImageNameA(pi.hProcess, 0, got_img, &len))
+        }
+        /* the thing that ran must be the file object I pre-validated:
+         * volume+index pins persistent swaps (the ids are meaningful
+         * on NTFS/ReFS); path strings are NOT compared — handle
+         * queries resolve junctions, process-image queries do not, so
+         * strings diverge for legitimate layouts */
+        if (!QueryFullProcessImageNameA(pi.hProcess, 0, got_img, &len)) {
+            *reason = "daemon image name query failed";
             goto fail;
-        qnw_norm(got_img, got_img, sizeof got_img);
-        if (strcmp(got_img, want) != 0)
-            goto fail;
+        }
         probe = CreateFileA(got_img, FILE_READ_ATTRIBUTES,
                             FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (probe == INVALID_HANDLE_VALUE ||
-            !GetFileInformationByHandle(probe, &pf)) {
-            if (probe != INVALID_HANDLE_VALUE)
-                CloseHandle(probe);
+        if (probe == INVALID_HANDLE_VALUE) {
+            *reason = "daemon image reopen failed";
+            goto fail;
+        }
+        if (!GetFileInformationByHandle(probe, &pf)) {
+            CloseHandle(probe);
+            *reason = "daemon image info query failed";
             goto fail;
         }
         CloseHandle(probe);
         if (pf.dwVolumeSerialNumber != fi.dwVolumeSerialNumber ||
             pf.nFileIndexHigh != fi.nFileIndexHigh ||
-            pf.nFileIndexLow != fi.nFileIndexLow)
-            goto fail; /* swapped between open and launch */
+            pf.nFileIndexLow != fi.nFileIndexLow) {
+            *reason = "daemon image changed between open and launch";
+            goto fail;
+        }
     }
-    if (ResumeThread(pi.hThread) == (DWORD)-1)
+    if (ResumeThread(pi.hThread) == (DWORD)-1) {
+        *reason = "daemon resume failed";
         goto fail;
+    }
     CloseHandle(pi.hThread);
     CloseHandle(img);
     s = qnw_alloc();
@@ -345,7 +341,6 @@ fail:
     if (job != NULL)
         CloseHandle(job);
     CloseHandle(img);
-    *reason = "spawn refused (identity or lifecycle)";
     return -1;
 }
 

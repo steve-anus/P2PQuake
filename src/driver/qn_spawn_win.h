@@ -19,8 +19,10 @@ int qnw_make_token(uint8_t out[32]);
  * through an inheritable pipe (closed pre-create: the child sees EOF
  * after 32 bytes); stdout/stderr to NUL; CreateProcess(SUSPENDED) +
  * job assignment (KILL_ON_JOB_CLOSE: engine death = kernel kills the
- * daemon) + post-create re-verification (QueryFullProcessImageName and
- * file identity must match the opened handle) + resume. argv is quoted
+ * daemon) + post-create re-verification (the launched image's
+ * volume+file-index identity must match the opened handle — a
+ * persistent swap refuses; resume happens only after) + resume.
+ * argv is quoted
  * per MSVCRT rules into a single command line — never a shell.
  * Returns a slot id (>=0) or -1 with *reason set. */
 int qnw_spawn_exec(const char *program, char *const argv[],
