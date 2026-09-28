@@ -37,8 +37,8 @@ static qboolean	textmode;
 
 static cvar_t in_debugkeys = {"in_debugkeys", "0", CVAR_NONE};
 
-#ifdef __APPLE__
-/* Mouse acceleration needs to be disabled on OS X */
+#if defined(__APPLE__) && !defined(USE_SDL2)
+/* SDL2 relative mouse mode needs no global mouse acceleration change. */
 #define MACOS_X_ACCELERATION_HACK
 #endif
 

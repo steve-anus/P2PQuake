@@ -134,7 +134,7 @@ test('win: computeIdentity attests the engine image from --self-image', () => {
     assert.strictEqual(threw, null, String(threw));
     assert.strictEqual(id.buildId.toString('utf8'), 'winpin.1');
     assert.strictEqual(id.binarySha.length, 32);
-    assert.strictEqual(id.platform.toString('latin1'), 'win32-x64');
+    assert.strictEqual(id.platform.toString('latin1'), `win32-${process.arch}`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

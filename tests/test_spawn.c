@@ -7,6 +7,7 @@
  * instead of hanging it. ASan+UBSan via make check. */
 #define _GNU_SOURCE
 #include "../src/driver/qn_spawn.h"
+#include "../src/driver/qn_os_macos.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -44,6 +45,24 @@ static const uint8_t TOK[QN_SPAWN_TOKEN_LEN] = {
 };
 
 static char tmpdir[256];
+
+#ifdef __APPLE__
+/* Byte-copying an Apple platform executable invalidates its cached code
+ * signature. Ad-hoc sign test fixtures, never installed runtimes. */
+static int sign_fixture(const char *file)
+{
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/usr/bin/codesign", "codesign", "--force", "--sign", "-", file, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) return -1;
+    int status;
+    while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) return -1;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif
+
 
 static void tok_variant(uint8_t out[QN_SPAWN_TOKEN_LEN], uint8_t fill)
 {
@@ -216,11 +235,16 @@ static void test_no_token_elsewhere(void)
     qn_spawn_t s;
     qn_spawn_init(&s);
     const char *reason = NULL;
-    CHECK(write_exec("dump.sh",
-                     "#!/bin/sh\n"
+    const char *body = "#!/bin/sh\n"
+#ifdef __APPLE__
+                     "ps -p $$ -o command= > \"$1\"\n"
+                     "env > \"$2\"\n"
+#else
                      "cat /proc/$$/cmdline > \"$1\"\n"
                      "cat /proc/$$/environ > \"$2\"\n"
-                     "cat > /dev/null\n", 1) == 0);
+#endif
+                     "cat > /dev/null\n";
+    CHECK(write_exec("dump.sh", body, 1) == 0);
     char c1[512], c2[512], script[512];
     snprintf(c1, sizeof c1, "%s/cmdline.out", tmpdir);
     snprintf(c2, sizeof c2, "%s/environ.out", tmpdir);
@@ -460,6 +484,9 @@ static void test_elf_from_descriptor(void)
     CHECK(r == 0);
     close(src);
     close(dst);
+#ifdef __APPLE__
+    CHECK(sign_fixture(elf) == 0);
+#endif
 
     char capelf[512];
     snprintf(capelf, sizeof capelf, "%s/capelf", tmpdir);
@@ -620,7 +647,12 @@ static int copy_exec(const char *src, const char *dst)
     }
     close(s);
     close(d);
-    return r == 0 ? 0 : -1;
+    if (r != 0) return -1;
+#ifdef __APPLE__
+    return sign_fixture(dst);
+#else
+    return 0;
+#endif
 }
 
 static int which_exec(const char *names[], char *out, size_t cap)
@@ -637,7 +669,11 @@ static int which_exec(const char *names[], char *out, size_t cap)
 static int install_runtime(const char *program) /* NULL: dir only */
 {
     char base[480];
+#ifdef __APPLE__
+    ssize_t k = qn_macos_executable(base, sizeof base) == 0 ? (ssize_t)strlen(base) : -1;
+#else
     ssize_t k = readlink("/proc/self/exe", base, sizeof base - 1);
+#endif
     if (k <= 0 || k == (ssize_t)sizeof base - 1) {
         return -1; /* same truncation refusal the module enforces */
     }
@@ -679,10 +715,15 @@ static void remove_runtime(void)
 static int write_node_entry(const char *name, int append)
 {
     char body[1024];
-    snprintf(body, sizeof body,
+    const char *format =
+#ifdef __APPLE__
+             "ps -p $$ -o command= | tr ' \\n' '\\000' %s '%s/cmd.bin'\n"
+#else
              "cat /proc/$$/cmdline %s '%s/cmd.bin'\n"
+#endif
              ": > '%s/interp-ran'\n"
-             "cat >/dev/null\n",
+             "cat >/dev/null\n";
+    snprintf(body, sizeof body, format,
              append ? ">>" : ">", tmpdir, tmpdir);
     return write_exec(name, body, 1);
 }
@@ -865,10 +906,16 @@ static void test_plain_entry_without_bundled(void)
     const char *reason = NULL;
     uint8_t tk[QN_SPAWN_TOKEN_LEN];
     CHECK(qn_spawn_make_token(tk) == 0);
+#ifdef __APPLE__
+    /* posix_spawn reports ENOEXEC synchronously, with no child to reap. */
+    CHECK(qn_spawn_start(&s, script, argv, NULL, tk, 1000, &reason) == -1);
+    CHECK(!qn_spawn_running(&s));
+#else
     CHECK(qn_spawn_start(&s, script, argv, NULL, tk, 1000, &reason) == 0);
     CHECK(wait_exit(&s));
     CHECK(s.exited && WIFEXITED(s.exit_status)
           && WEXITSTATUS(s.exit_status) == 127);
+#endif
     char m[8];
     CHECK(read_file("interp-ran", m, sizeof m) == -1);
 }

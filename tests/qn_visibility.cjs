@@ -20,7 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert');
-const { spawn } = require('child_process');
+const { spawn } = require('./platform.cjs');
 const createTestnet = require('hyperdht/testnet');
 const { qnFnv1aHex, defaultStateDir } = require('../src/peer/qn-peer.cjs');
 

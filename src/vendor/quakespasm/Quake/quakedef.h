@@ -269,6 +269,10 @@ typedef struct
 #include "keys.h"
 #include "menu.h"
 #include "cdaudio.h"
+#ifdef QN_METAL
+#include "qn_metal.h"
+#endif
+
 #include "glquake.h"
 
 

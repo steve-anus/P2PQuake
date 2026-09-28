@@ -1,0 +1,222 @@
+--- a/Quake/Makefile
++++ b/Quake/Makefile
+@@ -271,6 +271,10 @@
+ # ---------------------------
+ # targets / rules
+ # ---------------------------
++
++ifdef QN_PLATFORM_MAKEFILE
++include $(QN_PLATFORM_MAKEFILE)
++endif
+ 
+ .PHONY:	clean debug release
+ 
+--- a/Quake/gl_vidsdl.c
++++ b/Quake/gl_vidsdl.c
+@@ -37,7 +37,7 @@
+ #endif
+ 
+ //ericw -- for putting the driver into multithreaded mode
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !defined(QN_METAL)
+ #include <OpenGL/OpenGL.h>
+ #endif
+ 
+@@ -191,6 +191,9 @@
+ */
+ static void VID_Gamma_SetGamma (void)
+ {
++#ifdef QN_METAL
++	return;
++#endif
+ 	if (gl_glsl_gamma_able)
+ 		return;
+ 
+@@ -230,6 +233,9 @@
+ */
+ static void VID_Gamma_Restore (void)
+ {
++#ifdef QN_METAL
++	return;
++#endif
+ 	if (gl_glsl_gamma_able)
+ 		return;
+ 
+@@ -272,6 +278,9 @@
+ */
+ static void VID_Gamma_f (cvar_t *var)
+ {
++#ifdef QN_METAL
++	return;
++#endif
+ 	if (gl_glsl_gamma_able)
+ 		return;
+ 
+@@ -300,6 +309,10 @@
+ 	Cvar_RegisterVariable (&vid_contrast);
+ 	Cvar_SetCallback (&vid_gamma, VID_Gamma_f);
+ 	Cvar_SetCallback (&vid_contrast, VID_Gamma_f);
++#ifdef QN_METAL
++	gammaworks = true;
++	return;
++#endif
+ 
+ 	if (gl_glsl_gamma_able)
+ 		return;
+@@ -469,6 +482,9 @@
+ */
+ qboolean VID_HasMouseOrInputFocus (void)
+ {
++#ifdef QN_METAL
++	if (QNM_Headless()) return true;
++#endif
+ #if defined(USE_SDL2)
+ 	return (SDL_GetWindowFlags(draw_context) & (SDL_WINDOW_MOUSE_FOCUS | SDL_WINDOW_INPUT_FOCUS)) != 0;
+ #else
+@@ -483,6 +499,9 @@
+ */
+ qboolean VID_IsMinimized (void)
+ {
++#ifdef QN_METAL
++	if (QNM_Headless()) return false;
++#endif
+ #if defined(USE_SDL2)
+ 	return !(SDL_GetWindowFlags(draw_context) & SDL_WINDOW_SHOWN);
+ #else
+@@ -616,7 +635,11 @@
+ 	/* Create the window if needed, hidden */
+ 	if (!draw_context)
+ 	{
++#ifdef QN_METAL
++		flags = SDL_WINDOW_METAL | SDL_WINDOW_HIDDEN;
++#else
+ 		flags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN;
++#endif
+ 
+ 		if (vid_borderless.value)
+ 			flags |= SDL_WINDOW_BORDERLESS;
+@@ -670,14 +693,19 @@
+ 			Sys_Error ("Couldn't set fullscreen state mode");
+ 	}
+ 
+-	SDL_ShowWindow (draw_context);
+-	SDL_RaiseWindow (draw_context);
++#ifdef QN_METAL
++	if (!QNM_Headless())
++#endif
++	{
++		SDL_ShowWindow (draw_context);
++		SDL_RaiseWindow (draw_context);
++	}
+ 
+ 	/* Create GL context if needed */
+ 	if (!gl_context) {
+ 		gl_context = SDL_GL_CreateContext(draw_context);
+ 		if (!gl_context)
+-			Sys_Error("Couldn't create GL context");
++			Sys_Error("Couldn't create rendering context: %s", SDL_GetError());
+ 	}
+ 
+ 	gl_swap_control = true;
+@@ -995,6 +1023,15 @@
+ 
+ static void GL_CheckExtensions (void)
+ {
++#ifdef QN_METAL
++	/* Capabilities of the native backend. GLSL/VBO entry points stay NULL;
++	 * scene traversal uses the fixed-function path and Metal batches it. */
++	gl_texture_NPOT = true;
++	gl_anisotropy_able = true;
++	gl_max_anisotropy = 16;
++	gl_max_texture_units = 1;
++	return;
++#endif
+ 	int swap_control;
+ 
+ 	// ARB_vertex_buffer_object
+@@ -1378,7 +1415,7 @@
+ 
+ 	GL_CheckExtensions (); //johnfitz
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !defined(QN_METAL)
+ 	// ericw -- enable multi-threaded OpenGL, gives a decent FPS boost.
+ 	// https://developer.apple.com/library/mac/technotes/tn2085/
+ 	if (host_parms->numcpus > 1 &&
+@@ -1408,6 +1445,9 @@
+ */
+ void GL_BeginRendering (int *x, int *y, int *width, int *height)
+ {
++#ifdef QN_METAL
++	QNM_BeginFrame();
++#endif
+ 	*x = *y = 0;
+ 	*width = vid.width;
+ 	*height = vid.height;
+@@ -1420,6 +1460,9 @@
+ */
+ void GL_EndRendering (void)
+ {
++#ifdef QN_METAL
++	QNM_EndFrame(!scr_skipupdate, vid_gamma.value, vid_contrast.value);
++#else
+ 	if (!scr_skipupdate)
+ 	{
+ #if defined(USE_SDL2)
+@@ -1428,6 +1471,7 @@
+ 		SDL_GL_SwapBuffers();
+ #endif
+ 	}
++#endif
+ }
+ 
+ 
+--- a/Quake/in_sdl.c
++++ b/Quake/in_sdl.c
+@@ -37,8 +37,8 @@
+ 
+ static cvar_t in_debugkeys = {"in_debugkeys", "0", CVAR_NONE};
+ 
+-#ifdef __APPLE__
+-/* Mouse acceleration needs to be disabled on OS X */
++#if defined(__APPLE__) && !defined(USE_SDL2)
++/* SDL2 relative mouse mode needs no global mouse acceleration change. */
+ #define MACOS_X_ACCELERATION_HACK
+ #endif
+ 
+--- a/Quake/main_sdl.c
++++ b/Quake/main_sdl.c
+@@ -67,12 +67,19 @@
+ 
+ // On OS X we call SDL_main from the launcher, but SDL2 doesn't redefine main
+ // as SDL_main on OS X anymore, so we do it ourselves.
+-#if defined(USE_SDL2) && defined(__APPLE__)
++#if defined(USE_SDL2) && defined(__APPLE__) && !defined(QN_METAL)
+ #define main SDL_main
+ #endif
+ 
++#ifdef QN_METAL
++#define main QNM_engine_main
++#endif
++
+ int main(int argc, char *argv[])
+ {
++#ifdef QN_METAL
++	setvbuf(stdout, NULL, _IOLBF, 0);
++#endif
+ #ifdef __EMSCRIPTEN__
+ 	initialize_gl4es();
+ #endif
+--- a/Quake/quakedef.h
++++ b/Quake/quakedef.h
+@@ -269,6 +269,10 @@
+ #include "keys.h"
+ #include "menu.h"
+ #include "cdaudio.h"
++#ifdef QN_METAL
++#include "qn_metal.h"
++#endif
++
+ #include "glquake.h"
+ 
+ 

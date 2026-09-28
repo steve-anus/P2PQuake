@@ -21,6 +21,13 @@
  * process image cannot be located at all, the spawn refuses even for an
  * override-only start.
  *
+ * macOS uses posix_spawn on the validated absolute path: Darwin has no
+ * fd-exec API. An inode check detects replacement before spawning but is
+ * not atomic with exec; the installation directory must remain trusted.
+ * Packaged runtimes validate as Mach-O (thin 64-bit or universal). The
+ * engine image is opened and inherited at FD 3 for the peer's identity
+ * check, and unrelated descriptors are closed by CLOEXEC_DEFAULT.
+ *
  * Children are reaped exactly once by this module; a hung pre-authentication
  * child is SIGKILLed after the watchdog deadline, and at most
  * QN_SPAWN_MAX_HANDSHAKES token deliveries happen per engine run — an

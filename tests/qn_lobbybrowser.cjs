@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn } = require('./platform.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const ENGINE = process.env.QN_ENGINE ||

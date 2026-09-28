@@ -399,7 +399,8 @@ static void test_frame_overflow(void)
     int sv[2];
     uint8_t token[QN_AUTH_TOKEN_LEN];
     uint8_t hdr[QN_MAX_FRAME];
-    static uint8_t junk[16384];
+    /* Fill the parser buffer without assuming Linux socket buffer sizes. */
+    static uint8_t junk[2 * QN_MAX_FRAME];
     size_t i, n;
     qn_frame_t f;
 

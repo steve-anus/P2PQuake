@@ -22,6 +22,23 @@
 #endif
 #include <unistd.h>
 
+#ifdef __APPLE__
+/* Darwin has no SOCK_CLOEXEC/accept4. Set flags before publishing the fd;
+ * SO_NOSIGPIPE is the socket-local equivalent of MSG_NOSIGNAL. */
+static int darwin_socket_flags(int fd, int nonblock)
+{
+    int one = 1;
+    if (fd < 0) return -1;
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) == -1 ||
+        (nonblock && fcntl(fd, F_SETFL, O_NONBLOCK) == -1) ||
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one) == -1) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+#endif
+
 /* Constant-time compare for the AUTH token: any early-exit optimisation
  * here would turn a secret into a timing oracle. volatile per-byte loads
  * defeat folding; the loop itself never branches on the secret. */
@@ -132,7 +149,11 @@ static int qn_transport_probe_live(const char *path)
     struct sockaddr_un sa;
     int fd, r, e;
 
+#ifdef __APPLE__
+    fd = darwin_socket_flags(socket(AF_UNIX, SOCK_STREAM, 0), 1);
+#else
     fd = (int)socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+#endif
     if (fd < 0)
         return 1; /* cannot probe: fail closed, never steal */
     memset(&sa, 0, sizeof sa);
@@ -175,7 +196,11 @@ int qn_transport_listen(const char *path, const char **reason)
         return -1;
     }
 
+#ifdef __APPLE__
+    fd = darwin_socket_flags(socket(AF_UNIX, SOCK_STREAM, 0), 0);
+#else
     fd = (int)socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+#endif
     if (fd < 0) {
         *reason = "socket failed";
         return -1;
@@ -208,11 +233,13 @@ int qn_transport_listen(const char *path, const char **reason)
     memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
     memcpy(sa.sun_path, path, strlen(path) + 1u);
+#ifndef __APPLE__
     if (fchmod(fd, 0600) != 0) { /* the pipe is ours alone: 0600 */
         *reason = "chmod failed";
         close(fd);
         return -1;
     }
+#endif
     if (bind(fd, (struct sockaddr *)&sa,
              (socklen_t)(offsetof(struct sockaddr_un, sun_path) +
                          strlen(path) + 1u)) != 0) {
@@ -220,6 +247,16 @@ int qn_transport_listen(const char *path, const char **reason)
         close(fd);
         return -1;
     }
+#ifdef __APPLE__
+    /* Darwin applies socket permissions to the bound filesystem node.
+     * The containing 0700 directory protects the bind/chmod interval. */
+    if (chmod(path, 0600) != 0) {
+        *reason = "chmod failed";
+        close(fd);
+        unlink(path);
+        return -1;
+    }
+#endif
     if (listen(fd, 1) != 0) {
         *reason = "listen failed";
         close(fd);
@@ -237,19 +274,29 @@ int qn_transport_accept(int listen_fd, const char **reason)
         return -1;
     return qnw_pipe_accept(listen_fd, reason);
 #else
+#ifdef __APPLE__
+    uid_t uid;
+    gid_t gid;
+    int fd = darwin_socket_flags(accept(listen_fd, NULL, NULL), 1);
+#else
     struct ucred uc;
     socklen_t len = (socklen_t)sizeof uc;
     /* accept4 flags are an O_*-style mask: SOCK_CLOEXEC|SOCK_NONBLOCK only.
      * (SOCK_STREAM is 1, not 0 — passing it there is EINVAL.) */
     int fd = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
+#endif
     if (fd < 0) {
         *reason = "accept failed";
         return -1;
     }
     /* The pipe belongs to this user alone: reject a peer we did not spawn
      * (uid equality covers everything short of root). */
+#ifdef __APPLE__
+    if (getpeereid(fd, &uid, &gid) != 0 || uid != geteuid()) {
+#else
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &uc, &len) != 0 ||
         len != (socklen_t)sizeof uc || uc.uid != getuid()) {
+#endif
         close(fd);
         *reason = "peer uid mismatch";
         return -1;

@@ -21,7 +21,7 @@ shift
 files=("$@")
 if [ "${#files[@]}" -eq 0 ]; then
   [ -f "$out" ] || { echo "no member list and no existing $patch_rel" >&2; exit 1; }
-  mapfile -t files < <(sed -n 's|^+++ b/Quake/||p' "$out")
+  while IFS= read -r member; do files+=("$member"); done < <(sed -n 's|^+++ b/Quake/||p' "$out")
 fi
 [ "${#files[@]}" -gt 0 ] || { echo "empty member list" >&2; exit 1; }
 

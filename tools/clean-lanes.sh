@@ -7,10 +7,17 @@
 set -u
 WHO=$(id -un)
 BASE="${TMPDIR:-/tmp}"
+BASE=$(cd "$BASE" && pwd -P) || exit 1
+FIND=(find)
+REGEX=(-regextype posix-extended -regex)
+if [ "$(uname -s)" = Darwin ]; then
+  FIND+=(-E)
+  REGEX=(-regex)
+fi
 
 sweep_ere() { # <relative regex>
-  find "$BASE" -maxdepth 1 -mindepth 1 -type d \
-    -regextype posix-extended -regex "$1" \
+  "${FIND[@]}" "$BASE" -maxdepth 1 -mindepth 1 -type d \
+    "${REGEX[@]}" "$1" \
     -user "$WHO" -mmin +60 \
     -exec rm -rf {} + 2>/dev/null || true
 }
