@@ -32,6 +32,25 @@ QN_WIRE := $(filter-out src/driver/qn_buildid.h %_win.c %_win.h, \
 QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | sha256sum | cut -c1-16)
 QN_BUILD_ID ?= $(if $(QN_VERSION),$(QN_VERSION),$(QN_COMMIT))p$(QN_WS)$(QN_DIRTY)
 
+# Windows cross-build: toolchain (llvm-mingw + SDL2 mingw devel + mpg123
+# static) laid out under WINBUILD by windows/winbuild.sh; point WINBUILD at
+# a shared install to reuse across checkouts. Extra-info flags always on.
+WINBUILD ?= $(CURDIR)/winbuild
+WIN_CC   := $(WINBUILD)/llvm-mingw/bin/x86_64-w64-mingw32-gcc
+
+win64: src/driver/qn_buildid.h
+	$(MAKE) -C $(QS_DIR)/Quake -f Makefile.w64 clean
+	$(MAKE) -C $(QS_DIR)/Quake -f Makefile.w64 DEBUG=0 USE_SDL2=1 MP3LIB=mpg123 \
+	  USE_CODEC_FLAC=0 USE_CODEC_VORBIS=0 USE_CODEC_OPUS=0 USE_CODEC_XMP=0 \
+	  USE_CODEC_UMX=0 \
+	  SDL_CONFIG=$(WINBUILD)/SDL2-2.32.4/x86_64-w64-mingw32/bin/sdl2-config \
+	  WIN_MPG_CFLAGS=-I$(WINBUILD)/mpg123-out/include \
+	  "LDFLAGS=-m64 -mwindows -static -L$(WINBUILD)/mpg123-out/lib" \
+	  CC="$(WIN_CC) -ffile-prefix-map=$(HOME)=." \
+	  WINDRES=$(WINBUILD)/llvm-mingw/bin/x86_64-w64-mingw32-windres \
+	  STRIP=$(WINBUILD)/llvm-mingw/bin/x86_64-w64-mingw32-strip
+	@python3 -c "import sys; d=open('$(QS_DIR)/Quake/quakespasm.exe','rb').read(2); sys.exit(0 if d==b'MZ' else 1)" && echo "win64: PE image linked" || (echo "win64: NOT a PE" && false)
+
 .PHONY: print-buildid
 print-buildid:
 	@echo $(QN_BUILD_ID)
@@ -45,7 +64,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer resident-rejoin race-rejoin bootstrap-node relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
+.PHONY: all win64 engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer resident-rejoin race-rejoin bootstrap-node relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
 
 all: engine peer
 
@@ -249,5 +268,6 @@ vectors-verify:
 	@if diff -u bin/vectors.spec.txt bin/vectors.gen.txt > /dev/null; then 	  echo "VECTORS OK: spec §7 equals generator output"; 	else echo "VECTORS STALE: regenerate spec §7 from tools/gen-vectors.cjs"; 	  diff -u bin/vectors.spec.txt bin/vectors.gen.txt | head -20; exit 1; fi
 
 clean:
+	rm -rf $(QS_DIR)/Quake/build-w64 $(QS_DIR)/Quake/quakespasm.exe
 	rm -rf bin
 	$(MAKE) -C $(QS_DIR)/Quake clean

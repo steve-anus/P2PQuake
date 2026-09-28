@@ -34,6 +34,13 @@ static struct sockaddr_in broadcastaddr;
 static in_addr_t	myAddr;
 
 #include "net_udp.h"
+#ifdef _WIN32
+/* net_sys.h's socketerror() demands the winsock error table; the file
+ * that owned it upstream is not part of this build, so this translation
+ * unit takes the non-static copy. */
+#define __wsaerr_static
+#include "wsaerror.h"
+#endif
 
 //=============================================================================
 
@@ -73,7 +80,11 @@ sys_socket_t UDP_Init (void)
 		if (!(local = gethostbyname(buff)))
 		{
 			Con_SafePrintf("UDP_Init: WARNING: gethostbyname failed (%s)\n",
+#ifdef _WIN32
+						"winsock resolver error");
+#else
 						hstrerror(h_errno));
+#endif
 		}
 		else if (local->h_addrtype != AF_INET)
 		{
@@ -159,7 +170,11 @@ sys_socket_t UDP_OpenSocket (int port)
 {
 	sys_socket_t newsocket;
 	struct sockaddr_in address;
+#ifdef _WIN32
+	u_long _true = 1;
+#else
 	int _true = 1;
+#endif
 	int err;
 
 	if ((newsocket = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET)
@@ -270,7 +285,11 @@ sys_socket_t UDP_CheckNewConnections (void)
 	if (net_acceptsocket == INVALID_SOCKET)
 		return INVALID_SOCKET;
 
+#ifdef _WIN32
+	if (ioctlsocket (net_acceptsocket, FIONREAD, (u_long *) &available) == SOCKET_ERROR)
+#else
 	if (ioctl (net_acceptsocket, FIONREAD, &available) == -1)
+#endif
 	{
 		int err = SOCKETERRNO;
 		Sys_Error ("UDP: ioctlsocket (FIONREAD) failed (%s)", socketerror(err));
@@ -289,7 +308,7 @@ int UDP_Read (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr)
 	socklen_t addrlen = sizeof(struct qsockaddr);
 	int ret;
 
-	ret = recvfrom (socketid, buf, len, 0, (struct sockaddr *)addr, &addrlen);
+	ret = recvfrom (socketid, (char *) buf, len, 0, (struct sockaddr *)addr, &addrlen);
 	if (ret == SOCKET_ERROR)
 	{
 		int err = SOCKETERRNO;
@@ -346,7 +365,7 @@ int UDP_Write (sys_socket_t socketid, byte *buf, int len, struct qsockaddr *addr
 {
 	int	ret;
 
-	ret = sendto (socketid, buf, len, 0, (struct sockaddr *)addr,
+	ret = sendto (socketid, (char *) buf, len, 0, (struct sockaddr *)addr,
 							sizeof(struct qsockaddr));
 	if (ret == SOCKET_ERROR)
 	{

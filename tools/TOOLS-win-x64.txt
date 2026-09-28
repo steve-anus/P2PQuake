@@ -1,0 +1,18 @@
+# Windows cross-toolchain identity for the win64 build (make win64).
+# Installed under $WINBUILD (default: the repo's winbuild/ directory,
+# git-ignored; point WINBUILD at a shared toolchain to reuse it).
+# Digests are NOT yet pinned: the fetch archives were removed after
+# install on this host. The owner's first `tools/winbuild.sh --fetch`
+# run records them; until then treat downloads as unverified.
+llvm-mingw    20260922  clang 23.1.2  x86_64-w64-mingw32 host=ELF target=PE32+ (ucrt)
+              https://github.com/mstorsjo/llvm-mingw/releases/tag/20260922
+SDL2          2.32.4    x86_64-w64-mingw32 devel archive (static link into the exe)
+              https://github.com/libsdl-org/SDL/releases/tag/release-2.32.4
+mpg123        1.33.7    static cross build, scripted by tools/winbuild.sh
+              (sha256 pinned in the script, upstream GPG signature verified
+              against the maintainer key published on the project download
+              page; --host=x86_64-w64-mingw32 --enable-static
+              --disable-shared --with-pic --disable-programs --disable-network
+              --disable-modules --with-audio=win32,dummy)
+node runtime  v24.21.0 win-x64 (fetched + SHASUMS256-verified by tools/winpack.sh;
+              same NODE_VERSION pin as tools/setup-nodejs.sh)
