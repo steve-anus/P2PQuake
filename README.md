@@ -8,7 +8,7 @@ to blind relays.
 ## Playing
 
 1. Download the newest release for your platform from the project's releases page.
-2. Unpack it somewhere you own - `/opt` is a fine choice on linux, any
+2. Unpack it somewhere you own - `/opt` is preferred, any
    folder works on Windows. Everything the game needs is inside,
    including the peer runtime; nothing else has to be installed.
 3. Open a terminal, cd into the unpacked folder and start the game:  
@@ -118,8 +118,7 @@ after `make win64`. Each emits `sha256sums.txt` plus a detached
 signature, and aborts the build if its own signature fails to verify
 against the public key.
 
-The repository is a single `main` branch; the code is shared. The two
-platform directories hold only platform-specific tooling —
+The two platform directories hold only platform-specific tooling —
 `linux/` (release packaging) and `windows/` (cross-build kit) — and the
 Windows engine source twins in `src/driver/` compile away to nothing on
 linux builds. The full `make check` suite is the gate for every release,
