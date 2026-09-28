@@ -8,10 +8,18 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <string.h>
+#ifdef _WIN32
+#include "qn_transport_win.h"
+#include <errno.h>
+#else
 #include <sys/socket.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
+#ifndef _WIN32
 #include <sys/un.h>
+#include <poll.h>
+#endif
 #include <unistd.h>
 
 /* Constant-time compare for the AUTH token: any early-exit optimisation
@@ -28,8 +36,68 @@ static int ct_equal32(const uint8_t *a, const uint8_t *b)
     return diff == 0u;
 }
 
+#ifdef _WIN32
+/* Map named-pipe outcomes onto the unix loop's contract: 0 with eof
+ * reads as read()==0 (peer closed), -1 with EAGAIN reads as would-block,
+ * -1 with any other errno reads as terminal. The unix send loop keeps
+ * its EINTR retry shape; the win branch never surfaces EINTR. */
+static ssize_t qn_raw_recv(int fd, uint8_t *buf, size_t n)
+{
+    int eof = 0;
+    const char *r = NULL;
+    int got = qnw_read(fd, buf, n, &eof, &r);
+    if (got > 0) {
+        return got;
+    }
+    if (eof) {
+        return 0;
+    }
+    errno = got < 0 ? EIO : EAGAIN;
+    return -1;
+}
+
+static ssize_t qn_raw_send(int fd, const void *buf, size_t n)
+{
+    const char *r = NULL;
+    int w;
+    errno = 0;
+    w = qnw_write(fd, (const uint8_t *)buf, n, &r);
+    if (w <= 0) {
+        errno = ECONNRESET;
+    }
+    return w;
+}
+
+static void qn_fd_close(int fd)
+{
+    qnw_close(fd);
+}
+#else
+static ssize_t qn_raw_recv(int fd, uint8_t *buf, size_t n)
+{
+    return read(fd, buf, n);
+}
+
+static ssize_t qn_raw_send(int fd, const void *buf, size_t n)
+{
+    ssize_t w;
+    do {
+        w = send(fd, buf, n, MSG_NOSIGNAL);
+    } while (w < 0 && errno == EINTR);
+    return w;
+}
+
+static void qn_fd_close(int fd)
+{
+    close(fd);
+}
+#endif
+
 int qn_transport_prepare_dir(const char *dir)
 {
+#ifdef _WIN32
+    return qnw_prepare_dir(dir);
+#else
     struct stat st;
     if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
         return -1;
@@ -50,6 +118,7 @@ int qn_transport_prepare_dir(const char *dir)
         }
     }
     return 0;
+#endif
 }
 
 /* A listener that is answering (or queueing) a nonblocking connect is
@@ -57,6 +126,7 @@ int qn_transport_prepare_dir(const char *dir)
  * through a live listener would steal its path: two same-box engines
  * then share one identity dir silently (hyperswarm self-meet seals
  * joins), so the bind is refused instead. */
+#ifndef _WIN32
 static int qn_transport_probe_live(const char *path)
 {
     struct sockaddr_un sa;
@@ -75,9 +145,13 @@ static int qn_transport_probe_live(const char *path)
     close(fd);
     return r == 0 || (r < 0 && e == EINPROGRESS);
 }
+#endif
 
 int qn_transport_listen(const char *path, const char **reason)
 {
+#ifdef _WIN32
+    return qnw_pipe_listen(path, reason);
+#else
     char dirbuf[4096];
     const char *slash = strrchr(path, '/');
     size_t dlen;
@@ -153,10 +227,16 @@ int qn_transport_listen(const char *path, const char **reason)
     }
     *reason = NULL;
     return fd;
+#endif
 }
 
 int qn_transport_accept(int listen_fd, const char **reason)
 {
+#ifdef _WIN32
+    if (qnw_pipe_can_accept(listen_fd, reason) != 1)
+        return -1;
+    return qnw_pipe_accept(listen_fd, reason);
+#else
     struct ucred uc;
     socklen_t len = (socklen_t)sizeof uc;
     /* accept4 flags are an O_*-style mask: SOCK_CLOEXEC|SOCK_NONBLOCK only.
@@ -176,6 +256,7 @@ int qn_transport_accept(int listen_fd, const char **reason)
     }
     *reason = NULL;
     return fd;
+#endif
 }
 
 void qn_transport_init(qn_transport_t *t, int fd,
@@ -240,7 +321,7 @@ qn_tr_t qn_transport_poll(qn_transport_t *t, uint64_t now_ms)
                     * frame or an overflow -- a count-0 read would
                     * report the terminal as a graceful 'peer closed' */
         }
-        r = read(t->fd, t->buf + t->n, space);
+        r = qn_raw_recv(t->fd, t->buf + t->n, space);
         if (r > 0) {
             t->n += (size_t)r;
             continue;
@@ -332,7 +413,7 @@ int qn_transport_send(qn_transport_t *t, uint16_t type,
          * socket whose reader is gone raises SIGPIPE first and only
          * then would return EPIPE — the mask-free way to survive it is
          * to ask the socket not to raise it. */
-        ssize_t w = send(t->fd, frame + off, n - off, MSG_NOSIGNAL);
+        ssize_t w = qn_raw_send(t->fd, frame + off, n - off);
         if (w < 0 && errno == EINTR) {
             continue;
         }
@@ -349,7 +430,55 @@ int qn_transport_send(qn_transport_t *t, uint16_t type,
 void qn_transport_close(qn_transport_t *t)
 {
     if (t->fd >= 0) {
-        close(t->fd);
+        qn_fd_close(t->fd);
         t->fd = -1;
     }
+}
+
+int qn_transport_can_accept(int listen_fd, const char **reason)
+{
+#ifdef _WIN32
+    return qnw_pipe_can_accept(listen_fd, reason);
+#else
+    struct pollfd pt;
+    (void)reason;
+    pt.fd = listen_fd;
+    pt.events = POLLIN;
+    pt.revents = 0;
+    if (poll(&pt, 1, 0) == 1)
+        return (pt.revents & POLLIN) != 0 ? 1 : -1;
+    return 0;
+#endif
+}
+
+void qn_transport_close_listener(int fd)
+{
+    if (fd >= 0) {
+        qn_fd_close(fd);
+    }
+}
+
+void qn_transport_drop(int fd)
+{
+    if (fd >= 0) {
+        qn_fd_close(fd);
+    }
+}
+
+void qn_transport_forget_listener(const char *path)
+{
+#ifdef _WIN32
+    (void)path; /* pipes have no filesystem footprint to sweep */
+#else
+    unlink(path);
+#endif
+}
+
+void qn_transport_expect_peer(const char *abs_image)
+{
+#ifdef _WIN32
+    qnw_expect_peer(abs_image);
+#else
+    (void)abs_image; /* the unix accept gate is the uid check */
+#endif
 }

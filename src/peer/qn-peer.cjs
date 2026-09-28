@@ -258,7 +258,8 @@ const shaBuf = (b) => crypto.createHash('sha256').update(b).digest();
 function ensureIdentity(dir) {
   fs.mkdirSync(dir, { mode: 0o700, recursive: true });
   const st = fs.statSync(dir);
-  if ((st.mode & 0o077) !== 0) throw new Error('state dir is group/other-accessible');
+  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0)
+    throw new Error('state dir is group/other-accessible');
   const keyPath = path.join(dir, 'identity.key');
   let seed;
   try {
@@ -273,7 +274,8 @@ function ensureIdentity(dir) {
     finally { fs.closeSync(fd); }
   }
   const mode = fs.statSync(keyPath).mode & 0o777;
-  if ((mode & 0o077) !== 0) throw new Error('identity.key is group/other-accessible');
+  if (process.platform !== 'win32' && (mode & 0o077) !== 0)
+    throw new Error('identity.key is group/other-accessible');
   const priv = E.privateKeyFromSeed(seed);
   return { priv, pub: Buffer.from(E.publicRaw(E.publicKeyFromSeed(seed))) };
 }
@@ -313,9 +315,26 @@ function extractBuildId(image) {
 }
 
 function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
-  exePath = undefined }) {
+  exePath = undefined, selfImage = undefined }) {
   const manifest = shaBuf(fs.readFileSync(gamedataPath));
-  const fd = fs.openSync(exePath ?? `/proc/${ppid}/exe`, 'r');
+  /* §3.4a identity source is the running engine image. On posix that
+   * is /proc/<ppid>/exe (hash-by-fd of the actual image). There is no
+   * /proc on Windows: the spawning engine passes its own image path
+   * (--self-image); the daemon still opens, hashes and marker-checks
+   * the bytes itself, so a foreign or markerless image fails closed. */
+  let imagePath = exePath;
+  if (imagePath === undefined) {
+    if (process.platform === 'win32') {
+      if (typeof selfImage !== 'string' || selfImage.length === 0)
+        throw new Error('no engine image path (--self-image) on windows');
+      imagePath = selfImage;
+    } else {
+      if (selfImage !== undefined)
+        throw new Error('--self-image is a windows-only lane');
+      imagePath = `/proc/${ppid}/exe`;
+    }
+  }
+  const fd = fs.openSync(imagePath, 'r');
   const parts = [];
   try {
     const chunk = Buffer.alloc(1 << 20);
@@ -935,6 +954,16 @@ function qnFnv1aHex(s) {
   return h.toString(16).padStart(8, '0');
 }
 function defaultStateDir(uds) {
+  if (process.platform === 'win32') {
+    /* The engine embeds the instance tag (fnv1a of its socket dir) in
+     * the pipe name: the daemon cannot re-derive it from dirname of a
+     * pipe path (constant), so it extracts and fail-closed validates. */
+    const m = /^\\\\[.]\\pipe\\p2pquake-([0-9a-f]{8})$/i.exec(uds.trim());
+    if (!m) return null;
+    const la = process.env.LOCALAPPDATA;
+    if (typeof la !== 'string' || !/^[A-Za-z]:[\\/]/.test(la)) return null;
+    return path.join(la, 'p2pquake', m[1].toLowerCase());
+  }
   const xdg = process.env.XDG_STATE_HOME;
   const abs = path.resolve(uds);
   const sockDir = path.dirname(abs);
@@ -968,6 +997,7 @@ function parseFlags(argv) {
     else if (a === '--gamedata') o.gamedata = next();
     else if (a === '--gamedir') o.gamedir = next();
     else if (a === '--dir') o.dir = next();
+    else if (a === '--self-image') o.selfImage = next();
     else return null;
   }
   if (!o.uds) return null;
@@ -990,7 +1020,8 @@ async function main(argv) {
   if (!o) return usageExit();
   let identity;
   try {
-    identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir });
+    identity = computeIdentity({ gamedataPath: o.gamedata, gamedir: o.gamedir,
+      selfImage: o.selfImage });
   } catch {
     process.stderr.write('qn-peer: no engine build marker in parent image; not joining (\u00a73.4a)\n');
     throw new Error('local identity');
