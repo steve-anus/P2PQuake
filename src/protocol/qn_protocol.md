@@ -215,10 +215,13 @@ identity of the software a peer actually runs:
   `QNBID:<id>\0`, where `<id>` is 1..64 characters from `[A-Za-z0-9._+-]`
   (the release version from the committed `VERSION` file plus a digest
   over the wire-critical source closure - the ordered engine patch series,
-  the qn driver sources, the peer sources, and this specification; before
-  a version is assigned the git commit serves in place of the version; an
-  implementation may append a provenance suffix from the same charset,
-  and comparison is byte equality over the whole `<id>`).
+  the qn driver sources, the peer sources, and this specification;
+  platform-local translation files (the Windows-only pipe-transport and
+  spawn twins) sit outside the closure, since they only ever pair one
+  machine's own engine with its own daemon inside a single shipped build;
+  before a version is assigned the git commit serves in place of the
+  version; an implementation may append a provenance suffix from the same
+  charset, and comparison is byte equality over the whole `<id>`).
   The engine spawns qn-peer (§4), so the pairing is the parent process:
   qn-peer reads the parent's *running image* through an open descriptor
   (`/proc/<ppid>/exe`, hash-by-fd — the descriptor, not the path, is the

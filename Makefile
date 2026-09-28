@@ -15,16 +15,23 @@ NODE ?= $(firstword $(wildcard $(CURDIR)/bin/node/bin/node) $(shell command -v n
 QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
 QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
 QN_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
-QN_WIRE := $(filter-out src/driver/qn_buildid.h, \
+# Platform-local translation files (*_win.*) are excluded: they only ever
+# pair one machine's own engine with its own daemon, shipped together from
+# one build. The closure is what crosses the wire between machines.
+QN_WIRE := $(filter-out src/driver/qn_buildid.h %_win.c %_win.h, \
   $(sort $(wildcard qn-patches/*.patch) $(wildcard src/driver/qn_*.[ch]) \
-         $(wildcard src/peer/qn_*.cjs) $(wildcard src/protocol/*.md))) \
-  src/vendor/quakespasm/Quake/net_qn.c
+         $(wildcard src/peer/qn*.cjs) $(wildcard src/protocol/*.md) \
+         src/vendor/quakespasm/Quake/net_qn.c))
 QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | sha256sum | cut -c1-16)
 QN_BUILD_ID ?= $(if $(QN_VERSION),$(QN_VERSION),$(QN_COMMIT))p$(QN_WS)$(QN_DIRTY)
 
 .PHONY: print-buildid
 print-buildid:
 	@echo $(QN_BUILD_ID)
+
+.PHONY: print-wire
+print-wire:
+	@echo $(QN_WIRE)
 
 src/driver/qn_buildid.h: FORCE
 	@printf '#define QN_BUILD_ID "%s"\n' '$(QN_BUILD_ID)' > $@.new
