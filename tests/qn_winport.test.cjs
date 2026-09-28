@@ -158,3 +158,16 @@ test('win: markerless or unnamed parent image refuses the join outright', () => 
       'posix must refuse --self-image, never read it');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('buildid: version + wire-closure identity is stable, join-shape-safe', () => {
+  const { execFileSync } = require('node:child_process');
+  const version = fs.readFileSync(path.join(__dirname, '..', 'VERSION'),
+    'utf8').trim();
+  const grab = () => execFileSync('make', ['-s', 'print-buildid'],
+    { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim();
+  const id = grab();
+  assert.match(id, new RegExp('^' + version.replace(/\./g, '\\.') +
+    'p[0-9a-f]{16}(-dirty)?$'));
+  assert.strictEqual(grab(), id);
+  assert.match(id, /^[A-Za-z0-9._+-]{1,64}$/);
+});

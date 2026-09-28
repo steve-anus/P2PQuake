@@ -6,13 +6,25 @@ QS_DIR   := src/vendor/quakespasm
 
 NODE ?= $(firstword $(wildcard $(CURDIR)/bin/node/bin/node) $(shell command -v node 2>/dev/null))
 
-# Source-level build identity (spec §3.4a): commit + digest over the ordered
-# qn-patch series. The engine embeds it as the magic-framed marker the daemon
-# proves from the parent image before joining; changing a patch changes it.
+# Source-level build identity (spec §3.4a): release version plus a digest
+# over the wire-critical source closure. The linux and windows branches are
+# separate distributions; identity follows the wire bytes, not the commit,
+# so both platforms play at the same release. The engine embeds it as the
+# magic-framed marker the daemon proves from the parent image; changing any
+# wire-critical file changes it. QN_COMMIT remains the pre-release fallback.
 QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
 QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
-QN_PSERIES := $(shell cat $(sort $(wildcard qn-patches/*.patch)) 2>/dev/null | sha256sum | cut -c1-16)
-QN_BUILD_ID ?= $(QN_COMMIT)p$(QN_PSERIES)$(QN_DIRTY)
+QN_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
+QN_WIRE := $(filter-out src/driver/qn_buildid.h, \
+  $(sort $(wildcard qn-patches/*.patch) $(wildcard src/driver/qn_*.[ch]) \
+         $(wildcard src/peer/qn_*.cjs) $(wildcard src/protocol/*.md))) \
+  src/vendor/quakespasm/Quake/net_qn.c
+QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | sha256sum | cut -c1-16)
+QN_BUILD_ID ?= $(if $(QN_VERSION),$(QN_VERSION),$(QN_COMMIT))p$(QN_WS)$(QN_DIRTY)
+
+.PHONY: print-buildid
+print-buildid:
+	@echo $(QN_BUILD_ID)
 
 src/driver/qn_buildid.h: FORCE
 	@printf '#define QN_BUILD_ID "%s"\n' '$(QN_BUILD_ID)' > $@.new

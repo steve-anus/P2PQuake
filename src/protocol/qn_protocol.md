@@ -213,8 +213,11 @@ identity of the software a peer actually runs:
 * `build_id` = the source-level build identifier embedded in the engine
   image at compile time as a magic-framed marker: the exact bytes
   `QNBID:<id>\0`, where `<id>` is 1..64 characters from `[A-Za-z0-9._+-]`
-  (the source commit plus a digest over the ordered engine patch series;
-  an implementation may append a provenance suffix from the same charset,
+  (the release version from the committed `VERSION` file plus a digest
+  over the wire-critical source closure - the ordered engine patch series,
+  the qn driver sources, the peer sources, and this specification; before
+  a version is assigned the git commit serves in place of the version; an
+  implementation may append a provenance suffix from the same charset,
   and comparison is byte equality over the whole `<id>`).
   The engine spawns qn-peer (§4), so the pairing is the parent process:
   qn-peer reads the parent's *running image* through an open descriptor
