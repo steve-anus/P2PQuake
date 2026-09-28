@@ -1,6 +1,6 @@
 'use strict';
 // Bootstrap-node lane: exercises the SHIPPED self-hosted bootstrap artifact
-// (tools/bootstrap-node.sh wrapping the pinned hyperdht CLI) as a standalone
+// (linux/bootstrap-node.sh wrapping the pinned hyperdht CLI) as a standalone
 // process -- not the in-process testnets other lanes use. Covers: routing
 // under the product's own swarm config, host announce + viewer snapshot,
 // a real Plane-B join punched through the node, advertisement GC after a

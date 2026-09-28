@@ -623,7 +623,7 @@ test('packaged launcher boots the daemon: require wrapper must reach main()', as
 });
 
 test('release.sh launcher and the daemon export cannot drift apart', () => {
-  const sh = fs.readFileSync(path.join(__dirname, '..', 'tools', 'release.sh'), 'utf8');
+  const sh = fs.readFileSync(path.join(__dirname, '..', 'linux', 'release.sh'), 'utf8');
   assert.match(sh, /require\("\.\/src\/peer\/qn-peer\.cjs"\)\.cliMain\(\);/,
     'staged launcher must invoke the exported cliMain bootstrap');
   assert.equal(typeof Q.cliMain, 'function', 'daemon exports cliMain');
