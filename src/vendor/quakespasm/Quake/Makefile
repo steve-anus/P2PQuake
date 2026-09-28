@@ -272,6 +272,10 @@ OBJS = strlcat.o \
 # targets / rules
 # ---------------------------
 
+ifdef QN_PLATFORM_MAKEFILE
+include $(QN_PLATFORM_MAKEFILE)
+endif
+
 .PHONY:	clean debug release
 
 DEFAULT_TARGET = quakespasm

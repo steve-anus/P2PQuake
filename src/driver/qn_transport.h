@@ -52,7 +52,7 @@ int qn_transport_prepare_dir(const char *dir);
  * is ever unlinked. Returns the listen fd, or -1 with *reason set. */
 int qn_transport_listen(const char *path, const char **reason);
 
-/* accept + SO_PEERCRED uid equality (the pipe belongs to this user alone).
+/* accept + SO_PEERCRED (getpeereid on macOS) uid equality (the pipe belongs to this user alone).
  * Returns the connected fd (set non-blocking), or -1 with *reason set. */
 int qn_transport_accept(int listen_fd, const char **reason);
 

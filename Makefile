@@ -2,13 +2,22 @@
 # the cause, never silenced. Targets marked NOT-READY are honest gates: they
 # fail loudly until their real checks exist.
 
+.DEFAULT_GOAL := all
+
 QS_DIR   := src/vendor/quakespasm
 DRIVER_SRC := $(wildcard src/driver/*.c)
 TEST_SRC   := $(filter-out tests/fake-engine.c,$(wildcard tests/*.c))
 CC ?= gcc
 # explicit NODE= > repo-local bin/node/bin/node (tools/setup-nodejs.sh) > PATH
 NODE ?= $(firstword $(wildcard $(CURDIR)/bin/node/bin/node) $(shell command -v node 2>/dev/null))
+# npm and executable peer shebangs must resolve the same runtime as the tests.
+NODE := $(NODE)
+ifneq ($(NODE),)
+export PATH := $(dir $(NODE)):$(PATH)
+endif
 NODE_TEST_SRC := $(wildcard tests/*.test.cjs)
+
+CHECK_SANITIZERS ?= address,undefined
 
 QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
@@ -19,17 +28,18 @@ QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 # so both platforms play at the same release. The engine embeds it as the
 # magic-framed marker the daemon proves from the parent image; changing any
 # wire-critical file changes it. QN_COMMIT remains the pre-release fallback.
-# Platform-local translation files (*_win.*) are excluded: they only ever
+# Platform-local translation files (*_win.*, *_macos.*) are excluded: they only ever
 # pair one machine's own engine with its own daemon, shipped together from
 # one build. The closure is what crosses the wire between machines.
 QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
 QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
 QN_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
-QN_WIRE := $(filter-out src/driver/qn_buildid.h %_win.c %_win.h, \
+QN_WIRE := $(filter-out src/driver/qn_buildid.h %_win.c %_win.h %_macos.c %_macos.h, \
   $(sort $(wildcard qn-patches/*.patch) $(wildcard src/driver/qn_*.[ch]) \
          $(wildcard src/peer/qn*.cjs) $(wildcard src/protocol/*.md) \
          src/vendor/quakespasm/Quake/net_qn.c))
-QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | sha256sum | cut -c1-16)
+SHA256 := $(if $(filter Darwin,$(shell uname -s)),shasum -a 256,sha256sum)
+QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | $(SHA256) | cut -c1-16)
 QN_BUILD_ID ?= $(if $(QN_VERSION),$(QN_VERSION),$(QN_COMMIT))p$(QN_WS)$(QN_DIRTY)
 
 # Windows cross-build: toolchain (llvm-mingw + SDL2 mingw devel + mpg123
@@ -68,13 +78,20 @@ FORCE:
 
 all: engine peer
 
+ifeq ($(shell uname -s),Darwin)
+# Darwin's per-user TMPDIR can exceed the 104-byte Unix socket path limit.
+# mkdtemp still provides a unique private directory for every test lane.
+export TMPDIR := /tmp
+ENGINE_MAKEFILE := -f ../../../../macos/engine.mk
+endif
+
 # USE_SDL2=1 is mandatory: the upstream Makefile defaults to SDL-1.2
 # (Quakespasm.txt "make USE_SDL2=1 to compile against SDL2").
 # MP3LIB=mpg123: the vendored engine defaults to libmad (Quake/Makefile:26)
 # which is not installed here; the mpg123 backend uses the system library.
 # Both build cleanly; flip this back if libmad ever becomes the preference.
 engine: src/driver/qn_buildid.h
-	$(MAKE) -C $(QS_DIR)/Quake DEBUG=$(DEBUG) USE_SDL2=1 MP3LIB=mpg123 \
+	$(MAKE) -C $(QS_DIR)/Quake $(ENGINE_MAKEFILE) DEBUG=$(or $(DEBUG),0) USE_SDL2=1 MP3LIB=mpg123 \
 	  "CC=$(CC) -ffile-prefix-map=$(HOME)=."
 
 # Check for the qn-patches/README claim: the vendored tree must equal the
@@ -92,8 +109,8 @@ engine-verify: src/driver/qn_buildid.h
 	  (cd "$$Q" && patch -p1 -s -i "$$R/$$p") \
 	    || { echo "engine-verify: FAIL — $$p does not apply to the pin"; exit 1; }; \
 	done; \
-	diff -r -q -x '*.o' -x '*.d' -x quakespasm -x quakespasm.exe -x build-w64 "$$Q" src/vendor/quakespasm \
-	  && $(MAKE) --no-print-directory -s -C "$$Q/Quake" quakespasm \
+	diff -r -q -x '*.o' -x '*.d' -x quakespasm -x quakespasm.exe -x build-w64 -x build-macos -x history.txt "$$Q" src/vendor/quakespasm \
+	  && $(MAKE) --no-print-directory -s -C "$$Q/Quake" $(if $(ENGINE_MAKEFILE),-f "$$R/macos/engine.mk") quakespasm \
 	       USE_SDL2=1 MP3LIB=mpg123 "CC=$(CC) -ffile-prefix-map=$(HOME)=." \
 	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series (applies, diffs, builds)"
 
@@ -102,7 +119,7 @@ peer:
 
 fake-engine: src/driver/qn_buildid.h
 	@mkdir -p bin
-	$(CC) $(QN_CFLAGS) -Isrc/driver tests/fake-engine.c -o bin/fake-engine
+	$(CC) $(QN_CFLAGS) -Isrc/driver tests/fake-engine.c src/driver/qn_os_macos.c -o bin/fake-engine
 
 e2e: fake-engine
 	$(NODE) tests/e2e-room.cjs
@@ -205,7 +222,7 @@ check:
 	fi
 	@tools/clean-lanes.sh
 	@mkdir -p bin
-	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=address,undefined
+	$(CC) $(QN_CFLAGS) $(DRIVER_SRC) $(TEST_SRC) -o bin/qn_tests -fsanitize=$(CHECK_SANITIZERS)
 	./bin/qn_tests
 	$(MAKE) --no-print-directory fake-engine
 	$(if $(NODE_TEST_SRC),$(NODE) --test $(NODE_TEST_SRC),)
@@ -268,6 +285,10 @@ vectors-verify:
 	@if diff -u bin/vectors.spec.txt bin/vectors.gen.txt > /dev/null; then 	  echo "VECTORS OK: spec §7 equals generator output"; 	else echo "VECTORS STALE: regenerate spec §7 from tools/gen-vectors.cjs"; 	  diff -u bin/vectors.spec.txt bin/vectors.gen.txt | head -20; exit 1; fi
 
 clean:
-	rm -rf $(QS_DIR)/Quake/build-w64 $(QS_DIR)/Quake/quakespasm.exe
+	rm -rf $(QS_DIR)/Quake/build-w64 $(QS_DIR)/Quake/build-macos $(QS_DIR)/Quake/quakespasm.exe
 	rm -rf bin
 	$(MAKE) -C $(QS_DIR)/Quake clean
+
+.PHONY: metal-check
+metal-check:
+	$(MAKE) -C $(QS_DIR)/Quake -f ../../../../macos/engine.mk metal-check

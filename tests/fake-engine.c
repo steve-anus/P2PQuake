@@ -10,6 +10,9 @@
 #include <unistd.h>
 
 #include "qn_buildid.h"
+#include "qn_os_macos.h"
+#include <fcntl.h>
+extern char **environ;
 
 const char qn_build_id_marker[] = "QNBID:" QN_BUILD_ID;
 
@@ -45,7 +48,16 @@ int main (int argc, char **argv)
     if (sigaction(SIGTERM, &sa, NULL) < 0 || sigaction(SIGINT, &sa, NULL) < 0
         || sigaction(SIGHUP, &sa, NULL) < 0)
         return 5;
+#ifdef __APPLE__
+    pid_t pid = -1;
+    int program_fd = open(node, O_RDONLY | O_CLOEXEC);
+    if (program_fd >= 0) {
+        (void)qn_macos_spawn(&pid, node, program_fd, STDIN_FILENO, av, environ);
+        close(program_fd);
+    }
+#else
     pid_t pid = fork();
+#endif
     if (pid < 0) {
         free(av);
         return 4;

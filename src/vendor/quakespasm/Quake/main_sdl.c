@@ -67,12 +67,19 @@ static quakeparms_t	parms;
 
 // On OS X we call SDL_main from the launcher, but SDL2 doesn't redefine main
 // as SDL_main on OS X anymore, so we do it ourselves.
-#if defined(USE_SDL2) && defined(__APPLE__)
+#if defined(USE_SDL2) && defined(__APPLE__) && !defined(QN_METAL)
 #define main SDL_main
+#endif
+
+#ifdef QN_METAL
+#define main QNM_engine_main
 #endif
 
 int main(int argc, char *argv[])
 {
+#ifdef QN_METAL
+	setvbuf(stdout, NULL, _IOLBF, 0);
+#endif
 #ifdef __EMSCRIPTEN__
 	initialize_gl4es();
 #endif

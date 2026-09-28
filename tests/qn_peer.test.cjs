@@ -18,7 +18,7 @@ const Q = require('../src/peer/qn-peer.cjs');
 
 const PEER = path.join(__dirname, '..', 'src', 'peer', 'qn-peer.cjs');
 
-test('stale instance hygiene: liveness triple, fail-closed meta, root safety', (t) => {
+test('stale instance hygiene: liveness triple, fail-closed meta, root safety', { skip: process.platform !== 'linux' && 'Linux kernel liveness triple' }, (t) => {
   const { writeInstanceMeta, reapStaleInstances } = Q;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-root-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -93,7 +93,7 @@ test('stale instance hygiene: liveness triple, fail-closed meta, root safety', (
   assert.deepEqual(JSON.parse(fs.readFileSync(mf, 'utf8')), m);
 });
 
-test('instance meta: live other-pid never clobbered; epoch save re-stamps', (t) => {
+test('instance meta: live other-pid never clobbered; epoch save re-stamps', { skip: process.platform !== 'linux' && 'Linux kernel liveness triple' }, (t) => {
   const { writeInstanceMeta, makeEpochStore } = Q;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qnpt-root-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

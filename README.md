@@ -49,7 +49,7 @@ folder.
 
 ## Building from source
 
-Requirements:
+Linux requirements (see below for macOS):
 
 - a C11 toolchain (`CC`, default `gcc`);
 - SDL2, OpenGL and mpg123 development headers (Debian/Ubuntu:
@@ -71,8 +71,8 @@ make check                 # the full test suite
 mpg123 backend, embedding a build identity (the `VERSION` release
 number plus a digest over the wire-critical source: the `qn-patches/`
 series, the driver, the peer, the protocol spec) that the peer proves
-before every join. Builds of the same release on linux and Windows carry
-the identical identity, so the two platforms play together; anything
+before every join. Builds from the same source on Linux, Windows and macOS carry
+the identical identity, so the platforms can play together; anything
 version-mismatched is refused at the join.
 `make check` runs everything: the C protocol/unit suites, the scripted
 multi-process play suites (loopback, two-player over a local DHT with
@@ -90,6 +90,26 @@ archive), the engine needs to know where the content and the peer live:
 ./src/vendor/quakespasm/Quake/quakespasm -basedir gamedata \
     -qn-peer "$PWD/src/peer/qn-peer.cjs"
 ```
+
+### macOS with native Metal
+
+On a Metal-capable Mac with Xcode command-line tools, Homebrew and Python 3:
+
+```sh
+brew install sdl2 mpg123 pkgconf
+tools/setup-nodejs.sh
+export PATH="$PWD/bin/node/bin:$PATH"
+make -j"$(sysctl -n hw.logicalcpu)"
+macos/run.sh
+```
+
+The macOS build uses native Metal through SDL2. The source launcher uses the
+bundled LibreQuake content and repo-local Node runtime. Apple Silicon is
+validated; Intel Mac support needs hardware validation. This adds a source
+build, not a signed or notarized macOS release archive.
+
+See [macos/README.md](macos/README.md) for renderer details, tests, profiling,
+and current limitations. Linux and Windows continue using OpenGL.
 
 ### Cross-building the Windows binary (from linux)
 
@@ -120,7 +140,7 @@ after `make win64`. Each emits `sha256sums-<OS-x64>.txt` plus a detached
 signature, and aborts the build if its own signature fails to verify
 against the public key.
 
-The two platform directories hold only platform-specific tooling —
+The release platform directories hold platform-specific tooling —
 `linux/` (release packaging) and `windows/` (cross-build kit) — and the
 Windows engine source twins in `src/driver/` compile away to nothing on
 linux builds. The full `make check` suite is the gate for every release,

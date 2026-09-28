@@ -3,7 +3,7 @@
 /* Host-page inventory pin (spec 2 pools, host_cmd.c enumeration): the
  * client's map enumeration must surface campaign maps living inside the
  * base-dir paks, not just the disk-side deathmatch inventory. */
-const { spawn } = require('node:child_process');
+const { spawn } = require('./platform.cjs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');

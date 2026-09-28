@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <strings.h>
 #include <sys/random.h>
+#include "qn_os_macos.h"
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -53,7 +54,12 @@ static void qn_kill_child(pid_t id)
 
 static void qn_scrub(void *p, size_t n)
 {
+#ifdef __APPLE__
+    volatile unsigned char *bytes = p;
+    while (n--) *bytes++ = 0;
+#else
     explicit_bzero(p, n);
+#endif
 }
 #endif
 
@@ -123,7 +129,11 @@ static int exec_open(const char *path, const char **reason)
         *reason = "peer program is not a regular file";
         return -1;
     }
+#ifdef __APPLE__
+    if (qn_macos_fd_executable(fd) != 0) {
+#else
     if (faccessat(fd, "", X_OK, AT_EMPTY_PATH | AT_EACCESS) != 0) {
+#endif
         close(fd);
         *reason = "peer program is not executable by us";
         return -1;
@@ -138,7 +148,11 @@ static int exec_open(const char *path, const char **reason)
 static int exe_dir(char *out, size_t cap, const char **reason)
 {
     char base[PATH_MAX];
+#ifdef __APPLE__
+    ssize_t k = qn_macos_executable(base, sizeof base) == 0 ? (ssize_t)strlen(base) : -1;
+#else
     ssize_t k = readlink("/proc/self/exe", base, sizeof base - 1);
+#endif
     if (k <= 0) {
         *reason = "cannot locate this process image";
         return -1;
@@ -226,16 +240,31 @@ static int bundled_open(char *path, size_t cap, const char **reason)
         *reason = "bundled interpreter is not a regular file";
         return -1;
     }
+#ifdef __APPLE__
+    if (qn_macos_fd_executable(fd) != 0) {
+#else
     if (faccessat(fd, "", X_OK, AT_EMPTY_PATH | AT_EACCESS) != 0) {
+#endif
         close(fd);
         *reason = "bundled interpreter is not executable by us";
         return -1;
     }
     char magic[4];
     if (pread(fd, magic, sizeof magic, 0) != (ssize_t)sizeof magic ||
-        memcmp(magic, "\x7f" "ELF", 4) != 0) {
+#ifdef __APPLE__
+        (memcmp(magic, "\xcf\xfa\xed\xfe", 4) != 0 &&
+         memcmp(magic, "\xca\xfe\xba\xbe", 4) != 0 &&
+         memcmp(magic, "\xca\xfe\xba\xbf", 4) != 0))
+#else
+        memcmp(magic, "\x7f" "ELF", 4) != 0)
+#endif
+    {
         close(fd);
+#ifdef __APPLE__
+        *reason = "bundled interpreter is not a Mach-O image";
+#else
         *reason = "bundled interpreter is not an ELF image";
+#endif
         return -1;
     }
     return fd;
@@ -352,7 +381,7 @@ static int has_token(char *const list[], const uint8_t token[QN_SPAWN_TOKEN_LEN]
     return 0;
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 static void child_close_high_fds(int keep)
 {
 #ifdef SYS_close_range
@@ -484,7 +513,11 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     }
 
     int fds[2];
+#ifdef __APPLE__
+    if (qn_macos_pipe(fds) != 0) {
+#else
     if (pipe2(fds, O_CLOEXEC) != 0) {
+#endif
         close(exec_fd);
         *reason = "pipe failed";
         return -1;
@@ -506,14 +539,25 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     s->exit_status = 0;
     s->boot_ms = now_ms;
 
+#ifdef __APPLE__
+    pid_t pid = -1;
+    (void)qn_macos_spawn(&pid, bundled ? interp : program, exec_fd,
+                          fds[0], (char *const *)rargv, envp);
+#else
     pid_t pid = fork();
+#endif
     if (pid < 0) {
         close(fds[0]);
         close(fds[1]);
         close(exec_fd);
+#ifdef __APPLE__
+        *reason = "posix_spawn failed";
+#else
         *reason = "fork failed";
+#endif
         return -1;
     }
+#ifndef __APPLE__
     if (pid == 0) {
         if (dup2(fds[0], STDIN_FILENO) < 0) {
             _exit(126);
@@ -537,6 +581,7 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
         _exit(127); /* only reachable if the execs failed */
     }
 
+#endif
     close(fds[0]);
     close(exec_fd); /* the child holds its own copy; ours is spent */
     /* A pipe write with every reader gone raises SIGPIPE before write()

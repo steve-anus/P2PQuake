@@ -317,9 +317,10 @@ function extractBuildId(image) {
 function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
   exePath = undefined, selfImage = undefined }) {
   const manifest = shaBuf(fs.readFileSync(gamedataPath));
-  /* §3.4a identity source is the running engine image. On posix that
-   * is /proc/<ppid>/exe (hash-by-fd of the actual image). There is no
-   * /proc on Windows: the spawning engine passes its own image path
+  /* §3.4a identity source is the engine image. Linux opens /proc/<ppid>/exe;
+   * macOS inherits the engine's opened image at FD 3. Darwin cannot open a
+   * running image through /proc, so it resolves the executable at spawn;
+   * keep the installation stable while running. On Windows: the spawning engine passes its own image path
    * (--self-image); the daemon still opens, hashes and marker-checks
    * the bytes itself, so a foreign or markerless image fails closed. */
   let imagePath = exePath;
@@ -328,15 +329,26 @@ function computeIdentity({ gamedataPath, gamedir, ppid = process.ppid,
       if (typeof selfImage !== 'string' || selfImage.length === 0)
         throw new Error('no engine image path (--self-image) on windows');
       imagePath = selfImage;
+    } else if (process.platform === 'darwin') {
+      if (selfImage !== undefined) throw new Error('--self-image is a windows-only lane');
+      // The engine passes its opened image at FD 3; no /proc or path supplied
+      // by the peer. Read and close it before opening network connections.
+      imagePath = 3;
     } else {
       if (selfImage !== undefined)
         throw new Error('--self-image is a windows-only lane');
       imagePath = `/proc/${ppid}/exe`;
     }
   }
-  const fd = fs.openSync(imagePath, 'r');
+  const inherited = typeof imagePath === 'number';
+  const fd = inherited ? imagePath : fs.openSync(imagePath, 'r');
+  // Without the engine launcher, Node may already use FD 3 for its event
+  // loop. Reject that descriptor without closing somebody else's handle.
+  if (inherited && !fs.fstatSync(fd).isFile())
+    throw new Error('engine image is not a regular file');
   const parts = [];
   try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error('engine image is not a regular file');
     const chunk = Buffer.alloc(1 << 20);
     for (;;) {
       const n = fs.readSync(fd, chunk, 0, chunk.length, null);
