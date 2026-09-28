@@ -92,7 +92,7 @@ engine-verify: src/driver/qn_buildid.h
 	  (cd "$$Q" && patch -p1 -s -i "$$R/$$p") \
 	    || { echo "engine-verify: FAIL — $$p does not apply to the pin"; exit 1; }; \
 	done; \
-	diff -r -q -x '*.o' -x '*.d' -x quakespasm "$$Q" src/vendor/quakespasm \
+	diff -r -q -x '*.o' -x '*.d' -x quakespasm -x quakespasm.exe -x build-w64 "$$Q" src/vendor/quakespasm \
 	  && $(MAKE) --no-print-directory -s -C "$$Q/Quake" quakespasm \
 	       USE_SDL2=1 MP3LIB=mpg123 "CC=$(CC) -ffile-prefix-map=$(HOME)=." \
 	  && echo "ENGINE-VERIFY OK: tree == pin + qn-patches series (applies, diffs, builds)"
