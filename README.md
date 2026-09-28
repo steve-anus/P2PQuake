@@ -1,9 +1,9 @@
 # P2PQuake
 
-Serverless peer-to-peer Quake: a patched QuakeSpasm engine plus a Node
+Serverless peer-to-peer Quake: a patched [QuakeSpasm](https://github.com/sezero/quakespasm) engine plus a Node
 match peer that discovers peers over a DHT, authenticates sessions with
 Noise, verifies game traffic with signed match envelopes, and falls back
-to blind relays.
+to blind relays. 
 
 ## Playing
 
@@ -141,6 +141,19 @@ Release binaries are **not code-signed**. On Windows the first run of
 `quakespasm.exe` may draw a SmartScreen prompt for that reason;
 confirming once is enough, and the commands above prove the bits you
 downloaded are the bits that were published.
+
+## Credits
+
+  Thanks to the contributors of [Quakespasm](https://github.com/sezero/quakespasm) and [LibreQuake](https://github.com/lavenderdotpet/LibreQuake) for their amazing work.
+
+  Thanks also to Mathias Buus and the Holepunch community, whose
+  [Hyperswarm](https://github.com/holepunchto/hyperswarm),
+  [HyperDHT](https://github.com/holepunchto/hyperdht) and
+  [blind-relay](https://github.com/holepunchto/blind-relay) (MIT /
+  Apache-2.0) carry peer discovery, holepunching and relaying — and to
+  Petar Maymounkov and David Mazières for
+  [Kademlia](https://pdos.csail.mit.edu/~petar/papers/maymounkov-kademlia-lncs.pdf),
+  the DHT design that the network layer builds on.
 
 ## Licenses
 
