@@ -8,7 +8,9 @@ to blind relays.
 ## Playing
 
 1. Download the newest release for your platform from the project's releases page.
-2. Unpack it (under /opt on linux). Everything the game needs is inside.
+2. Unpack it somewhere you own - `/opt` is a fine choice on linux, any
+   folder works on Windows. Everything the game needs is inside,
+   including the peer runtime; nothing else has to be installed.
 3. Open a terminal, cd into the unpacked folder and start the game:  
 
    - linux:
@@ -87,8 +89,8 @@ archive), the engine needs to know where the content and the peer live:
 
 The Windows engine is cross-compiled from a linux machine with
 llvm-mingw; the result is a static PE32+ build that needs no extra
-runtime DLLs and ships beside the same pinned node runtime
-(win32-x64) that the peer runs on:
+runtime DLLs and packages beside the same pinned node runtime
+(win32-x64) the peer runs on:
 
 ```
 tools/winbuild.sh --fetch   # llvm-mingw + SDL2 mingw-devel under $WINBUILD
@@ -99,25 +101,26 @@ tools/winpack.sh            # stage + zip the self-contained win-x64 archive
 `WINBUILD` points at the toolchain directory (default: `winbuild/` in
 the repo checkout, git-ignored). Cross-building mpg123 is the one step
 not yet scripted: configure its source with `--host=x86_64-w64-mingw32
---enable-static --disable-shared` and install it to
-`$WINBUILD/mpg123-out`. The Windows build ships WAV + MP3 streaming;
-flac/vorbis/opus are not wired into the cross build yet.
+--enable-static --disable-shared` and install to `$WINBUILD/mpg123-out`.
+The Windows build ships WAV + MP3 streaming; flac/vorbis/opus are not
+wired into the cross build yet.
 
 ## Releases & verification
 
-Archives are named `p2pquake-<version>-linux-x64.zip` and ship with
-`sha256sums.txt` and a detached SSH signature:
+Archives are named `p2pquake-<version>-<OS-x64>.zip` and ship with
+`sha256sums.txt` and a detached SSH signature (`<zip>.sig`). The trust
+anchor is `RELEASE-PUBKEY` at the root of this repository — read it from
+a source you already trust, not from the same download as the archive:
 
 ```
 sha256sum -c sha256sums.txt
-printf '<identity> <your-trusted-pubkey-line>\n' > allowed_signers
-ssh-keygen -Y verify -f allowed_signers -I <identity> -n file \
-    -s p2pquake-<version>-<os-x64>.zip.sig \
-    < p2pquake-<version>-<os-x64>.zip
+printf 'p2pquake-releases %s\n' "$(cat RELEASE-PUBKEY)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I p2pquake-releases -n file \
+    -s p2pquake-<version>-<OS-x64>.zip.sig \
+    < p2pquake-<version>-<OS-x64>.zip
 ```
 
-Release binaries are **not code-signed**.
- On Windows the first run of
+Release binaries are **not code-signed**. On Windows the first run of
 `quakespasm.exe` may draw a SmartScreen prompt for that reason;
 confirming once is enough, and the commands above prove the bits you
 downloaded are the bits that were published.
