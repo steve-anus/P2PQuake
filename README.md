@@ -66,8 +66,12 @@ make check                 # the full test suite
 ```
 
 `make engine` builds the vendored QuakeSpasm tree against SDL2 with the
-mpg123 backend, embedding a build identity (commit + digest of the
-`qn-patches/` series) that the peer proves before every join.
+mpg123 backend, embedding a build identity (the `VERSION` release
+number plus a digest over the wire-critical source: the `qn-patches/`
+series, the driver, the peer, the protocol spec) that the peer proves
+before every join. Builds of the same release on linux and Windows carry
+the identical identity, so the two platforms play together; anything
+version-mismatched is refused at the join.
 `make check` runs everything: the C protocol/unit suites, the scripted
 multi-process play suites (loopback, two-player over a local DHT with
 relay fallback, discovery, lobby browser, visibility, hostile adverts,
@@ -99,13 +103,27 @@ windows/winpack.sh            # stage + zip the self-contained win-x64 archive
 ```
 
 `WINBUILD` points at the toolchain directory (default: `winbuild/` in
-the repo checkout, git-ignored). Cross-building mpg123 is the one step
-not yet scripted: configure its source with `--host=x86_64-w64-mingw32
---enable-static --disable-shared` and install to `$WINBUILD/mpg123-out`.
-The Windows build ships WAV + MP3 streaming; flac/vorbis/opus are not
-wired into the cross build yet.
+the repo checkout, git-ignored). `winbuild.sh --fetch` is idempotent and
+scripts every dependency, including the mpg123 static cross-build (source
+tarball pinned to an exact sha256, GPG-checked against the maintainer key
+published on mpg123.org). The Windows build ships WAV + MP3 streaming;
+flac/vorbis/opus are not wired into the cross build yet.
 
 ## Releases & verification
+
+Both platform archives are built from a tagged checkout:
+`linux/release.sh <tag>` (which runs the full test suite and the
+shipped-bytes checks itself before packaging) and `windows/winpack.sh`
+after `make win64`. Each emits `sha256sums.txt` plus a detached
+signature, and aborts the build if its own signature fails to verify
+against the public key.
+
+The repository is a single `main` branch; the code is shared. The two
+platform directories hold only platform-specific tooling —
+`linux/` (release packaging) and `windows/` (cross-build kit) — and the
+Windows engine source twins in `src/driver/` compile away to nothing on
+linux builds. The full `make check` suite is the gate for every release,
+Windows code included.
 
 Archives are named `p2pquake-<version>-<OS-x64>.zip` and ship with
 `sha256sums.txt` and a detached SSH signature (`<zip>.sig`). The trust
