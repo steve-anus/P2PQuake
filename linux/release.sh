@@ -60,6 +60,9 @@ make check
 echo "==> bootstrap-node lane (operator surface, minutes-heavy; release-only)"
 make bootstrap-node
 
+echo "==> engine-verify (pin + qn-patches series == tree)"
+make engine-verify
+
 echo "==> engine build"
 make engine
 ENGINE_BIN=src/vendor/quakespasm/Quake/quakespasm
