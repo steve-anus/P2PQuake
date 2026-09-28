@@ -35,14 +35,28 @@ static char g_expected[4096]; /* normalized; empty = accept refuses all */
 
 static void qnw_norm(const char *in, char *out, size_t outlen)
 {
-    char tmp[4096];
-    size_t j = 0;
+    char pre[4096], tmp[4096];
+    const char *s = in;
 
     out[0] = '\0';
-    if (GetLongPathNameA(in, tmp, sizeof tmp) == 0)
-        snprintf(tmp, sizeof tmp, "%s", in);
-    if (strncmp(tmp, "\\\\?\\", 4) == 0)
-        memmove(tmp, tmp + 4, strlen(tmp + 4) + 1);
+    if (outlen == 0)
+        return;
+    if (strncmp(s, "\\\\?\\", 4) == 0)
+        s += 4;
+    /* unify separators BEFORE GetLongPathNameA: it refuses device
+     * prefixes and slash-delimited paths, and the daemon may legitimately
+     * be armed with either (mixed separators from the resolve join,
+     * backslashes from the process-image query) */
+    {
+        size_t j = 0;
+        for (size_t i = 0; s[i] != '\0' && j + 1 < sizeof pre; i++)
+            pre[j++] = (s[i] == '/') ? '\\' : s[i];
+        pre[j] = '\0';
+    }
+    DWORD r = GetLongPathNameA(pre, tmp, sizeof tmp);
+    if (r == 0 || r >= sizeof tmp)
+        snprintf(tmp, sizeof tmp, "%s", pre);
+    size_t j = 0;
     for (size_t i = 0; tmp[i] != '\0' && j + 1 < outlen; i++)
         out[j++] = (tmp[i] >= 'a' && tmp[i] <= 'z') ? (char)(tmp[i] - 32) : tmp[i];
     out[j] = '\0';
