@@ -258,7 +258,8 @@ const shaBuf = (b) => crypto.createHash('sha256').update(b).digest();
 function ensureIdentity(dir) {
   fs.mkdirSync(dir, { mode: 0o700, recursive: true });
   const st = fs.statSync(dir);
-  if ((st.mode & 0o077) !== 0) throw new Error('state dir is group/other-accessible');
+  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0)
+    throw new Error('state dir is group/other-accessible');
   const keyPath = path.join(dir, 'identity.key');
   let seed;
   try {
@@ -273,7 +274,8 @@ function ensureIdentity(dir) {
     finally { fs.closeSync(fd); }
   }
   const mode = fs.statSync(keyPath).mode & 0o777;
-  if ((mode & 0o077) !== 0) throw new Error('identity.key is group/other-accessible');
+  if (process.platform !== 'win32' && (mode & 0o077) !== 0)
+    throw new Error('identity.key is group/other-accessible');
   const priv = E.privateKeyFromSeed(seed);
   return { priv, pub: Buffer.from(E.publicRaw(E.publicKeyFromSeed(seed))) };
 }
@@ -935,6 +937,16 @@ function qnFnv1aHex(s) {
   return h.toString(16).padStart(8, '0');
 }
 function defaultStateDir(uds) {
+  if (process.platform === 'win32') {
+    /* The engine embeds the instance tag (fnv1a of its socket dir) in
+     * the pipe name: the daemon cannot re-derive it from dirname of a
+     * pipe path (constant), so it extracts and fail-closed validates. */
+    const m = /^\\\\[.]\\pipe\\p2pquake-([0-9a-f]{8})$/i.exec(uds.trim());
+    if (!m) return null;
+    const la = process.env.LOCALAPPDATA;
+    if (typeof la !== 'string' || !/^[A-Za-z]:[\\/]/.test(la)) return null;
+    return path.join(la, 'p2pquake', m[1].toLowerCase());
+  }
   const xdg = process.env.XDG_STATE_HOME;
   const abs = path.resolve(uds);
   const sockDir = path.dirname(abs);

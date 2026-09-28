@@ -77,4 +77,14 @@ int qn_transport_send(qn_transport_t *t, uint16_t type,
 
 void qn_transport_close(qn_transport_t *t);
 
+/* Pump-loop helpers so net_qn.c stays platform-neutral: readiness for
+ * accept, listener/session teardown, listener-name cleanup, and the
+ * Windows accept-gate armament (absolute daemon image path; ignored on
+ * unix where the gate is SO_PEERCRED uid equality). */
+int qn_transport_can_accept(int listen_fd, const char **reason);
+void qn_transport_close_listener(int fd);
+void qn_transport_drop(int fd);
+void qn_transport_forget_listener(const char *path);
+void qn_transport_expect_peer(const char *abs_image);
+
 #endif /* QN_TRANSPORT_H */

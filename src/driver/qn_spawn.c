@@ -1,25 +1,61 @@
 /* qn_spawn.c — see qn_spawn.h. Every path decision is a refusal, never a
  * fallback; validation and exec share one open descriptor, so a swapped
  * path cannot race the check. */
+#ifndef _WIN32
 #define _GNU_SOURCE
+#endif
 #include "qn_spawn.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <sched.h>
-#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include "qn_spawn_win.h"
+#undef PATH_MAX
+#define PATH_MAX 4096
+#else
+#include <fcntl.h>
+#include <sched.h>
+#include <signal.h>
 #include <strings.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
+#ifdef _WIN32
+#define QN_PEER_SIBLING "runtime/node.exe" /* packaged win layout */
+#else
 #define QN_PEER_SIBLING "qn-peer"
+#endif
 #define QN_SPAWN_REAP_TRIES 64 /* bounded WNOHANG tries; no sleeping */
+
+#ifdef _WIN32
+static void qn_kill_child(pid_t id)
+{
+    qnw_spawn_kill((int)id);
+}
+
+static void qn_scrub(void *p, size_t n)
+{
+    SecureZeroMemory(p, n);
+}
+#else
+static void qn_kill_child(pid_t id)
+{
+    kill(id, SIGKILL);
+}
+
+static void qn_scrub(void *p, size_t n)
+{
+    explicit_bzero(p, n);
+}
+#endif
 
 void qn_spawn_init(qn_spawn_t *s)
 {
@@ -29,13 +65,30 @@ void qn_spawn_init(qn_spawn_t *s)
 
 int qn_spawn_make_token(uint8_t out[QN_SPAWN_TOKEN_LEN])
 {
+#ifdef _WIN32
+    return qnw_make_token(out);
+#else
     return getentropy(out, QN_SPAWN_TOKEN_LEN) == 0 ? 0 : -1;
+#endif
 }
 
 /* Policy view of the path (resolve-time, for clean early errors). The
  * authoritative check is exec_open() on an opened descriptor. */
 static int exec_ok_path(const char *path, const char **reason)
 {
+#ifdef _WIN32
+    char c0 = path[0];
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z')) ||
+        path[1] != ':' || (path[2] != '\\' && path[2] != '/')) {
+        *reason = "peer program must be an absolute path";
+        return -1;
+    }
+    if (qnw_prog_is_pe(path) != 0) {
+        *reason = "peer program is not a readable PE image";
+        return -1;
+    }
+    return 0;
+#else
     struct stat st;
     if (path[0] != '/') {
         *reason = "peer program must be an absolute path";
@@ -50,8 +103,10 @@ static int exec_ok_path(const char *path, const char **reason)
         return -1;
     }
     return 0;
+#endif
 }
 
+#ifndef _WIN32
 /* Open `path` and validate through the descriptor: same file we exec,
  * executable by our effective identity (real-uid access() would diverge
  * under any setuid posture). Returns the fd, or -1 with *reason set. */
@@ -75,7 +130,9 @@ static int exec_open(const char *path, const char **reason)
     }
     return fd;
 }
+#endif
 
+#ifndef _WIN32
 /* Directory of this process image, with the resolve lane's refusal
  * discipline: truncation is a refusal, never a probe of a prefix. */
 static int exe_dir(char *out, size_t cap, const char **reason)
@@ -104,7 +161,38 @@ static int exe_dir(char *out, size_t cap, const char **reason)
     memcpy(out, base, strlen(base) + 1);
     return 0;
 }
+#endif
 
+#ifdef _WIN32
+static int exe_dir(char *out, size_t cap, const char **reason)
+{
+    char base[PATH_MAX];
+    DWORD k = GetModuleFileNameA(NULL, base, (DWORD)sizeof base - 1);
+    if (k == 0 || k >= (DWORD)sizeof base - 1) {
+        *reason = "cannot locate this process image";
+        return -1; /* truncation is a refusal, never a prefix probe */
+    }
+    base[k] = '\0';
+    char *sep = strrchr(base, '\\');
+    char *alt = strrchr(base, '/');
+    if (alt != NULL && (sep == NULL || alt > sep)) {
+        sep = alt;
+    }
+    if (sep == NULL || sep == base) {
+        *reason = "process image path malformed";
+        return -1;
+    }
+    *sep = '\0';
+    if (strlen(base) >= cap) {
+        *reason = "process image path too long";
+        return -1;
+    }
+    memcpy(out, base, strlen(base) + 1);
+    return 0;
+}
+#endif
+
+#ifndef _WIN32
 /* Packaged layout: <exe-dir>/runtime/node is the app-local interpreter,
  * execed through its own validated descriptor with the peer entry as the
  * interpreter's first argument. The descriptor promise covers the
@@ -152,6 +240,7 @@ static int bundled_open(char *path, size_t cap, const char **reason)
     }
     return fd;
 }
+#endif
 
 int qn_spawn_resolve(char *out, size_t outlen, const char *override,
                      const char **reason)
@@ -185,6 +274,7 @@ int qn_spawn_resolve(char *out, size_t outlen, const char *override,
     return 0;
 }
 
+#ifndef _WIN32
 /* One bounded, non-sleeping reap attempt set. */
 static void reap(qn_spawn_t *s)
 {
@@ -209,6 +299,21 @@ static void reap(qn_spawn_t *s)
         sched_yield(); /* let the dying child reach its exit state */
     }
 }
+#else
+static void reap(qn_spawn_t *s)
+{
+    for (int i = 0; i < QN_SPAWN_REAP_TRIES; i++) {
+        int status = 0;
+        if (qnw_spawn_check(s->pid, &status) == 1) {
+            s->exited = 1;
+            s->exit_status = status;
+            s->pid = -1;
+            return;
+        }
+        SwitchToThread(); /* bounded spin, never a sleep */
+    }
+}
+#endif
 
 static int token_is_new(const qn_spawn_t *s, const uint8_t token[QN_SPAWN_TOKEN_LEN])
 {
@@ -220,6 +325,19 @@ static int token_is_new(const qn_spawn_t *s, const uint8_t token[QN_SPAWN_TOKEN_
     return 1;
 }
 
+static const void *qn_memmem(const void *hay, size_t hn, const void *needle,
+                            size_t nn)
+{
+    const unsigned char *h = hay;
+    for (size_t i = 0; i + nn <= hn; i++) {
+        if (h[i] == ((const unsigned char *)needle)[0] &&
+            memcmp(h + i, needle, nn) == 0) {
+            return h + i;
+        }
+    }
+    return NULL;
+}
+
 static int has_token(char *const list[], const uint8_t token[QN_SPAWN_TOKEN_LEN])
 {
     if (list == NULL) {
@@ -227,13 +345,14 @@ static int has_token(char *const list[], const uint8_t token[QN_SPAWN_TOKEN_LEN]
     }
     for (int i = 0; list[i] != NULL; i++) {
         if (strlen(list[i]) >= QN_SPAWN_TOKEN_LEN &&
-            memmem(list[i], strlen(list[i]), token, QN_SPAWN_TOKEN_LEN) != NULL) {
+            qn_memmem(list[i], strlen(list[i]), token, QN_SPAWN_TOKEN_LEN) != NULL) {
             return 1;
         }
     }
     return 0;
 }
 
+#ifndef _WIN32
 static void child_close_high_fds(int keep)
 {
 #ifdef SYS_close_range
@@ -260,6 +379,7 @@ static void child_close_high_fds(int keep)
         }
     }
 }
+#endif
 
 int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
                    char *const envp[], const uint8_t token[QN_SPAWN_TOKEN_LEN],
@@ -296,6 +416,23 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     if (exec_ok_path(program, reason) != 0) {
         return -1;
     }
+#ifdef _WIN32
+    s->authed = 0;
+    s->killed = 0;
+    s->exited = 0;
+    s->exit_status = 0;
+    s->boot_ms = now_ms;
+    int slot = qnw_spawn_exec(program, argv, envp, token, reason);
+    if (slot < 0) {
+        return -1;
+    }
+    s->pid = slot;
+    memcpy(s->seen[s->handshakes % QN_SPAWN_MAX_HANDSHAKES], token,
+           QN_SPAWN_TOKEN_LEN);
+    s->handshakes++;
+    return 0;
+}
+#else
     char interp[PATH_MAX];
     int exec_fd = bundled_open(interp, sizeof interp, reason);
     if (exec_fd == -1) {
@@ -447,6 +584,7 @@ int qn_spawn_start(qn_spawn_t *s, const char *program, char *const argv[],
     s->handshakes++;
     return 0;
 }
+#endif
 
 int qn_spawn_check(qn_spawn_t *s, uint64_t now_ms)
 {
@@ -454,6 +592,16 @@ int qn_spawn_check(qn_spawn_t *s, uint64_t now_ms)
     if (s->pid == -1) {
         return 0;
     }
+#ifdef _WIN32
+    int status = 0;
+    if (qnw_spawn_check(s->pid, &status) == 1) {
+        s->exited = 1;
+        s->exit_status = status;
+        s->pid = -1;
+        return 1;
+    }
+    return 0;
+#else
     int status = 0;
     pid_t r = waitpid(s->pid, &status, WNOHANG);
     if (r == 0) {
@@ -469,6 +617,7 @@ int qn_spawn_check(qn_spawn_t *s, uint64_t now_ms)
     s->exit_status = -1; /* see header: single-reaper contract broken */
     s->pid = -1;
     return 1;
+#endif
 }
 
 int qn_spawn_running(const qn_spawn_t *s)
@@ -481,7 +630,11 @@ int qn_spawn_exited_cleanly(const qn_spawn_t *s)
     if (!s->exited || s->killed || s->exit_status == -1) {
         return 0; /* unreaped, killed, or reaped elsewhere: not a choice */
     }
+#ifdef _WIN32
+    return s->exit_status == 0; /* raw Win32 exit code; kill path sets s->killed */
+#else
     return WIFEXITED(s->exit_status) && WEXITSTATUS(s->exit_status) == 0;
+#endif
 }
 
 int qn_spawn_watchdog(qn_spawn_t *s, uint64_t now_ms)
@@ -496,7 +649,7 @@ int qn_spawn_watchdog(qn_spawn_t *s, uint64_t now_ms)
         return 0;
     }
     if (!s->killed) {
-        kill(s->pid, SIGKILL);
+        qn_kill_child(s->pid);
         s->killed = 1;
     }
     reap(s);
@@ -506,10 +659,10 @@ int qn_spawn_watchdog(qn_spawn_t *s, uint64_t now_ms)
 void qn_spawn_stop(qn_spawn_t *s)
 {
     if (s->pid != -1) {
-        kill(s->pid, SIGKILL);
+        qn_kill_child(s->pid);
         s->killed = 1;
         reap(s); /* a pending SIGKILL leaves no live orphan: the reparent
                   * (init) completes the reap if we cannot */
     }
-    explicit_bzero(s->seen, sizeof s->seen);
+    qn_scrub(s->seen, sizeof s->seen);
 }
