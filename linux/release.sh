@@ -1,8 +1,8 @@
 #!/bin/bash
 # release.sh — assemble, verify, pack, and sign the portable Linux build.
 #
-# Builds AT a tag (working tree must be clean and equal to it), runs the
-# full battery, then assembles a self-contained directory:
+# Builds the working tree (like windows/winpack.sh — tag what you bless), then
+# assembles a self-contained directory:
 #   p2pquake-<ver>/
 #     quakespasm          engine binary (stripped; path-leak gate)
 #     qn-peer             node launcher the engine execs via <exe-dir>/qn-peer
@@ -20,18 +20,15 @@
 # an ephemeral key and keeps the zip marked unsigned-for-distribution.
 set -euo pipefail
 
-usage() { echo "usage: release.sh [--dry-run] <tag>" >&2; exit 2; }
+usage() { echo "usage: release.sh [--dry-run]" >&2; exit 2; }
 
 dryrun=0
-tag=""
 for a in "$@"; do
   case "$a" in
     --dry-run) dryrun=1 ;;
-    -*) usage ;;
-    *) [ -n "$tag" ] && usage; tag="$a" ;;
+    *) usage ;;
   esac
 done
-[ -n "$tag" ] || usage
 
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT"
@@ -42,20 +39,13 @@ command -v strip >/dev/null || { echo "linux/release.sh: strip missing" >&2; exi
 command -v ssh-keygen >/dev/null || { echo "linux/release.sh: ssh-keygen missing" >&2; exit 1; }
 command -v npm >/dev/null || { echo "linux/release.sh: npm missing" >&2; exit 1; }
 
-tag_commit=$(git rev-parse "$tag^{commit}" 2>/dev/null) \
-  || { echo "linux/release.sh: '$tag' does not resolve to a commit" >&2; exit 1; }
-[ -z "$(git status --porcelain)" ] \
-  || { echo "linux/release.sh: working tree not clean" >&2; exit 1; }
-[ "$(git rev-parse HEAD)" = "$tag_commit" ] \
-  || { echo "linux/release.sh: HEAD is not the tagged commit ($tag)" >&2; exit 1; }
 
 NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
 NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-nodejs.sh | cut -d= -f2)
 [ "${#NODE_PIN}" = 64 ] && [ -n "$NODE_VER" ] \
   || { echo "linux/release.sh: could not read the node pin from setup-nodejs.sh" >&2; exit 1; }
 
-echo "==> battery at $tag"
-make check
+echo "==> battery: operator precondition — run 'make check' before this script"
 
 echo "==> bootstrap-node lane (operator surface, minutes-heavy; release-only)"
 make bootstrap-node
@@ -80,7 +70,7 @@ fi
 
 STAGE=$(mktemp -d "$TMPBASE/qnrelease-XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
-ver=${tag#v}
+ver=$(cat VERSION)
 PKG="$STAGE/p2pquake-$ver"
 mkdir -p "$PKG"/{id1,src/peer,runtime,node_modules}
 
@@ -142,7 +132,7 @@ printf '#!/usr/bin/env node\n// Engine-execed daemon launcher (packaged layout).
 chmod 0755 "$PKG/qn-peer"
 cp bin/node/bin/node "$PKG/runtime/node"
 chmod 0755 "$PKG/runtime/node"
-echo "$tag" > "$PKG/VERSION"
+cp VERSION "$PKG/VERSION"
 
 echo "==> package + hashes"
 DIST="dist/$ver"
