@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 'use strict';
-/* qn-relay sweep enforcement tests. The caps exist because a relay is
+/* qn-relay admission, sweep, and service lifecycle tests. The caps exist because a relay is
  * operator-run and anyone who can mint a keypair may connect; so the
  * enforcement path is reachable by attackers and must be exercised here
  * (the two-player lane asserts dropped===0, which by itself never runs
- * the kill branch). Traffic proof for this file = the relay counters:
- * the relay process surviving an overrunning session IS the assertion —
- * a throw in the sweep callback takes this test process down with it. */
+ * the rejection branch). Real-wire pair requests assert exact allocation
+ * counts as well as cleanup; timers alone cannot bound allocation bursts. */
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -15,7 +14,7 @@ const DHT = require('hyperdht');
 const createTestnet = require('hyperdht/testnet');
 const { Client: BlindRelayClient } = require('blind-relay');
 const { once } = require('node:events');
-const { makeRelayNode, MAX_PAIRS_PER_SESSION } = require('../src/peer/qn-relay.cjs');
+const { makeRelayNode, MAX_PAIRS_PER_SESSION, MAX_ACTIVE_PAIRINGS, MAX_PENDING } = require('../src/peer/qn-relay.cjs');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const connect = (dht, key) => new Promise((res, rej) => {
@@ -57,7 +56,7 @@ function floodPair(client, isInitiator, tokens, baseId) {
   return reqs;
 }
 
-test('sweep caps matched-link fan-out and survives the kill', { timeout: 60000 }, async () => {
+test('pair admission caps matched-link fan-out before allocating excess streams', { timeout: 60000 }, async () => {
   const tnet = await startTestnet();
   const relay = await makeRelayNode({ bootstrap: tnet.bootstrap, idleMs: 5000, sweepMs: 200 });
   const attacker = new DHT({ bootstrap: tnet.bootstrap, port: 0 });
@@ -80,8 +79,8 @@ test('sweep caps matched-link fan-out and survives the kill', { timeout: 60000 }
     floodPair(cb, false, tokens, 5000);
     await sleep(1500); // multiple sweep ticks
     const st = relay.stats;
-    assert.ok(st.pairings.matched >= n, 'links formed: ' + JSON.stringify(st));
-    assert.ok(st.dropped >= 2, 'overrunning sessions reaped: dropped=' + st.dropped);
+    assert.ok(st.pairings.matched <= MAX_PAIRS_PER_SESSION, 'bounded links: ' + JSON.stringify(st));
+    assert.ok(st.refused >= 1, 'overrunning session refused: ' + JSON.stringify(st));
     assert.ok(st.sessions.closed >= 2, 'closed=' + st.sessions.closed);
     assert.equal(st.pairings.pending, 0, 'reaped pairings must return to zero');
   } finally {
@@ -115,6 +114,127 @@ test('idle sweep reaps a pending-holding squatter', { timeout: 60000 }, async ()
   } finally {
     for (const c of conns) { try { c.destroy(); } catch (e) { /* gone */ } }
     attacker.destroy();
+    await relay.close();
+    await tnet.destroy();
+  }
+});
+
+test('existing sessions cannot exceed the global active-pair limit', { timeout: 60000 }, async () => {
+  const tnet = await startTestnet();
+  const relay = await makeRelayNode({ bootstrap: tnet.bootstrap, sweepMs: 60000 });
+  const attacker = new DHT({ bootstrap: tnet.bootstrap, port: 0 });
+  const conns = [];
+  try {
+    await attacker.fullyBootstrapped();
+    // Admit all sessions before pairing: admission-only checks miss this.
+    const groups = Math.floor(MAX_ACTIVE_PAIRINGS / MAX_PAIRS_PER_SESSION) + 1;
+    const clients = [];
+    for (let i = 0; i < groups * 2; i++) {
+      const conn = await connect(attacker, relay.publicKey);
+      conn.on('error', () => {}); conns.push(conn);
+      const client = BlindRelayClient.from(conn, { id: conn.publicKey });
+      await clientReady(client); clients.push(client);
+    }
+    for (let i = 0; i < groups; i++) {
+      const tokens = Array.from({ length: MAX_PAIRS_PER_SESSION }, () => crypto.randomBytes(32));
+      floodPair(clients[i * 2], true, tokens, 1000 + 100 * i);
+      floodPair(clients[i * 2 + 1], false, tokens, 5000 + 100 * i);
+      await sleep(100);
+    }
+    await sleep(200);
+    assert.equal(relay.stats.pairings.matched, MAX_ACTIVE_PAIRINGS,
+      'must admit the capacity, then reject new allocations: ' + JSON.stringify(relay.stats));
+    assert.ok(relay.stats.refused > 0, 'excess request was refused');
+  } finally {
+    for (const conn of conns) conn.destroy();
+    await attacker.destroy();
+    await relay.close();
+    await tnet.destroy();
+  }
+});
+
+test('live tokens cannot hide additional pairs on different sessions', { timeout: 60000 }, async () => {
+  const tnet = await startTestnet();
+  const relay = await makeRelayNode({ bootstrap: tnet.bootstrap });
+  const peer = new DHT({ bootstrap: tnet.bootstrap, port: 0 });
+  const conns = [];
+  try {
+    await peer.fullyBootstrapped();
+    const clients = [];
+    for (let i = 0; i < 4; i++) {
+      const conn = await connect(peer, relay.publicKey);
+      conns.push(conn);
+      const client = BlindRelayClient.from(conn, { id: conn.publicKey });
+      await clientReady(client); clients.push(client);
+    }
+    const token = crypto.randomBytes(32);
+    floodPair(clients[0], true, [token], 1000);
+    floodPair(clients[1], false, [token], 2000);
+    for (let i = 0; i < 100 && relay.stats.pairings.matched === 0; i++) await sleep(10);
+    assert.equal(relay.stats.pairings.matched, 1);
+    floodPair(clients[2], true, [token], 3000);
+    floodPair(clients[3], false, [token], 4000);
+    await sleep(200);
+    assert.equal(relay.stats.pairings.matched, 1);
+    assert.equal(relay.stats.streams.opened, 2);
+    assert.equal(relay.stats.pairings.pending, 0);
+    assert.ok(relay.stats.refused >= 1);
+  } finally {
+    for (const conn of conns) conn.destroy();
+    await peer.destroy(); await relay.close(); await tnet.destroy();
+  }
+});
+
+test('pending requests are capped before the next sweep', { timeout: 60000 }, async () => {
+  const tnet = await startTestnet();
+  const relay = await makeRelayNode({ bootstrap: tnet.bootstrap, idleMs: 60000, sweepMs: 60000 });
+  const peer = new DHT({ bootstrap: tnet.bootstrap, port: 0 });
+  const conns = [];
+  try {
+    await peer.fullyBootstrapped();
+    const clients = [];
+    for (let i = 0; i <= Math.ceil(MAX_PENDING / MAX_PAIRS_PER_SESSION); i++) {
+      const conn = await connect(peer, relay.publicKey);
+      conns.push(conn);
+      const client = BlindRelayClient.from(conn, { id: conn.publicKey });
+      await clientReady(client); clients.push(client);
+    }
+    for (const client of clients) {
+      floodPair(client, true, Array.from({ length: MAX_PAIRS_PER_SESSION }, () => crypto.randomBytes(32)), 1000);
+    }
+    await sleep(200);
+    assert.equal(relay.stats.pairings.pending, MAX_PENDING);
+    assert.equal(relay.stats.pairings.requested, MAX_PENDING);
+    assert.ok(relay.stats.refused >= 1);
+  } finally {
+    for (const conn of conns) conn.destroy();
+    await peer.destroy(); await relay.close(); await tnet.destroy();
+  }
+});
+
+test('fixed service port refuses collisions and close retires unfinished pairs', { timeout: 60000 }, async () => {
+  const tnet = await startTestnet();
+  const relay = await makeRelayNode({ bootstrap: tnet.bootstrap,
+    idleMs: 60000, sweepMs: 60000 });
+  const peer = new DHT({ bootstrap: tnet.bootstrap, port: 0 });
+  let conn;
+  try {
+    await assert.rejects(makeRelayNode({ bootstrap: tnet.bootstrap,
+      port: relay.address.port, anyPort: false }), { code: 'EADDRINUSE' });
+    await peer.fullyBootstrapped();
+    conn = await connect(peer, relay.publicKey);
+    const client = BlindRelayClient.from(conn, { id: conn.publicKey });
+    await clientReady(client);
+    floodPair(client, true, [crypto.randomBytes(32)], 9000);
+    for (let i = 0; i < 100 && relay.stats.pairings.pending === 0; i++) await sleep(10);
+    assert.equal(relay.stats.pairings.pending, 1);
+    const deadline = setTimeout(() => assert.fail('relay shutdown stalled'), 5000);
+    try { await relay.close(); } finally { clearTimeout(deadline); }
+    assert.equal(relay.stats.sessions.active, 0);
+    assert.equal(relay.stats.pairings.pending, 0);
+  } finally {
+    if (conn) conn.destroy();
+    await peer.destroy();
     await relay.close();
     await tnet.destroy();
   }
