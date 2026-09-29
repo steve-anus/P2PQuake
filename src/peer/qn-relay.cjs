@@ -92,16 +92,26 @@ function loadOrCreateSeed(p) {
  * stats mirrors the blind-relay counters the test lanes assert against:
  * { sessions, pairings, streams } plus the counts this glue enforces.
  * seedPath persists the DHT identity across restarts (see above). */
-async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seedPath = null }) {
+async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seedPath = null,
+  port = 49737, anyPort = true }) {
   const loopback = bootstrap.every((b) => /^127\.|^::1$|^\[::1\]$/.test(b.host));
   const dht = new DHT({
     bootstrap,
     ephemeral: false,
     firewalled: false,
+    port, anyPort,
     ...(seedPath ? { seed: loadOrCreateSeed(seedPath) } : {}),
     ...(loopback ? { host: '127.0.0.1' } : {})
   });
-  await dht.fullyBootstrapped();
+  try { await dht.fullyBootstrapped(); }
+  catch (error) {
+    // dht-rpc's destroy awaits the failed bind and can throw before closing
+    // its native interface watcher. Retire that handle and preserve the
+    // original startup error (covered by the occupied-port regression).
+    try { await dht.destroy(); } catch { /* failed bind */ }
+    dht.io.networkInterfaces.destroy();
+    throw error;
+  }
 
   let refused = 0;
   const relay = new BlindRelayServer({
@@ -117,12 +127,13 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seed
 
   let dropped = 0;
   const server = dht.createServer((conn) => {
+    // Rejected transports may also emit errors while closing.
+    conn.on('error', () => {});
     /* Pre-admission caps: accept() starts protomux on the (Noise-verified,
      * but anyone-can-mint-a-keypair) connection. These counters bound
      * ADMISSION only -- blind-relay's wire protocol lets one accepted
-     * session stream raw pair frames, so pending fan-out and even matched
-     * actives are bounded by the sweep below (blind-relay index.js
-     * _onpair/_onclose). */
+     * session stream raw pair frames, so pair admission below also checks
+     * the caps before allocating any raw streams. */
     let active = 0;
     for (const _s of relay.sessions) active++;
     if (active >= MAX_SESSIONS || relay.stats.pairings.active >= MAX_ACTIVE_PAIRINGS ||
@@ -141,9 +152,32 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seed
      * (index.js:105-107 _onerror emits it; hyperdht's own relay test attaches
      * the same listeners). Unhandled EventEmitter 'error' would crash the
      * node; teardown itself is blind-relay's close path plus the sweep. */
-    conn.on('error', () => {});
     session.on('error', () => {});
+    session.once('close', () => conn.destroy());
     session._qnAdmittedAt = Date.now();
+    /* blind-relay 1.6.1 exposes no pair admission hook. Guard its Protomux
+     * handler before it allocates streams; sweeps alone permit unbounded
+     * bursts and admission-only caps miss already-connected clients.
+     * These private fields are version-pinned and exercised by real-wire
+     * tests. Re-audit this adapter when upgrading blind-relay. */
+    const pair = session._pair.onmessage;
+    session._pair.onmessage = (message) => {
+      if (session.closed) return;
+      const key = message.token.toString('hex');
+      const pending = relay._pairing.get(key);
+      if (pending && pending.links[+message.isInitiator]) return; // duplicate leg
+      // The library counts active pairings by token, so reusing a live token
+      // across different sessions would otherwise undercount raw streams.
+      if ((!pending && relay._activePairingRefs.has(key)) || session._links.has(key) ||
+          session._links.size + session._pairing.size >= MAX_PAIRS_PER_SESSION ||
+          (!pending && relay.stats.pairings.pending >= MAX_PENDING) ||
+          (pending && relay.stats.pairings.active >= MAX_ACTIVE_PAIRINGS)) {
+        refused++;
+        session.destroy();
+        return;
+      }
+      return pair(message);
+    };
   });
   const sweep = setInterval(() => {
     const now = Date.now();
@@ -160,15 +194,23 @@ async function makeRelayNode({ bootstrap, idleMs = IDLE_MS, sweepMs = 1000, seed
     }
   }, sweepMs);
   sweep.unref();
-  await server.listen();
+  try { await server.listen(); }
+  catch (error) {
+    clearInterval(sweep);
+    await dht.destroy();
+    throw error;
+  }
 
   return {
     publicKey: dht.defaultKeyPair.publicKey,
+    address: dht.address(),
     get stats() {
       return { ...JSON.parse(JSON.stringify(relay.stats)), refused, dropped };
     },
     async close() {
       clearInterval(sweep);
+      // end() waits for pending pairings; explicitly retire them on stop.
+      for (const session of relay.sessions) session.destroy();
       await server.close();
       await relay.close();
       await dht.destroy();
@@ -191,16 +233,36 @@ if (require.main === module) {
   const stateArg = (process.argv.slice(3).find((a) => a.startsWith('--state=')) || '')
     .replace(/^--state=/, '');
   const seedPath = stateArg || process.env.QN_RELAY_STATE || relaySeedPath();
-  makeRelayNode({ bootstrap, seedPath }).then((node) => {
+  const port = Number(process.env.QN_RELAY_PORT || 49737);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    process.stderr.write('qn-relay: QN_RELAY_PORT must be 1..65535\n');
+    process.exit(2);
+  }
+  // A service's firewall opens this port; silently falling back to a random
+  // port makes RELAY-READY misleading. Library callers retain testnet defaults.
+  makeRelayNode({ bootstrap, seedPath, port, anyPort: false }).then((node) => {
     process.stdout.write('RELAY-READY ' + node.publicKey.toString('hex') + '\n');
-    setInterval(() => {
+    process.stdout.write('RELAY-LISTEN udp=' + node.address.port + '\n');
+    const statsTimer = setInterval(() => {
       const s = node.stats;
-      process.stdout.write('RELAY-STATS sessions=' + s.sessions.accepted +
+      process.stdout.write('RELAY-STATS sessions-active=' + s.sessions.active +
+        ' sessions-accepted=' + s.sessions.accepted +
         ' pairings-active=' + s.pairings.active +
         ' pairings-pending=' + s.pairings.pending +
         ' streams-opened=' + s.streams.opened +
         ' refused=' + s.refused + ' dropped=' + s.dropped + '\n');
     }, 30000).unref();
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      clearInterval(statsTimer);
+      const deadline = setTimeout(() => process.exit(1), 10000);
+      node.close().then(() => { clearTimeout(deadline); process.exit(0); },
+        () => { clearTimeout(deadline); process.exit(1); });
+    };
+    process.on('SIGTERM', stop);
+    process.on('SIGINT', stop);
   }).catch(() => {
     process.stderr.write('qn-relay: failed to start, exiting fail-closed\n');
     process.exit(1);

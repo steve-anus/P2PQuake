@@ -41,7 +41,7 @@ command -v npm >/dev/null || { echo "linux/release.sh: npm missing" >&2; exit 1;
 
 
 NODE_VER=$(grep -m1 '^NODE_VERSION=' tools/setup-nodejs.sh | cut -d= -f2)
-NODE_PIN=$(grep -m1 '^NODE_SHA256=' tools/setup-nodejs.sh | cut -d= -f2)
+NODE_PIN=$(tools/setup-nodejs.sh --print-pin)
 [ "${#NODE_PIN}" = 64 ] && [ -n "$NODE_VER" ] \
   || { echo "linux/release.sh: could not read the node pin from setup-nodejs.sh" >&2; exit 1; }
 

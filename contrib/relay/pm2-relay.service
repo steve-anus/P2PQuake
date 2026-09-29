@@ -1,0 +1,24 @@
+[Unit]
+Description=P2PQuake relay PM2 process manager
+
+[Service]
+Type=forking
+Environment=PM2_HOME=%h/.pm2
+Environment=PATH=%h/app/bin/node/bin:/usr/local/bin:/usr/bin:/bin
+PIDFile=%h/.pm2/pm2.pid
+ExecStart=%h/app/bin/node/bin/node %h/process-manager/node_modules/pm2/bin/pm2 resurrect
+ExecStop=%h/app/bin/node/bin/node %h/process-manager/node_modules/pm2/bin/pm2 kill
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillMode=control-group
+MemoryMax=512M
+CPUQuota=50%
+TasksMax=128
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

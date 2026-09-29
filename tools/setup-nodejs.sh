@@ -27,7 +27,8 @@ TMPBASE=${TMPDIR:-/tmp}
 
 force=0
 [ "${1:-}" = "--force" ] && force=1
-[ $# -gt 1 ] && { echo "usage: setup-node.sh [--force]" >&2; exit 2; }
+[ "${1:-}" = "--print-pin" ] && { echo "$NODE_SHA256"; exit 0; }
+[ $# -gt 1 ] && { echo "usage: setup-node.sh [--force|--print-pin]" >&2; exit 2; }
 
 if [ -x "$DEST/bin/node" ] && [ "$force" -ne 1 ]; then
   echo "bin/node exists; refusing (pass --force to reinstall)" >&2

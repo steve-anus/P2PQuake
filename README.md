@@ -47,6 +47,12 @@ It assumes the game is unpacked at `/opt/p2pquake`; if you put it
 somewhere else, edit the `Exec=` and `Icon=` lines to point at your
 folder.
 
+### Running a blind relay
+
+See [the PM2 relay guide](contrib/relay/README.md) for a dedicated-user Linux
+deployment, reboot persistence, resource limits, and client configuration.
+The relay needs Node.js and UDP connectivity, without game assets or a GPU.
+
 ## Building from source
 
 Linux requirements (see below for macOS):
