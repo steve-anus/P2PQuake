@@ -118,7 +118,7 @@ const bindFrom = (keys) => envBytes(E.TYPES.KEY_BIND, 1,
 
 const joinBytes = (opts = {}) => {
   const k = opts.keys || KEYS.peer;
-  return envBytes(E.TYPES.JOIN, 2,
+  return envBytes(E.TYPES.JOIN, opts.seq ?? 2,
   [[1, Buffer.from(k.pub)],
    [2, Buffer.from(opts.proof ?? R.proofOf(CODE, k.pub))],
    [3, Buffer.from(opts.name ?? 'bob')],
@@ -132,6 +132,26 @@ const joinBytes = (opts = {}) => {
 
 const hostDecodes = (conn) =>
   conn.written.map((raw) => E.decodeEnvelope(raw, KEYS.host.pub, { expectedMatchId: MATCH }));
+
+test('BYE closes the member connection: no re-JOIN churn on it', async () => {
+  const { room, saved } = hostRoom();
+  const conn = new FakeConn();
+  const downs = [];
+  room.cbs.onPeerDown = (pub) => downs.push(pub);
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  assert.equal(room.peerCount(), 1);
+  const rostersAfterJoin = saved.length;
+  // BYE and a fresh JOIN in one chunk: nothing after the BYE may run
+  conn.emit('data', Buffer.concat([envBytes(E.TYPES.BYE, 3, [], KEYS.peer.priv), joinBytes({ seq: 4 })]));
+  assert.equal(conn.destroyed, true, 'host hangs up on a member that said BYE');
+  assert.equal(room.peerCount(), 0);
+  assert.equal(downs.length, 1);
+  conn.emit('data', joinBytes({ seq: 5 }));
+  assert.equal(room.peerCount(), 0, 'no re-admission on the departed connection');
+  assert.equal(saved.length, rostersAfterJoin + 1, 'one roster bump for the departure, none after');
+});
 
 test('info-only identity fields: divergent binary_sha/platform still join (§3.4a)', async () => {
   const { clock, room } = hostRoom();

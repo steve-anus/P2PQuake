@@ -155,6 +155,7 @@ class Session {
       try { bufs = this.reader.feed(chunk); }
       catch (e) { return this.close('reader: ' + e.name); }
       for (const raw of bufs) {
+        if (this.dead) return; // a close mid-chunk ends the session's input
         const pipe = this.bound ? this.bucket : this.preBucket; // §6.1
         if (!pipe.consume())
           return this.close(this.bound ? 'envelope rate limit exceeded' : 'rate limit exceeded');
@@ -298,8 +299,7 @@ class HostSession extends Session {
         return;
       case E.TYPES.BYE:
         this.room.dropFromRoster(this);
-        this.unknownRun = 0;
-        return;
+        return this.close('bye'); // a departed member never re-joins on this connection
       case E.TYPES.RELAY: {
         if (!this.joined) throw new E.EnvelopeError('relay pre-join');
         checkTagSizes(env);

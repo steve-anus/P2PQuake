@@ -200,7 +200,7 @@ already seen → close (gap spiral).
 | 0x0020 ROSTER    | host→all       | 0x01 pubkeys: count u8 then count×32; 0x02 min_major u8; 0x03 min_minor u8; 0x04 epoch u64 LE strictly increasing; 0x05 host_pubkey 32 (§3.4a) |
 | 0x0030 RELAY     | both           | 0x01 origin pubkey 32 — the engine-side sender: the host key or a member of the current signed ROSTER (§3.4a); 0x02 body ≤1100 (opaque engine-plane message body, host↔client legs) |
 | 0x0040 CHAT      | both           | 0x01 text 1..256 printable                                     |
-| 0x0050 BYE       | both           | (empty)                                                      |
+| 0x0050 BYE       | both           | (empty); the sender is leaving. A host receiving BYE removes that member from the roster and closes the connection; nothing after the BYE on that connection is processed |
 | 0x00FF PING      | both           | 0x01 nonce u32                                               |
 | 0x0100 PONG      | both           | 0x01 nonce u32                                               |
 
