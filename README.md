@@ -89,6 +89,14 @@ are Make targets too (`make loopback`, `make twoplayer`, `make relay`,
 pinned upstream QuakeSpasm plus the ordered patch series (it needs a
 local upstream clone; see `QN_ENGINE_CACHE` in the Makefile).
 
+`make netbench` measures the network path outside the suite: two real
+peers on a private local DHT stream timestamped game packets both ways,
+and the run prints join time and delivery latency percentiles for a set
+of link profiles (added delay and packet loss, applied with `tc netem`
+inside an unprivileged network namespace). Pass your own profiles with
+`tools/netbench.sh "25 1" "50 3"` (one-way delay in ms, loss in percent),
+or `--relay` to route both peers through a local blind relay.
+
 To run the game straight from the source tree (instead of a release
 archive), the engine needs to know where the content and the peer live:
 

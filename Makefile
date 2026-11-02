@@ -74,7 +74,7 @@ src/driver/qn_buildid.h: FORCE
 	@if cmp -s $@.new $@ 2>/dev/null; then rm -f $@.new; else mv $@.new $@; fi
 FORCE:
 
-.PHONY: all win64 engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer resident-rejoin race-rejoin bootstrap-node relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile
+.PHONY: all win64 engine engine-verify peer check asan ubsan tsan fuzz fuzz-smoke fuzz-node fuzz-loopback vectors-verify e2e loopback loopback-fatal twoplayer resident-rejoin race-rejoin bootstrap-node relay relayauto smoke-dht clean fake-engine lobby-browser visibility discovery loopback-public hostile netbench
 
 all: engine peer
 
@@ -140,6 +140,10 @@ loopback-public: engine
 
 hostile: engine
 	@$(NODE) tests/qn_hostile.cjs
+
+# Not part of check: needs unprivileged user namespaces and tc (netem).
+netbench: fake-engine
+	NODE=$(NODE) tools/netbench.sh
 
 loopback-fatal: engine
 	@for c in 0 1 2 3 4 5 6 255; do \
