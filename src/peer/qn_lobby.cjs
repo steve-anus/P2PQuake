@@ -87,7 +87,7 @@ function decodeAdvert(buf) {
   const title = m.get(TAGS.TITLE).toString('latin1');
   if (!title || title.length > 20 || !PRINTABLE.test(title)) throw new LobbyError('advert: title');
   const maxp = m.get(TAGS.MAXP);
-  if (maxp.length !== 1 || maxp[0] < 2 || maxp[0] > 8) throw new LobbyError('advert: maxp');
+  if (maxp.length !== 1 || maxp[0] < 2 || maxp[0] > 16) throw new LobbyError('advert: maxp');
   const mode = m.get(TAGS.MODE);
   if (mode.length !== 1 || mode[0] > 1) throw new LobbyError('advert: mode');
   const code = m.get(TAGS.CODE);

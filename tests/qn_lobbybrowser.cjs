@@ -94,9 +94,11 @@ async function main() {
   ok(() => assert.ok(text.includes('QNLOBBY n=1') &&
     text.includes('title=Alpha Room map=lqdm1 mode=1 players=3/8 mine=0'),
     'honest run fields'), 'run1 honest fields');
-  ok(() => assert.ok(text.includes('QNLOBBY n=2') &&
+  ok(() => assert.ok(text.includes('QNLOBBY n=3') &&
     text.includes('title=Beta Room map=lq_e1m1 mode=1 players=3/4 mine=0'),
-    'two-row snapshot'), 'run2 second row');
+    'three-row snapshot'), 'run2 second row');
+  ok(() => assert.ok(text.includes('title=Big Room map=lqdm2 mode=1 players=3/16 mine=0'),
+    'a 16-player deathmatch advert lists'), 'run2 16-player row');
   ok(() => assert.ok(text.includes('title=Bad.Name. map=evil map! mode=1'),
     'control bytes must become dots'), 'roster-grade mask on remote bytes');
   ok(() => assert.ok(/QNLOBBY n=0\b/.test(text),
@@ -109,7 +111,7 @@ async function main() {
   const i6 = text.indexOf('title=Recovered');
   ok(() => assert.ok(i1 >= 0 && i1 < i2 && i2 < i0 && i0 < i6,
     'marker order ' + [i1, i2, i0, i6]), 'swap markers arrive in run order');
-  ok(() => assert.ok(!/F0\b|BadWidth|Oversize/.test(text),
+  ok(() => assert.ok(!/F0\b|BadWidth|Oversize|Max17/.test(text),
     'dropped adverts must never print'), 'silent drops stay silent');
   ok(() => assert.ok(!text.includes('FATAL'), 'no fatal teardown'), 'engine unharmed');
   ok(() => assert.equal(child.exitCode, null), 'engine still running');

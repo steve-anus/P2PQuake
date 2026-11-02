@@ -1056,7 +1056,7 @@ static qboolean QN_LobbyParseRow (const unsigned char *buf, int len, qn_lobby_ro
 		return false;
 	if (title.len == 0 || title.len > 20 ||
 	    map.len == 0 || map.len > 16 ||
-	    maxp.len != 1 || maxp.val[0] < 2 || maxp.val[0] > 8 ||
+	    maxp.len != 1 || maxp.val[0] < 2 || maxp.val[0] > 16 ||
 	    mode.len != 1 || mode.val[0] > 1 ||
 	    code.len != 10 ||
 	    players.len != 1 || players.val[0] > maxp.val[0])
@@ -1164,8 +1164,8 @@ static void QN_LobbyHostEdges (void)
 	if (!title[0])
 		q_strlcpy (title, "host", sizeof (title));
 	maxp = (uint8_t) (svs.maxclients < 2 ? 2
-	                                    : (svs.maxclients > 8 ? 8
-	                                                           : svs.maxclients));
+	                                    : (svs.maxclients > 16 ? 16
+	                                                            : svs.maxclients));
 	mode = (uint8_t) (deathmatch.value != 0 ? 1 : 0);
 	players = (uint8_t) QN_HostPlayers ();
 	if (players > maxp)

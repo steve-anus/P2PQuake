@@ -40,7 +40,7 @@ function announceFields(payload) {
   const md = m.get(0x04);
   if (!/^[\x20-\x7e]{1,16}$/.test(map)) throw new L.LobbyError('announce: map');
   if (!/^[\x20-\x7e]{1,20}$/.test(title)) throw new L.LobbyError('announce: title');
-  if (mp.length !== 1 || mp[0] < 2 || mp[0] > 8) throw new L.LobbyError('announce: maxp');
+  if (mp.length !== 1 || mp[0] < 2 || mp[0] > 16) throw new L.LobbyError('announce: maxp');
   if (md.length !== 1 || md[0] > 1) throw new L.LobbyError('announce: mode');
   const pl = m.get(0x05);
   if (pl.length !== 1 || pl[0] > mp[0]) throw new L.LobbyError('announce: players');

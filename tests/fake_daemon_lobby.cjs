@@ -105,6 +105,7 @@ async function main() {
   at(300, () => { send(T.LOBBY_LIST, good('Alpha Room', 'lqdm1', 8)); send(T.LOBBY_LIST); LB('run1 honest'); });
   at(600, () => {
     send(T.LOBBY_LIST, good('Beta Room', 'lq_e1m1', 4));
+    send(T.LOBBY_LIST, good('Big Room', 'lqdm2', 16));
     const tab = String.fromCharCode(9);
     const del = String.fromCharCode(127);
     send(T.LOBBY_LIST, good('Bad' + tab + 'Name' + del, 'evil map!', 6));
@@ -117,6 +118,7 @@ async function main() {
     if (big.length <= 1200 || big.length > 2048) fail('oversize advert malformed: ' + big.length);
     send(T.LOBBY_LIST, big);                                   // over cap: refused whole
     send(T.LOBBY_LIST, advertRaw({ title: 'BadWidth', maxp: Buffer.from([8, 0]) }));
+    send(T.LOBBY_LIST, advertRaw({ title: 'Max17', maxPlayers: 17 }));
     send(T.LOBBY_LIST);
     LB('run3 all-bad swap');
   });

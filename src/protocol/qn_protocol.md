@@ -343,7 +343,7 @@ exactly the required tags:
 |---|---|---|
 | 0x01 | map name | ≤16; pool-validated spelling only — never free text into an engine command |
 | 0x02 | room title | ≤20 printable, the same sanitizer as the daemon `--name` |
-| 0x03 | max players | u8, 2..8 |
+| 0x03 | max players | u8, 2..16 |
 | 0x04 | mode | u8: 0=coop, 1=deathmatch |
 | 0x05 | join code | 10 bytes (§5.1); carried openly — visibility below |
 | 0x06 | host pubkey | 32 bytes (§5.2) |

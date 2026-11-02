@@ -107,7 +107,9 @@ test('announceFields: accept and full rejection matrix', () => {
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], base[2], base[3], [0x05, Buffer.from([1, 0])]])), L.LobbyError); // players width 2
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.alloc(0)], base[3]])), L.LobbyError);
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([1])], base[3]])), L.LobbyError);   // maxp 1
-  assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([9])], base[3]])), L.LobbyError);   // maxp 9
+  assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([17])], base[3], base[4]])), L.LobbyError);   // maxp 17
+  assert.equal(D.announceFields(F.encodeTLV([base[0], base[1], [0x03, Buffer.from([16])], base[3],
+    [0x05, Buffer.from([16])]])).maxPlayers, 16);                                               // maxp 16
   assert.throws(() => D.announceFields(F.encodeTLV([base[0], base[1], base[2], [0x04, Buffer.from([2])]])), L.LobbyError);   // mode 2
   assert.throws(() => D.announceFields(F.encodeTLV([[0x01, Buffer.from('lq\n1')], base[1], base[2], base[3]])), L.LobbyError); // control byte
   assert.throws(() => D.announceFields(F.encodeTLV([[0x01, Buffer.alloc(17, 0x61)], base[1], base[2], base[3]])), L.LobbyError); // map 17

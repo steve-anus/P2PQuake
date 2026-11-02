@@ -668,11 +668,11 @@ void M_MultiPlayer_Draw (void)
 	QN_MultiSort ();
 	/* room list panel: bordered box (menu text-box art), header, rows.
 	 * All coordinates in pixels: M_Print advances 8 px per glyph. */
-	M_DrawTextBox (16, 48, 34, 9);
-	M_PrintWhite (40, 56, "room");
-	M_PrintWhite (160, 56, "map");
-	M_PrintWhite (232, 56, "mode");
-	M_PrintWhite (272, 56, "p/y");
+	M_DrawTextBox (8, 48, 36, 9);
+	M_PrintWhite (32, 56, "room");
+	M_PrintWhite (152, 56, "map");
+	M_PrintWhite (224, 56, "mode");
+	M_PrintWhite (264, 56, "p/y");
 	for (i = 0; i < qn_room_rows; i++)
 	{
 		int	r = qn_room_order[i];
@@ -683,14 +683,14 @@ void M_MultiPlayer_Draw (void)
 		q_snprintf (pl, sizeof (pl), "%d/%d", QN_LobbyPlayers (r), QN_LobbyMax (r));
 		cy = 68 + i * 8;
 		if (QN_LobbyMine (r))
-			M_Print (40, cy, nm);		/* own room reads dimmed */
+			M_Print (32, cy, nm);		/* own room reads dimmed */
 		else
-			M_PrintWhite (40, cy, nm);
-		M_PrintWhite (160, cy, mp);
-		M_PrintWhite (232, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
-		M_PrintWhite (272, cy, pl);
+			M_PrintWhite (32, cy, nm);
+		M_PrintWhite (152, cy, mp);
+		M_PrintWhite (224, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
+		M_PrintWhite (264, cy, pl);
 		if (qn_mfocus == 1 && i == qn_room_cursor)
-			M_DrawCharacter (32, cy, 7);
+			M_DrawCharacter (24, cy, 7);
 	}
 	if (!qn_room_rows)
 		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 12*8))/2, 76,

@@ -1,0 +1,62 @@
+--- a/Quake/net_qn.c
++++ b/Quake/net_qn.c
+@@ -1056,7 +1056,7 @@
+ 		return false;
+ 	if (title.len == 0 || title.len > 20 ||
+ 	    map.len == 0 || map.len > 16 ||
+-	    maxp.len != 1 || maxp.val[0] < 2 || maxp.val[0] > 8 ||
++	    maxp.len != 1 || maxp.val[0] < 2 || maxp.val[0] > 16 ||
+ 	    mode.len != 1 || mode.val[0] > 1 ||
+ 	    code.len != 10 ||
+ 	    players.len != 1 || players.val[0] > maxp.val[0])
+@@ -1164,8 +1164,8 @@
+ 	if (!title[0])
+ 		q_strlcpy (title, "host", sizeof (title));
+ 	maxp = (uint8_t) (svs.maxclients < 2 ? 2
+-	                                    : (svs.maxclients > 8 ? 8
+-	                                                           : svs.maxclients));
++	                                    : (svs.maxclients > 16 ? 16
++	                                                            : svs.maxclients));
+ 	mode = (uint8_t) (deathmatch.value != 0 ? 1 : 0);
+ 	players = (uint8_t) QN_HostPlayers ();
+ 	if (players > maxp)
+--- a/Quake/menu.c
++++ b/Quake/menu.c
+@@ -668,11 +668,11 @@
+ 	QN_MultiSort ();
+ 	/* room list panel: bordered box (menu text-box art), header, rows.
+ 	 * All coordinates in pixels: M_Print advances 8 px per glyph. */
+-	M_DrawTextBox (16, 48, 34, 9);
+-	M_PrintWhite (40, 56, "room");
+-	M_PrintWhite (160, 56, "map");
+-	M_PrintWhite (232, 56, "mode");
+-	M_PrintWhite (272, 56, "p/y");
++	M_DrawTextBox (8, 48, 36, 9);
++	M_PrintWhite (32, 56, "room");
++	M_PrintWhite (152, 56, "map");
++	M_PrintWhite (224, 56, "mode");
++	M_PrintWhite (264, 56, "p/y");
+ 	for (i = 0; i < qn_room_rows; i++)
+ 	{
+ 		int	r = qn_room_order[i];
+@@ -683,14 +683,14 @@
+ 		q_snprintf (pl, sizeof (pl), "%d/%d", QN_LobbyPlayers (r), QN_LobbyMax (r));
+ 		cy = 68 + i * 8;
+ 		if (QN_LobbyMine (r))
+-			M_Print (40, cy, nm);		/* own room reads dimmed */
++			M_Print (32, cy, nm);		/* own room reads dimmed */
+ 		else
+-			M_PrintWhite (40, cy, nm);
+-		M_PrintWhite (160, cy, mp);
+-		M_PrintWhite (232, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
+-		M_PrintWhite (272, cy, pl);
++			M_PrintWhite (32, cy, nm);
++		M_PrintWhite (152, cy, mp);
++		M_PrintWhite (224, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
++		M_PrintWhite (264, cy, pl);
+ 		if (qn_mfocus == 1 && i == qn_room_cursor)
+-			M_DrawCharacter (32, cy, 7);
++			M_DrawCharacter (24, cy, 7);
+ 	}
+ 	if (!qn_room_rows)
+ 		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 12*8))/2, 76,

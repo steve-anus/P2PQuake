@@ -314,11 +314,11 @@ async function main() {
     prefix: 'qnpb-h-',
     front: (dir) => ['-qn', '-qn-peer', FAKE, '-qn-dir', dir,
       '-qn-statedir', path.join(dir, 'st'),
-      '-basedir', relIfShorter(GAMEDATA), '-dedicated',
+      '-basedir', relIfShorter(GAMEDATA), '-dedicated', '16',
       '+listen', '+map', 'lqdm1', '+qn_visibility', '1'],
     want: want.concat([PBW.announce, PBW.list, PBW.swap], pbRows(1, 0)),
     terminal: 'peer-admin-gauntlet',
-    env: { QN_LOBBY_DUMP: '1', QN_PB_ROLE: 'host' },
+    env: { QN_LOBBY_DUMP: '1', QN_PB_ROLE: 'host', QN_ANNOUNCE_MAXP: '16' },
     label: '(mode public-browser host)',
   });
   if (hostRc) return hostRc;

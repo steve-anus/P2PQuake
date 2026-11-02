@@ -133,7 +133,7 @@ test('hostile field values refuse', () => {
     ['title control', { title: 'party\x00\x0a' }],
     ['maxp 0', { maxp: Buffer.from([0]) }],
     ['maxp 1', { maxp: Buffer.from([1]) }],
-    ['maxp 9', { maxp: Buffer.from([9]) }],
+    ['maxp 17', { maxp: Buffer.from([17]) }],
     ['maxp two bytes', { maxp: Buffer.from([8, 0]) }, /advert: maxp$/],
     ['mode 2', { mode: Buffer.from([2]) }],
     ['mode empty', { mode: Buffer.alloc(0) }],
@@ -154,6 +154,12 @@ test('hostile field values refuse', () => {
   for (const [name, o, re] of bad)
     assert.throws(() => L.decodeAdvert(signed(fieldsOf(o))),
       (err) => err instanceof L.LobbyError && (!re || re.test(err.message)), name);
+});
+
+test('deathmatch-sized adverts decode up to 16 players', () => {
+  const a = L.decodeAdvert(signed(fieldsOf({ maxp: Buffer.from([16]), players: Buffer.from([16]) })));
+  assert.equal(a.maxPlayers, 16);
+  assert.equal(a.players, 16);
 });
 
 test('oversized advert refuses before any parse work', () => {
@@ -386,7 +392,7 @@ test('mutation fuzz: 20000 seeded mutations never accept unverified bytes', () =
     assert.ok(res.title && res.title.length <= 20 && PRINT.test(res.title));
     assert.ok(Buffer.isBuffer(res.code) && res.code.length === 10,
       'accepted code field must be the 10 packed bytes of the identity');
-    assert.ok(res.maxPlayers >= 2 && res.maxPlayers <= 8);
+    assert.ok(res.maxPlayers >= 2 && res.maxPlayers <= 16);
     assert.ok(res.mode <= 1);
     assert.ok(res.players <= res.maxPlayers);
     assert.ok(res.epoch >= 1n);

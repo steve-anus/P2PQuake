@@ -205,6 +205,9 @@ class Peer {
     if (map !== 'lqdm1') fail('lobby announce map ' + JSON.stringify(map));
     if (!t.get(2) || !t.get(2).length) fail('lobby announce title empty');
     if (!t.get(3) || t.get(3)[0] < 2) fail('lobby announce maxp');
+    if (process.env.QN_ANNOUNCE_MAXP &&
+        t.get(3)[0] !== parseInt(process.env.QN_ANNOUNCE_MAXP, 10))
+      fail('lobby announce maxp ' + t.get(3)[0] + ' want ' + process.env.QN_ANNOUNCE_MAXP);
     if (!t.get(4) || t.get(4)[0] !== 1) fail('lobby announce mode');
     if (!t.get(5)) fail('lobby announce players');
     if (t.get(5)[0] > t.get(3)[0]) fail('lobby announce players exceed maxp');

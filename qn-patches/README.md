@@ -52,6 +52,7 @@ one). Always follow with `make engine-verify` before committing.
 | `0037-windows-port.patch` | Windows port of the p2p net stack in `Quake/net_qn.c` and `Quake/net_udp.c`: named-pipe Plane A endpoint selection (per-user path with instance tag), winsock2 includes, `ioctlsocket`/`recvfrom` winsock call shapes, the winsock error table for `socketerror()`, and winsock resolver diagnostics — all `_WIN32`-gated, posix behaviour byte-identical |
 | `0038-makefile-w64-qn-wiring.patch` | the win64 cross-build wiring in `Quake/Makefile.w64`: swaps the stock winsock net objects for `net_bsd.o net_udp.o` + the qn driver objects (incl. the win twins and `qn_winsock_win.o` winsock startup), the `QNDIR` vpath/include, OBJDIR staging, and the static SDL2/mpg123 link flags |
 | `0039-macos-metal.patch` | optional macOS make hook, native Metal context/frame/gamma hooks, SDL2 relative-mouse handling and command-line entry; implementation and shaders live in `macos/`, with Linux/Windows renderer behavior retained |
+| `0040-public-lobby-sixteen.patch` | public rooms advertise and list up to 16 players (the deathmatch ceiling) instead of 8: the host announce clamps max players at 16, the browser accepts adverts up to 16, and the room panel is two characters wider so a `16/16` count fits inside its border |
 
 The vendored engine is otherwise upstream code (URL and commit recorded in
 `ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,
