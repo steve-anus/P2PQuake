@@ -108,8 +108,8 @@ echo "==> engine binary + launcher + runtime"
 cp LICENSE.md "$PKG/LICENSE.md"
 [ -f README.md ] || { echo "linux/release.sh: README.md missing" >&2; exit 1; }
 cp README.md "$PKG/README.md"
-[ -f p2pquake.desktop ] || { echo "linux/release.sh: p2pquake.desktop missing" >&2; exit 1; }
-cp p2pquake.desktop "$PKG/p2pquake.desktop"
+[ -f linux/p2pquake.desktop ] || { echo "linux/release.sh: linux/p2pquake.desktop missing" >&2; exit 1; }
+cp linux/p2pquake.desktop "$PKG/p2pquake.desktop"
 cp "$ENGINE_BIN" "$PKG/quakespasm"
 strip --strip-debug "$PKG/quakespasm" 2>/dev/null || strip "$PKG/quakespasm"
 chmod 0755 "$PKG/quakespasm"

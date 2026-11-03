@@ -1,5 +1,5 @@
 'use strict';
-// Loaded via `node --require` by qn-relayauto-launch.sh (make relayauto)
+// Loaded via `node --require` by bin/relayauto-launch.sh (make relayauto)
 // into the real daemon. Simulates a symmetric/provider NAT: the INITIATOR
 // hole-punch fails after a realistic timeout with the exact trigger code
 // hyperswarm's relay fallback gate listens for (hyperswarm index.js:224-230,

@@ -36,9 +36,9 @@ QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 # Left out, each provably local: platform translation files (*_win.*,
 # *_macos.*), which only pair one machine's engine with its own daemon; the
 # menus, the join pad and the cause texts (what a player sees, not what is
-# sent); the macOS renderer and mouse patches; the relay server and its test
-# hook, which no player process loads; the protocol document (the code above
-# defines the bytes).
+# sent); the macOS renderer and mouse patches; the relay server, which no
+# player process loads; the protocol document (the code above defines the
+# bytes).
 QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
 QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
 QN_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
@@ -47,7 +47,7 @@ QN_WIRE_LOCAL := src/driver/qn_buildid.h %_win.c %_win.h %_macos.c %_macos.h \
   src/driver/qn_causes.c src/driver/qn_causes.h \
   qn-patches/menu.c.patch qn-patches/menu.h.patch \
   qn-patches/gl_vidsdl.c.patch qn-patches/in_sdl.c.patch \
-  src/peer/qn-relay.cjs src/peer/qn-relayauto-patch.cjs
+  src/peer/qn-relay.cjs
 QN_WIRE := $(filter-out $(QN_WIRE_LOCAL), \
   $(sort ENGINE.upstream package-lock.json $(wildcard qn-patches/*.patch) \
          $(wildcard src/driver/*.[ch]) $(wildcard src/peer/*.cjs)))
@@ -215,7 +215,7 @@ relay: engine
 # place) the -qn-peer file, so relative paths from $0 cannot resolve.
 relayauto: engine
 	@mkdir -p bin
-	@printf '#!/bin/sh\nexec node --require "%s/src/peer/qn-relayauto-patch.cjs" "%s/src/peer/qn-peer.cjs" "$$@"\n' "$(CURDIR)" "$(CURDIR)" > bin/relayauto-launch.sh
+	@printf '#!/bin/sh\nexec node --require "%s/tests/qn-relayauto-patch.cjs" "%s/src/peer/qn-peer.cjs" "$$@"\n' "$(CURDIR)" "$(CURDIR)" > bin/relayauto-launch.sh
 	@chmod +x bin/relayauto-launch.sh
 	QN_RELAY=auto QN_PEER=$(CURDIR)/bin/relayauto-launch.sh $(NODE) tests/qn_twoplayer.cjs
 

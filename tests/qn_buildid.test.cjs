@@ -38,7 +38,7 @@ const LOCAL = new Set([
   'src/driver/qn_causes.c', 'src/driver/qn_causes.h',
   'qn-patches/menu.c.patch', 'qn-patches/menu.h.patch',
   'qn-patches/gl_vidsdl.c.patch', 'qn-patches/in_sdl.c.patch',
-  'src/peer/qn-relay.cjs', 'src/peer/qn-relayauto-patch.cjs',
+  'src/peer/qn-relay.cjs',
 ]);
 const platformLocal = (f) => /_(win|macos)\.[ch]$/.test(f) || f === 'src/driver/qn_buildid.h';
 

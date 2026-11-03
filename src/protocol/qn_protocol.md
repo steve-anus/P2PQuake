@@ -248,8 +248,8 @@ identity of the software a peer actually runs:
   closure: platform translation files (the Windows and macOS pipe,
   transport and spawn twins, which only ever pair one machine's own engine
   with its own daemon inside a single shipped build), the menus, join pad
-  and cause texts, the macOS renderer and mouse hooks, the relay server and
-  its test hook, and this document, whose bytes the code defines;
+  and cause texts, the macOS renderer and mouse hooks, the relay server, and
+  this document, whose bytes the code defines;
   before a version is assigned the git commit serves in place of the
   version; an implementation may append a provenance suffix from the same
   charset, and comparison is byte equality over the whole `<id>`).
