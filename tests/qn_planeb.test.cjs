@@ -607,6 +607,96 @@ test('host relays engine output to joined members only, origin = host key', asyn
   assert.equal(t.get(2).toString(), 'servmsg');
 });
 
+class MsgConn extends FakeConn {
+  constructor() { super(); this.messages = []; }
+  trySend(b) { if (!this.destroyed) this.messages.push(Buffer.from(b)); }
+}
+const relayEnv = (seq, body, keys = KEYS.peer) =>
+  envBytes(E.TYPES.RELAY, seq, [[1, Buffer.from(keys.pub)], [2, Buffer.from(body)]], keys.priv);
+
+async function joinedHost() {
+  const h = hostRoom();
+  const got = [];
+  h.room.cbs.onClData = (from, body) => got.push(body.toString());
+  const conn = new MsgConn();
+  h.room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes());
+  await h.clock.advance(10);
+  return { ...h, conn, got };
+}
+
+test('unordered window: late packets once, duplicates and stale seqs never', () => {
+  const w = new E.MsgWindow(8);
+  for (const s of [3, 1, 2]) { assert.ok(w.fresh(s), 'fresh ' + s); w.mark(s); }
+  assert.equal(w.fresh(2), false, 'duplicate');
+  assert.ok(w.fresh(9)); w.mark(9);
+  assert.equal(w.fresh(1), false, 'older than the window');
+  assert.ok(w.fresh(4), 'unseen inside the window');
+  w.mark(30);                                   // jump past the whole window
+  assert.equal(w.fresh(22), false, 'beyond the window after a jump');
+  assert.ok(w.fresh(25), 'slot cleared by the jump');
+  assert.equal(w.fresh(0), false);
+});
+
+test('game data rides unordered messages with its own seq; control stays on the stream', async () => {
+  const { room, conn } = await joinedHost();
+  conn.written.length = 0;
+  room.relayToClients(Buffer.from('servmsg'), Buffer.from(KEYS.peer.pub));
+  room.relayToClients(Buffer.from('servmsg2'), Buffer.from(KEYS.peer.pub));
+  assert.equal(conn.messages.length, 2);
+  const m = conn.messages.map((raw) => E.decodeEnvelope(raw, KEYS.host.pub, { expectedMatchId: MATCH }));
+  assert.deepEqual(m.map((x) => [x.type, x.seq]), [[E.TYPES.RELAY, 1], [E.TYPES.RELAY, 2]]);
+  assert.equal(hostDecodes(conn).filter((o) => o.type === E.TYPES.RELAY).length, 0);
+  room.broadcastRoster();
+  assert.ok(hostDecodes(conn).some((o) => o.type === E.TYPES.ROSTER), 'ROSTER on the stream');
+});
+
+test('oversized game data and the ordered lab switch keep the stream', async () => {
+  const { room, conn } = await joinedHost();
+  room.relayToClients(Buffer.alloc(1100, 1), Buffer.from(KEYS.peer.pub));
+  assert.equal(conn.messages.length, 0, 'over one packet: ordered stream');
+  process.env.QN_GAME_DATA_ORDERED = '1';
+  try { room.relayToClients(Buffer.from('small'), Buffer.from(KEYS.peer.pub)); }
+  finally { delete process.env.QN_GAME_DATA_ORDERED; }
+  assert.equal(conn.messages.length, 0);
+  assert.equal(hostDecodes(conn).filter((o) => o.type === E.TYPES.RELAY).length, 2);
+});
+
+test('unordered intake: out of order delivered, replays dropped without closing', async () => {
+  const { conn, got } = await joinedHost();
+  const a = relayEnv(2, 'b'), b = relayEnv(1, 'a');
+  conn.emit('message', a);
+  conn.emit('message', b);
+  conn.emit('message', Buffer.from(a));       // network replay of a real packet
+  assert.deepEqual(got, ['b', 'a']);
+  assert.equal(conn.destroyed, false, 'a replay is dropped, never a close');
+});
+
+test('unordered intake: only signed RELAY from the bound key, never before bind', async () => {
+  {
+    const { room, clock } = hostRoom();
+    const got = [];
+    room.cbs.onClData = (f, b) => got.push(b);
+    const conn = new MsgConn();
+    room.accept(conn);
+    conn.emit('message', relayEnv(1, 'early'));
+    await clock.advance(1);
+    assert.equal(got.length, 0);
+    assert.equal(conn.destroyed, false, 'pre-bind messages are dropped quietly');
+  }
+  {
+    const { conn } = await joinedHost();
+    conn.emit('message', envBytes(E.TYPES.CHAT, 1, [[1, Buffer.from('hi')]], KEYS.peer.priv));
+    assert.equal(conn.destroyed, true, 'non-game envelope on the unordered path closes');
+  }
+  {
+    const { conn } = await joinedHost();
+    conn.emit('message', relayEnv(1, 'forged', KEYS.evil));
+    assert.equal(conn.destroyed, true, 'a signature from another key closes');
+  }
+});
+
 test('host unbound cap: exactly four silent admissions, the fifth is closed', async () => {
   const { clock, room } = hostRoom();
   const conns = [];

@@ -233,6 +233,33 @@ class SeqWindow {
   }
 }
 
+// §3.3a replay window for the unordered game-data path: packets may be
+// lost or arrive out of order, so any seq inside the last WINDOW that has
+// not been seen is accepted once; duplicates and older seqs are refused.
+// fresh() reads only the claimed seq, so replays are refused before any
+// signature work; mark() runs after the envelope verified.
+class MsgWindow {
+  constructor(size = 1024) {
+    this.size = size;
+    this.highest = 0;
+    this.seen = new Uint8Array(size);
+  }
+  fresh(seq) {
+    if (!Number.isInteger(seq) || seq < 1) return false;
+    if (seq > this.highest) return true;
+    if (this.highest - seq >= this.size) return false;
+    return this.seen[seq % this.size] === 0;
+  }
+  mark(seq) {
+    if (seq > this.highest) {
+      const gap = Math.min(seq - this.highest, this.size);
+      for (let i = 1; i <= gap; i++) this.seen[(seq - gap + i) % this.size] = 0;
+      this.highest = seq;
+    }
+    this.seen[seq % this.size] = 1;
+  }
+}
+
 // §6.1 token bucket. The class defaults are the control-plane budget
 // (200/s, burst 50); the outer all-envelope bucket is built wider by the
 // Session so honest RELAY game-data rates fit (two-tier metering, §6.1).
@@ -253,7 +280,7 @@ class RateBucket {
 
 module.exports = {
   MAGIC, MAJOR, MINOR, MAX_PAYLOAD, HEAD_LEN, TYPES, CAUSES,
-  EnvelopeError, EnvelopeReader, SeqWindow, RateBucket,
+  EnvelopeError, EnvelopeReader, SeqWindow, MsgWindow, RateBucket,
   privateKeyFromSeed, publicKeyFromSeed, publicKeyFromRaw, publicRaw,
   signWith, verifyWith, signatureContext, noiseBindingContext,
   encodeEnvelope, decodeEnvelope,

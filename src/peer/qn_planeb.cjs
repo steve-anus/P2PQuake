@@ -34,6 +34,13 @@ const OPTIONAL_TAGS = {
 };
 const BUILD_ID_RE = /^[A-Za-z0-9._+-]{1,64}$/;
 
+// §3.3a: RELAY may ride the connection's unordered encrypted messages. An
+// envelope goes that way only when it fits one transport packet (24 bytes
+// of message encryption included); larger ones keep the ordered stream.
+const MSG_MAX = 1200;
+const MSG_SEQ_OFFSET = 2 + 2 + 1 + 1 + 2 + 16; // total_len magic major minor type match_id
+const orderedOnly = () => process.env.QN_GAME_DATA_ORDERED === '1';
+
 function tagMap(payload, tags) {
   const m = new Map(F.decodeTLV(payload).map((f) => [f.tag, f.value]));
   for (const t of tags) if (!m.has(t)) throw new F.TLVError(`missing tag 0x${t.toString(16)}`);
@@ -111,6 +118,7 @@ class Session {
     this.reader = new E.EnvelopeReader();
     this.bound = null;
     this.win = new E.SeqWindow();
+    this.msgWin = new E.MsgWindow();
     // §6.1 three-tier metering: the outer bucket bounds decode work for every
     // bound envelope; after decode, RELAY (the game-data plane: server
     // frames and usercmds, one-per-tick honest at listen-host frame rates)
@@ -122,6 +130,8 @@ class Session {
     this.preBucket = new E.RateBucket({ rate: 10, burst: 5, now: room.clock.now });
     this.unknownRun = 0;
     this.seqOut = 0;
+    this.msgOut = 0;
+    this.msgDrops = 0;
     this.joined = false;
     this.dead = false;
     this.timers = [];
@@ -145,10 +155,40 @@ class Session {
   }
 
   send(type, fields) {
+    const payload = F.encodeTLV(fields);
+    if (type === E.TYPES.RELAY && !orderedOnly() && typeof this.conn.trySend === 'function' &&
+        2 + E.HEAD_LEN + payload.length + 64 + 24 <= MSG_MAX) {
+      this.msgOut++;
+      this.conn.trySend(E.encodeEnvelope(
+        { type, matchId: this.room.matchId, seq: this.msgOut, payload }, this.room.keys.priv));
+      return;
+    }
     this.seqOut++;
     this.conn.write(E.encodeEnvelope(
-      { type, matchId: this.room.matchId, seq: this.seqOut, payload: F.encodeTLV(fields) },
-      this.room.keys.priv));
+      { type, matchId: this.room.matchId, seq: this.seqOut, payload }, this.room.keys.priv));
+  }
+
+  // §3.3a unordered path: RELAY only, its own seq space and window; the
+  // claimed seq is checked before any signature work, so replayed packets
+  // cost a header read.
+  onMessage(raw) {
+    if (this.dead || !this.bound) return; // before KEY_BIND: dropped
+    if (!Buffer.isBuffer(raw) || raw.length < MSG_SEQ_OFFSET + 4) return this.close('runt message');
+    const seq = raw.readUInt32LE(MSG_SEQ_OFFSET);
+    if (!this.msgWin.fresh(seq)) { this.msgDrops++; return; }
+    if (!this.bucket.consume()) return this.close('envelope rate limit exceeded');
+    try {
+      const env = E.decodeEnvelope(raw, this.bound, { expectedMatchId: this.room.matchId });
+      if (env.type !== E.TYPES.RELAY) throw new E.EnvelopeError('non-game envelope on the unordered path');
+      this.msgWin.mark(env.seq);
+      this.lastIn = this.room.clock.now();
+      this.meterControl(env);
+      if (hasIllegalTags(env)) throw new E.EnvelopeError('relay with undefined tags');
+      this.onRelay(env);
+    } catch (e) {
+      if (!(e instanceof E.EnvelopeError || e instanceof F.TLVError)) throw e;
+      return this.close(e.message);
+    }
   }
 
   meterControl(env) {
@@ -182,6 +222,7 @@ class Session {
         }
       }
     });
+    this.conn.on('message', (m) => this.onMessage(m));
     this.conn.on('error', () => {}); // discovery races are not failures
     this.conn.on('close', () => this.close('remote close'));
     if (process.env.QN_LANE_STATS) {
@@ -316,15 +357,8 @@ class HostSession extends Session {
       case E.TYPES.BYE:
         this.room.dropFromRoster(this);
         return this.close('bye'); // a departed member never re-joins on this connection
-      case E.TYPES.RELAY: {
-        if (!this.joined) throw new E.EnvelopeError('relay pre-join');
-        checkTagSizes(env);
-        const t = tagMap(env.payload, [1, 2]);
-        if (!t.get(1).equals(this.bound)) // host side: origin must be this connection's bound key
-          throw new E.EnvelopeError('relay origin != bound key');
-        this.room.cbs.onClData(this.bound, t.get(2));
-        return;
-      }
+      case E.TYPES.RELAY:
+        return this.onRelay(env);
       case E.TYPES.PING:
         checkTagSizes(env);
         this.pingsIn = (this.pingsIn || 0) + 1;
@@ -337,6 +371,14 @@ class HostSession extends Session {
         this.unknownRun++; // §3.4b: drop+count, close at 10
         if (this.unknownRun > 10) throw new E.EnvelopeError('drop storm (§3.4b)');
     }
+  }
+  onRelay(env) {
+    if (!this.joined) throw new E.EnvelopeError('relay pre-join');
+    checkTagSizes(env);
+    const t = tagMap(env.payload, [1, 2]);
+    if (!t.get(1).equals(this.bound)) // host side: origin must be this connection's bound key
+      throw new E.EnvelopeError('relay origin != bound key');
+    this.room.cbs.onClData(this.bound, t.get(2));
   }
   refuse(cause, extra = []) {
     this.send(E.TYPES.JOIN_NO, [[1, Buffer.from([cause])], ...extra]);
@@ -452,6 +494,20 @@ class HostRoom {
 // ---------------- client ----------------
 class ClientSession extends Session {
   constructor(room, conn) { super(room, conn, 'client'); }
+  onRelay(env) {
+    // Host-signed traffic only ever rides the host lane (§3.4a), on either path.
+    if (this.room.hostLane !== this) {
+      this.room.cbs.onRogueClosed();
+      throw new E.EnvelopeError('host-signed off the host lane');
+    }
+    checkTagSizes(env);
+    const t = tagMap(env.payload, [1, 2]);
+    const origin = t.get(1);
+    const isHost = origin.equals(this.bound);
+    const isMember = this.room.members.some((m) => m.equals(origin));
+    if (!isHost && !isMember) throw new E.EnvelopeError('relay origin not in host+roster');
+    this.room.cbs.onSvData(origin, t.get(2));
+  }
   start() {
     super.start(() => this.sendBind());
   }
@@ -552,16 +608,8 @@ class ClientSession extends Session {
         this.room.cbs.onRoster(members, epoch);
         return;
       }
-      case E.TYPES.RELAY: {
-        checkTagSizes(env);
-        const t = tagMap(env.payload, [1, 2]);
-        const origin = t.get(1);
-        const isHost = origin.equals(this.bound);
-        const isMember = this.room.members.some((m) => m.equals(origin));
-        if (!isHost && !isMember) throw new E.EnvelopeError('relay origin not in host+roster');
-        this.room.cbs.onSvData(origin, t.get(2));
-        return;
-      }
+      case E.TYPES.RELAY:
+        return this.onRelay(env);
       case E.TYPES.CHAT:
         checkTagSizes(env);
         this.room.cbs.onChat(this.bound, tagMap(env.payload, [1]).get(1));
@@ -668,6 +716,6 @@ function roomSeats(maxPlayers) {
 }
 
 module.exports = {
-  TAG_SIZES, OPTIONAL_TAGS, tagMap, checkTagSizes, isPrintable, inbound, roomSeats,
+  TAG_SIZES, OPTIONAL_TAGS, MSG_MAX, tagMap, checkTagSizes, isPrintable, inbound, roomSeats,
   realClock, Session, HostSession, HostRoom, ClientSession, ClientRoom,
 };

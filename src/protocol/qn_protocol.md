@@ -1,7 +1,8 @@
 # p2pquake wire specification
 
 Version: Plane A frames 0.1 (major 0, minor 1); Plane B envelopes 0.3
-(major 0, minor 3: JOIN_NO may carry the host build_id).
+(major 0, minor 3: JOIN_NO may carry the host build_id; RELAY may travel
+unordered, §3.3a).
 Status: normative. This document is the single source of truth for every
 byte that crosses either boundary. Implementations (C driver in `src/driver/`,
 Node qn-peer in `src/peer/`) follow this file; to change the wire, edit this
@@ -188,7 +189,33 @@ One counter per (connection, sending long-term key), starting at 1 after
 binding, strictly increasing, wrap forbidden. A received seq ≤ the highest
 already seen → drop and count (replay); > 100 counted drops → close.
 A received seq that skips **more than 64 messages** ahead of the highest
-already seen → close (gap spiral).
+already seen → close (gap spiral). These rules hold for the ordered
+stream; the unordered game-data path below has its own counter and window.
+
+### 3.3a Unordered game data (Plane B)
+
+After KEY_BIND, a RELAY envelope may travel as one unordered message on
+the same connection (the transport's datagram channel, encrypted and
+authenticated under that connection's handshake keys, separate keys per
+direction) instead of on the ordered stream. The message carries exactly
+the stream bytes of one envelope (the u16 total_len prefix included). A
+sender uses it only when the envelope plus 24 bytes of message encryption
+fits 1200 bytes, the transport's base packet size; larger envelopes and
+every other type stay on the ordered stream. Messages may be lost,
+duplicated or reordered.
+
+* Only RELAY may arrive as a message; any other type, a bad signature, or a
+  malformed envelope → close. Messages before KEY_BIND are dropped.
+* The message path has its own seq counter per (connection, sending key),
+  starting at 1, separate from the stream's.
+* Receive window: a seq not yet seen and within the last 1024 below the
+  highest seen is accepted once; a duplicate or an older seq is dropped
+  without closing. The receiver checks the claimed seq against the window
+  before verifying the signature, so replayed packets cost a header read
+  and never reach the rate meters; the seq is recorded only after the
+  envelope verified. There is no forward-gap close: loss is normal here.
+* Accepted messages pay the §6.1 envelope and game meters like stream
+  RELAY, and RELAY's origin and lane rules (§3.4a) apply unchanged.
 
 ### 3.4 Wire types
 

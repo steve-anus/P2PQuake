@@ -97,7 +97,10 @@ and the run prints join time and delivery latency percentiles for a set
 of link profiles (added delay and packet loss, applied with `tc netem`
 inside an unprivileged network namespace). Pass your own profiles with
 `tools/netbench.sh "25 1" "50 3"` (one-way delay in ms, loss in percent),
-or `--relay` to route both peers through a local blind relay.
+or `--relay` to route both peers through a local blind relay. Game data
+normally travels as unordered packets, so a lost packet delays nothing
+behind it; `QN_GAME_DATA_ORDERED=1` keeps it on the ordered stream for
+comparison.
 
 To run the game straight from the source tree (instead of a release
 archive), the engine needs to know where the content and the peer live:
