@@ -78,9 +78,13 @@ echo "==> gamedata (byte-exact, manifest-verified)"
 # id1 sits directly at the package root: the engine's basedir is the binary's
 # own directory, so ./quakespasm needs no flags. The manifest keeps its
 # package-root home (the daemon resolves it at __dirname/../../).
-cp -a gamedata/id1/. "$PKG/id1/"
-rm -f "$PKG/id1/config.cfg"
-rm -rf "$PKG"/id1/qn-lane-tmp*
+# Only the files git tracks: a folder the game has run in also holds what
+# the game wrote there (config.cfg carries the player name).
+git ls-files -- gamedata/id1 | while IFS= read -r f; do
+  rel="${f#gamedata/id1/}"
+  mkdir -p "$PKG/id1/$(dirname "$rel")"
+  cp -p "$f" "$PKG/id1/$rel"
+done
 cp gamedata.sha256 "$PKG/gamedata.sha256"
 (cd "$PKG/id1" && sha256sum -c ../gamedata.sha256 >/dev/null) \
   || { echo "linux/release.sh: gamedata failed the manifest check" >&2; exit 1; }
@@ -141,6 +145,7 @@ ZIP="p2pquake-$ver-linux-x64.zip"
 rm -f "$DIST/$ZIP" "$DIST/$ZIP.sig" "$DIST/sha256sums-linux-x64.txt"
 (cd "$STAGE" && zip -qrX "$REPO_ROOT/$DIST/$ZIP" "p2pquake-$ver")
 (cd "$DIST" && sha256sum "$ZIP" > sha256sums-linux-x64.txt)
+tools/leak-scan.sh "$DIST/$ZIP" || { rm -f "$DIST/$ZIP" "$DIST/sha256sums-linux-x64.txt"; exit 1; }
 
 verify_zip() {
   local pub="$1" identity="$2" allowed="$STAGE/allowed_signers"

@@ -37,6 +37,7 @@ if [ ! -f mpg123-out/lib/libmpg123.a ]; then
   tar -xf "dl/$MPG_ASSET"
   PATH="$WINBUILD/llvm-mingw/bin:$PATH" \
     sh -c "cd mpg123-$MPG_VER && ./configure \
+      CFLAGS='-O2 -ffile-prefix-map=$HOME=.' \
       --host=x86_64-w64-mingw32 --enable-static --disable-shared \
       --with-pic --disable-programs --disable-network \
       --disable-modules --with-audio=win32,dummy \

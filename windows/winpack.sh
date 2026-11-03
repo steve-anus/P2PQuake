@@ -34,7 +34,13 @@ find "$PKG/node_modules" -name "*.node" | while read -r f; do
   esac
 done
 echo "==> gamedata (byte-exact, manifest-verified)"
-cp -a gamedata/id1/. "$PKG/id1/"
+# Only the files git tracks: a folder the game has run in also holds what
+# the game wrote there (config.cfg carries the player name).
+git ls-files -- gamedata/id1 | while IFS= read -r f; do
+  rel="${f#gamedata/id1/}"
+  mkdir -p "$PKG/id1/$(dirname "$rel")"
+  cp -p "$f" "$PKG/id1/$rel"
+done
 cp gamedata.sha256 "$PKG/gamedata.sha256"
 ( cd "$PKG/id1" && sha256sum -c ../gamedata.sha256 >/dev/null )
 cp VERSION "$PKG/VERSION"; cp README.md "$PKG/README.md"
@@ -42,6 +48,7 @@ ZIP="p2pquake-${VER}-win-x64.zip"
 ( cd "$OUT" && rm -f "$ZIP" "$ZIP.sig" sha256sums-win-x64.txt && python3 -m zipfile -c "$ZIP" "p2pquake-${VER}-win-x64" )
 echo "==> checksums"
 ( cd "$OUT" && sha256sum "$ZIP" > sha256sums-win-x64.txt )
+tools/leak-scan.sh "$OUT/$ZIP" || { rm -f "$OUT/$ZIP" "$OUT/sha256sums-win-x64.txt"; exit 1; }
 if [ "${1:-}" = "--dry-run" ]; then
   KEYDIR=$(mktemp -d)
   ssh-keygen -q -t ed25519 -N '' -f "$KEYDIR/signkey" -C qn-dryrun
