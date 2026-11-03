@@ -87,7 +87,7 @@ void QN_StufftextFromGame (const char *line);
  * daemon FATAL cause seen on a joiner lane as a fixed literal
  * (qn_causes.h, spec 6.3). Valid from that FATAL until the next qn: dial
  * attempt. */
-const char *QN_JoinCauseText (void);		/* fixed literal or NULL */
+const char *QN_JoinCauseText (void);		/* fixed literal, the composed mismatch line, or NULL */
 void QN_JoinAttemptReset (void);
 
 #endif	/* __net_qn_h */

@@ -167,6 +167,10 @@ loopback-fatal: engine
 	  echo "loopback-refuse cause $$c:"; \
 	  QN_REFUSE=$$c $(NODE) tests/qn_loopback.cjs || exit 1; \
 	done
+	@echo "loopback-refuse cause 7 with host build:"
+	@QN_REFUSE=7 QN_REFUSE_BUILD=0.99.0p0123456789abcdef $(NODE) tests/qn_loopback.cjs || exit 1
+	@echo "loopback-refuse cause 7 with a hostile build string:"
+	@QN_REFUSE=7 QN_REFUSE_BUILD='0.99 say hi' $(NODE) tests/qn_loopback.cjs || exit 1
 	@echo "loopback-badname:"
 	@QN_BADNAME=1 $(NODE) tests/qn_loopback.cjs || exit 1
 	@echo "loopback-hostmax:"

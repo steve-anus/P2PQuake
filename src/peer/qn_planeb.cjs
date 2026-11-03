@@ -28,6 +28,12 @@ const TAG_SIZES = {
   [E.TYPES.PONG]: { 1: [4, 4] },
 };
 
+// Tags a type may carry but need not (checked for size when present).
+const OPTIONAL_TAGS = {
+  [E.TYPES.JOIN_NO]: { 2: [1, 64] }, // host build_id with ASSET_MISMATCH (minor >= 3)
+};
+const BUILD_ID_RE = /^[A-Za-z0-9._+-]{1,64}$/;
+
 function tagMap(payload, tags) {
   const m = new Map(F.decodeTLV(payload).map((f) => [f.tag, f.value]));
   for (const t of tags) if (!m.has(t)) throw new F.TLVError(`missing tag 0x${t.toString(16)}`);
@@ -51,6 +57,12 @@ function checkTagSizes(env) {
     const t1 = seen.find((x) => x.tag === 1).value;
     if (t1[0] !== (n1 - 1) / 32) throw new F.TLVError('roster count byte disagrees with entries');
   }
+  const opt = OPTIONAL_TAGS[env.type] || {};
+  for (const tag of Object.keys(opt).map(Number)) {
+    const n = sizes.get(tag);
+    if (n !== undefined && (n < opt[tag][0] || n > opt[tag][1]))
+      throw new F.TLVError('tag ' + tag + ' off size contract');
+  }
   if (env.type === E.TYPES.CHAT && !isPrintable(tagMap(env.payload, [1]).get(1)))
     throw new F.TLVError('chat not printable');
   if (env.type === E.TYPES.JOIN && !isPrintable(tagMap(env.payload, [3]).get(3)))
@@ -68,8 +80,9 @@ function checkTagSizes(env) {
 function hasIllegalTags(env) {
   const spec = TAG_SIZES[env.type];
   if (spec === undefined) return false; // unknown types: the caller counts those
+  const opt = OPTIONAL_TAGS[env.type] || {};
   for (const f of F.decodeTLV(env.payload))
-    if (spec[f.tag] === undefined && f.tag < 0x8000) return true;
+    if (spec[f.tag] === undefined && opt[f.tag] === undefined && f.tag < 0x8000) return true;
   return false;
 }
 
@@ -267,10 +280,13 @@ class HostSession extends Session {
           return this.refuse(E.CAUSES.BAD_PROOF);
         }
         // §3.4a: 11/12 are info-only; never compared here.
+        // Joiners below minor 3 were refused above (minVersion), so every
+        // joiner here understands the optional host build_id tag.
         if (!t.get(6).equals(this.room.identity.manifest) ||
             !t.get(7).equals(this.room.identity.gamedir) ||
             !t.get(10).equals(this.room.identity.buildId))
-          return this.refuse(E.CAUSES.ASSET_MISMATCH);
+          return this.refuse(E.CAUSES.ASSET_MISMATCH,
+            [[2, Buffer.from(this.room.identity.buildId)]]);
         if (this.room.peerCount() >= this.room.maxPeers)
           return this.refuse(E.CAUSES.MATCH_FULL);
         if (this.room.hasMember(who)) return this.refuse(E.CAUSES.DUP_IDENTITY);
@@ -322,8 +338,8 @@ class HostSession extends Session {
         if (this.unknownRun > 10) throw new E.EnvelopeError('drop storm (§3.4b)');
     }
   }
-  refuse(cause) {
-    this.send(E.TYPES.JOIN_NO, [[1, Buffer.from([cause])]]);
+  refuse(cause, extra = []) {
+    this.send(E.TYPES.JOIN_NO, [[1, Buffer.from([cause])], ...extra]);
     this.schedule(50, () => this.close('refused ' + cause)); // flush JOIN_NO
   }
 }
@@ -508,9 +524,13 @@ class ClientSession extends Session {
       }
       case E.TYPES.JOIN_NO: {
         checkTagSizes(env);
-        const cause = tagMap(env.payload, [1]).get(1)[0];
+        const t = tagMap(env.payload, [1]);
+        const cause = t.get(1)[0];
+        const hb = t.get(2);
+        const hostBuild = hb && cause === E.CAUSES.ASSET_MISMATCH &&
+          BUILD_ID_RE.test(hb.toString('latin1')) ? Buffer.from(hb) : null;
         this.room.refused = true;
-        this.room.cbs.onRefused(cause);
+        this.room.cbs.onRefused(cause, hostBuild);
         return this.close('refused ' + cause);
       }
       case E.TYPES.ROSTER: {
@@ -648,6 +668,6 @@ function roomSeats(maxPlayers) {
 }
 
 module.exports = {
-  TAG_SIZES, tagMap, checkTagSizes, isPrintable, inbound, roomSeats,
+  TAG_SIZES, OPTIONAL_TAGS, tagMap, checkTagSizes, isPrintable, inbound, roomSeats,
   realClock, Session, HostSession, HostRoom, ClientSession, ClientRoom,
 };

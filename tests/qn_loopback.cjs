@@ -89,9 +89,16 @@ if (process.env.QN_REFUSE) {
     6: 'slow down and retry',
     7: 'game files or engine build differ from the host',
   };
-  want.push(['join-refused', (l) => l.includes(
-    `join refused (cause ${refuseCause}): ` +
-    (JOIN_TEXT[refuseCause] ?? 'host refused the join'))]);
+  const hostBuild = process.env.QN_REFUSE_BUILD;
+  if (hostBuild && !/^[A-Za-z0-9._+-]{1,64}$/.test(hostBuild)) {
+    want.push(['join-no-malformed', (l) => l === 'QN: malformed join_no']);
+  } else {
+    const own = fs.readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
+    const text = hostBuild
+      ? `host has ${hostBuild.replace(/p[0-9a-f]{16}.*$/, '')}, you have ${own}`
+      : (JOIN_TEXT[refuseCause] ?? 'host refused the join');
+    want.push(['join-refused', (l) => l.includes(`join refused (cause ${refuseCause}): ` + text)]);
+  }
 }
 if (process.env.QN_FATAL) {
   const fatalCause = parseInt(process.env.QN_FATAL_CAUSE || '4', 10);

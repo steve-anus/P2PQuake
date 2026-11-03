@@ -689,7 +689,7 @@ async function run(opts) {
             log('client: joined');
             a.send(F.TYPES.PEER_UP, F.encodeTLV([[1, hostKey], [2, Buffer.from('host')]]));
           },
-          onRefused: (cause) => {
+          onRefused: (cause, hostBuild) => {
             log('client: join refused, cause ' + cause);
             // A pre-join refusal (stale code) hangs up clean, exactly as
             // if the engine had hung up first; mid-match refusals are fatal.
@@ -697,7 +697,9 @@ async function run(opts) {
               if (exiting) return;
               exiting = true;
               // relay the reason to the player before the hangup (§6.2):
-              try { a.send(F.TYPES.JOIN_NO, Buffer.from([cause])); } catch { /* gone */ }
+              const why = hostBuild ? Buffer.concat([Buffer.from([cause]), hostBuild])
+                : Buffer.from([cause]);
+              try { a.send(F.TYPES.JOIN_NO, why); } catch { /* gone */ }
               destroyLane();
               a.stop();
               setTimeout(() => process.exit(0), 20);

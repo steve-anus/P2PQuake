@@ -208,6 +208,7 @@ static unsigned		qn_demand, qn_demand_reported;
 static qboolean		qn_sv_was_active;
 static const char	*qn_last_note;
 static const char	*qn_join_cause_text;
+static char		qn_join_mismatch[80];	/* composed cause-7 line */
 
 void QN_SetState (qn_state_t state)
 {
@@ -1456,7 +1457,8 @@ static void qn_dispatch (const qn_frame_t *f)
 		return;
 
 	case QN_T_JOIN_NO:
-		if (f->len != 1)
+		/* u8 cause; cause 7 may carry the host's build id (spec 4.1) */
+		if (f->len < 1 || f->len > 65 || (f->len > 1 && f->payload[0] != 7))
 		{
 			qn_teardown ("malformed join_no");
 			return;
@@ -1464,6 +1466,17 @@ static void qn_dispatch (const qn_frame_t *f)
 		{
 			unsigned int cause = f->payload[0];
 			const char *text = QN_JoinNoText (cause);
+			if (f->len > 1)
+			{
+				text = QN_MismatchText ((const char *) f->payload + 1,
+				                        (size_t) f->len - 1, QN_BUILD_ID,
+				                        qn_join_mismatch, sizeof (qn_join_mismatch));
+				if (!text)
+				{
+					qn_teardown ("malformed join_no");
+					return;
+				}
+			}
 			if (qn_client_lane_up || qn_join_pending)
 				qn_join_cause_text = text;
 			Con_SafePrintf ("QN: join refused (cause %u): %s\n",

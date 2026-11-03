@@ -57,6 +57,35 @@ int qn_test_causes(int *checks_out)
 		CHECK(!QN_JoinNoKnown(0) && !QN_JoinNoKnown(8));
 	}
 
+	{
+		char buf[80];
+		const char *own = "0.15.0p0123456789abcdef";
+		const char *t;
+
+		t = QN_MismatchText("0.15.1p0123456789abcdef", 23, own, buf, sizeof buf);
+		CHECK(t == buf && strcmp(t, "host has 0.15.1, you have 0.15.0") == 0);
+		t = QN_MismatchText("0.15.0pfedcba9876543210", 23, own, buf, sizeof buf);
+		CHECK(t && strcmp(t, "same version, different build: host fedcba98, you 01234567") == 0);
+		t = QN_MismatchText(own, strlen(own), own, buf, sizeof buf);
+		CHECK(t && strcmp(t, "game files differ from the host") == 0);
+		t = QN_MismatchText("0.14.0pa0a20ff2643d4523-dirty", 29, own, buf, sizeof buf);
+		CHECK(t && strcmp(t, "host has 0.14.0, you have 0.15.0") == 0);
+		t = QN_MismatchText("legacy-build", 12, own, buf, sizeof buf);
+		CHECK(t && strcmp(t, "host has legacy-build, you have 0.15.0") == 0);
+		/* remote bytes outside the build-id charset never reach the text */
+		CHECK(QN_MismatchText("0.15.1\n say hi", 15, own, buf, sizeof buf) == NULL);
+		CHECK(QN_MismatchText("0.15.1 x", 8, own, buf, sizeof buf) == NULL);
+		CHECK(QN_MismatchText("", 0, own, buf, sizeof buf) == NULL);
+		CHECK(QN_MismatchText("0.15.1p0123456789abcdef", 65, own, buf, sizeof buf) == NULL);
+		CHECK(QN_MismatchText("0.15.1p0123456789abcdef", 23, "bad id!", buf, sizeof buf) == NULL);
+		/* a short buffer truncates, never overflows */
+		{
+			char small[8];
+			t = QN_MismatchText("0.15.1p0123456789abcdef", 23, own, small, sizeof small);
+			CHECK(t == small && strlen(small) == 7);
+		}
+	}
+
 	for (i = 7; i < 4103; i++)			/* anything past the table */
 		CHECK(QN_CauseText((unsigned int)i) == generic);
 	CHECK(QN_CauseText(4294967295u) == generic);

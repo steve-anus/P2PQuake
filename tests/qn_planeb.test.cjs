@@ -88,7 +88,7 @@ function clientRoom(opts = {}) {
   const events = [];
   const cbs = {
     onJoined: (x) => events.push(['joined', x]),
-    onRefused: (c) => events.push(['refused', c]),
+    onRefused: (c, b) => events.push(['refused', c, b]),
     onRoster: (m, e) => events.push(['roster', m, e]),
     onSvData: (o, b) => events.push(['svdata', o, b]),
     onChat: (o, t) => events.push(['chat', o, t]),
@@ -175,8 +175,22 @@ test('build_id mismatch: refused with cause 7', async () => {
   conn.emit('data', joinBytes({ buildId: Buffer.from('deadbee0.p0123456789abcdef') }));
   await clock.advance(60);
   const no = hostDecodes(conn).find((o) => o.type === E.TYPES.JOIN_NO);
-  assert.equal(new Map(F.decodeTLV(no.payload).map((x) => [x.tag, x.value])).get(1)[0],
-    E.CAUSES.ASSET_MISMATCH);
+  const tags = new Map(F.decodeTLV(no.payload).map((x) => [x.tag, x.value]));
+  assert.equal(tags.get(1)[0], E.CAUSES.ASSET_MISMATCH);
+  assert.deepEqual(tags.get(2), IDN.buildId, 'the refusal names the host build');
+});
+
+test('previous protocol minor: refused as too old, never as a mismatch', async () => {
+  const { clock, room } = hostRoom();
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.peer));
+  conn.emit('data', joinBytes({ minor: E.MINOR - 1, buildId: Buffer.from('old.p0123456789abcdef') }));
+  await clock.advance(60);
+  const no = hostDecodes(conn).find((o) => o.type === E.TYPES.JOIN_NO);
+  const tags = new Map(F.decodeTLV(no.payload).map((x) => [x.tag, x.value]));
+  assert.equal(tags.get(1)[0], E.CAUSES.VERSION_TOO_OLD);
+  assert.equal(tags.has(2), false, 'older joiners never see the new tag');
 });
 
 test('key-bind timeout: a silent transport connection dies at the stage timer', async () => {
@@ -537,6 +551,39 @@ test('client lane: join refused surfaces the cause and closes', async () => {
     [[1, Buffer.from([E.CAUSES.MATCH_FULL])]], KEYS.host.priv));
   await clock.advance(10);
   assert.ok(events.some((e) => e[0] === 'refused' && e[1] === E.CAUSES.MATCH_FULL));
+  assert.equal(conn.destroyed, true);
+});
+
+test('client lane: a mismatch refusal carries the host build; hostile ids are dropped', async () => {
+  const cases = [
+    [Buffer.from('0.99.0p0123456789abcdef'), Buffer.from('0.99.0p0123456789abcdef')],
+    [Buffer.from('0.99 say hi'), null],
+  ];
+  for (const [sent, want] of cases) {
+    const { clock, room, events } = clientRoom({ pinned: Buffer.from(KEYS.host.pub) });
+    const conn = new FakeConn();
+    room.accept(conn);
+    conn.emit('data', bindFrom(KEYS.host));
+    await clock.advance(10);
+    conn.emit('data', envBytes(E.TYPES.JOIN_NO, 2,
+      [[1, Buffer.from([E.CAUSES.ASSET_MISMATCH])], [2, sent]], KEYS.host.priv));
+    await clock.advance(10);
+    const r = events.find((e) => e[0] === 'refused');
+    assert.ok(r && r[1] === E.CAUSES.ASSET_MISMATCH, 'refusal surfaced');
+    assert.deepEqual(r[2], want);
+  }
+});
+
+test('client lane: an oversized host build tag closes the lane', async () => {
+  const { clock, room, events } = clientRoom({ pinned: Buffer.from(KEYS.host.pub) });
+  const conn = new FakeConn();
+  room.accept(conn);
+  conn.emit('data', bindFrom(KEYS.host));
+  await clock.advance(10);
+  conn.emit('data', envBytes(E.TYPES.JOIN_NO, 2,
+    [[1, Buffer.from([E.CAUSES.ASSET_MISMATCH])], [2, Buffer.alloc(65, 0x61)]], KEYS.host.priv));
+  await clock.advance(10);
+  assert.equal(events.some((e) => e[0] === 'refused'), false);
   assert.equal(conn.destroyed, true);
 });
 
