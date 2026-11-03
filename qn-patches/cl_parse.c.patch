@@ -1,6 +1,14 @@
 --- a/Quake/cl_parse.c
 +++ b/Quake/cl_parse.c
-@@ -182,8 +182,8 @@
+@@ -23,6 +23,7 @@
+ // cl_parse.c  -- parse a message received from the server
+ 
+ #include "quakedef.h"
++#include "net_qn.h"
+ #include "bgmusic.h"
+ 
+ const char *svc_strings[] =
+@@ -182,8 +183,8 @@
  	//johnfitz
  
  	//johnfitz -- check soundnum
@@ -11,7 +19,7 @@
  	//johnfitz
  
  	if (ent > cl_max_edicts) //johnfitz -- no more MAX_EDICTS
-@@ -206,8 +206,8 @@
+@@ -206,8 +207,8 @@
  
  	field_mask = MSG_ReadByte();
  	sound_num = (field_mask&SND_LARGESOUND) ? MSG_ReadShort() : MSG_ReadByte();
@@ -22,7 +30,7 @@
  
  	S_LocalSound (cl.sound_precache[sound_num]->name);
  }
-@@ -502,7 +502,7 @@
+@@ -502,7 +503,7 @@
  	if (bits & U_MODEL)
  	{
  		modnum = MSG_ReadByte ();
@@ -31,7 +39,16 @@
  			Host_Error ("CL_ParseModel: bad modnum");
  	}
  	else
-@@ -630,6 +630,8 @@
+@@ -522,7 +523,7 @@
+ 	else
+ 	{
+ 		if (i > cl.maxclients)
+-			Sys_Error ("i >= cl.maxclients");
++			Host_Error ("i >= cl.maxclients");
+ 		ent->colormap = cl.scores[i-1].translations;
+ 	}
+ 	if (bits & U_SKIN)
+@@ -630,6 +631,8 @@
  	//johnfitz
  
  	//johnfitz -- moved here from above
@@ -40,7 +57,7 @@
  	model = cl.model_precache[modnum];
  	if (model != ent->model)
  	{
-@@ -676,6 +678,8 @@
+@@ -676,6 +679,8 @@
  	bits = (version == 2) ? MSG_ReadByte() : 0;
  	ent->baseline.modelindex = (bits & B_LARGEMODEL) ? MSG_ReadShort() : MSG_ReadByte();
  	ent->baseline.frame = (bits & B_LARGEFRAME) ? MSG_ReadShort() : MSG_ReadByte();
@@ -49,7 +66,16 @@
  	//johnfitz
  
  	ent->baseline.colormap = MSG_ReadByte();
-@@ -919,6 +923,9 @@
+@@ -871,7 +876,7 @@
+ 	byte	*dest, *source;
+ 
+ 	if (slot > cl.maxclients)
+-		Sys_Error ("CL_NewTranslation: slot > cl.maxclients");
++		Host_Error ("CL_NewTranslation: slot > cl.maxclients");
+ 	dest = cl.scores[slot].translations;
+ 	source = vid.colormap;
+ 	memcpy (dest, vid.colormap, sizeof(cl.scores[slot].translations));
+@@ -919,6 +924,9 @@
  
  // copy it to the current state
  
@@ -59,7 +85,7 @@
  	ent->model = cl.model_precache[ent->baseline.modelindex];
  	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
  	ent->frame = ent->baseline.frame;
-@@ -957,6 +964,10 @@
+@@ -957,6 +965,10 @@
  	vol = MSG_ReadByte ();
  	atten = MSG_ReadByte ();
  
@@ -70,7 +96,16 @@
  	S_StaticSound (cl.sound_precache[sound_num], org, vol, atten);
  }
  
-@@ -1116,6 +1127,8 @@
+@@ -1097,7 +1109,7 @@
+ 			break;
+ 
+ 		case svc_stufftext:
+-			Cbuf_AddText (MSG_ReadString ());
++			QN_StufftextFromGame (MSG_ReadString ());
+ 			break;
+ 
+ 		case svc_damage:
+@@ -1116,12 +1128,14 @@
  
  		case svc_setview:
  			cl.viewentity = MSG_ReadShort ();
@@ -79,3 +114,19 @@
  			break;
  
  		case svc_lightstyle:
+ 			i = MSG_ReadByte ();
+ 			if (i >= MAX_LIGHTSTYLES)
+-				Sys_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
++				Host_Error ("svc_lightstyle > MAX_LIGHTSTYLES");
+ 			q_strlcpy (cl_lightstyle[i].map, MSG_ReadString(), MAX_STYLESTRING);
+ 			cl_lightstyle[i].length = Q_strlen(cl_lightstyle[i].map);
+ 			//johnfitz -- save extra info
+@@ -1234,7 +1248,7 @@
+ 		case svc_updatestat:
+ 			i = MSG_ReadByte ();
+ 			if (i < 0 || i >= MAX_CL_STATS)
+-				Sys_Error ("svc_updatestat: %i is invalid", i);
++				Host_Error ("svc_updatestat: %i is invalid", i);
+ 			cl.stats[i] = MSG_ReadLong ();;
+ 			break;
+ 

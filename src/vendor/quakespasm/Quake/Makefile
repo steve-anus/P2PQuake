@@ -191,14 +191,13 @@ SYSOBJ_SND = snd_sdl.o
 SYSOBJ_CDA = cd_sdl.o
 SYSOBJ_INPUT = in_sdl.o
 SYSOBJ_GL_VID= gl_vidsdl.o
-# p2pquake: the landriver's Plane A machinery is shared with the
-# standalone test harness, so its sources live in the project's driver
-# directory. vpath finds them; the current directory always wins for the
-# engine's own sources (no name overlaps exist today, and if one ever
-# appeared the local file would shadow, never the reverse).
+# p2pquake: the landriver, its menus and its Plane A machinery live in
+# the project's driver directory. vpath finds them; -I. lets those files
+# include the engine's own headers. The current directory always wins
+# for the engine's own sources (no name overlaps exist).
 QNDIR = ../../../driver
 vpath %.c $(QNDIR)
-CFLAGS += -I$(QNDIR)
+CFLAGS += -I. -I$(QNDIR)
 SYSOBJ_NET = net_bsd.o net_udp.o net_qn.o qn_transport.o qn_frame.o qn_spawn.o \
 	qn_stext.o qn_pad.o qn_causes.o qn_menu.o qn_maps.o qn_scmd.o
 SYSOBJ_SYS = pl_linux.o sys_sdl_unix.o

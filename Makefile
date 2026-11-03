@@ -5,7 +5,10 @@
 .DEFAULT_GOAL := all
 
 QS_DIR   := src/vendor/quakespasm
-DRIVER_SRC := $(wildcard src/driver/*.c)
+# net_qn.c and qn_menu.c are engine units (they need the engine headers) and
+# qn_winsock_win.c is winsock startup with nothing outside Windows; the
+# rest of src/driver also builds into the standalone test binary.
+DRIVER_SRC := $(filter-out src/driver/net_qn.c src/driver/qn_menu.c src/driver/qn_winsock_win.c,$(wildcard src/driver/*.c))
 TEST_SRC   := $(filter-out tests/fake-engine.c,$(wildcard tests/*.c))
 CC ?= gcc
 # explicit NODE= > repo-local bin/node/bin/node (tools/setup-nodejs.sh) > PATH
@@ -23,21 +26,31 @@ QN_CFLAGS := -std=c11 -g -Og -Wall -Wextra -Wpedantic -Wshadow -Wconversion
 QN_CFLAGS += -ffile-prefix-map=$(HOME)=.
 
 # Source-level build identity (spec §3.4a): release version plus a digest
-# over the wire-critical source closure. The linux and windows branches are
-# separate distributions; identity follows the wire bytes, not the commit,
-# so both platforms play at the same release. The engine embeds it as the
-# magic-framed marker the daemon proves from the parent image; changing any
-# wire-critical file changes it. QN_COMMIT remains the pre-release fallback.
-# Platform-local translation files (*_win.*, *_macos.*) are excluded: they only ever
-# pair one machine's own engine with its own daemon, shipped together from
-# one build. The closure is what crosses the wire between machines.
+# over every file that can change what two machines exchange or how a match
+# plays between them: the engine pin and patches, the driver, the peer, and
+# the locked network library versions. Identity follows those bytes, not the
+# commit, so all platforms built from one tree play together. The engine
+# embeds it as the marker the daemon proves from the parent image.
+# QN_COMMIT remains the pre-release fallback.
+# Files are hashed by default (a new file counts until it is listed here).
+# Left out, each provably local: platform translation files (*_win.*,
+# *_macos.*), which only pair one machine's engine with its own daemon; the
+# menus, the join pad and the cause texts (what a player sees, not what is
+# sent); the macOS renderer and mouse patches; the relay server and its test
+# hook, which no player process loads; the protocol document (the code above
+# defines the bytes).
 QN_COMMIT := $(shell git rev-parse --short=9 HEAD 2>/dev/null || echo src-nogit)
 QN_DIRTY := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null | head -n1),-dirty,)
 QN_VERSION := $(strip $(shell cat VERSION 2>/dev/null))
-QN_WIRE := $(filter-out src/driver/qn_buildid.h %_win.c %_win.h %_macos.c %_macos.h, \
-  $(sort $(wildcard qn-patches/*.patch) $(wildcard src/driver/qn_*.[ch]) \
-         $(wildcard src/peer/qn*.cjs) $(wildcard src/protocol/*.md) \
-         src/vendor/quakespasm/Quake/net_qn.c))
+QN_WIRE_LOCAL := src/driver/qn_buildid.h %_win.c %_win.h %_macos.c %_macos.h \
+  src/driver/qn_menu.c src/driver/qn_menu.h src/driver/qn_pad.c src/driver/qn_pad.h \
+  src/driver/qn_causes.c src/driver/qn_causes.h \
+  qn-patches/menu.c.patch qn-patches/menu.h.patch \
+  qn-patches/gl_vidsdl.c.patch qn-patches/in_sdl.c.patch \
+  src/peer/qn-relay.cjs src/peer/qn-relayauto-patch.cjs
+QN_WIRE := $(filter-out $(QN_WIRE_LOCAL), \
+  $(sort ENGINE.upstream package-lock.json $(wildcard qn-patches/*.patch) \
+         $(wildcard src/driver/*.[ch]) $(wildcard src/peer/*.cjs)))
 SHA256 := $(if $(filter Darwin,$(shell uname -s)),shasum -a 256,sha256sum)
 QN_WS := $(shell cat $(QN_WIRE) 2>/dev/null | $(SHA256) | cut -c1-16)
 QN_BUILD_ID ?= $(if $(QN_VERSION),$(QN_VERSION),$(QN_COMMIT))p$(QN_WS)$(QN_DIRTY)

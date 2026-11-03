@@ -1,6 +1,6 @@
 /* test_addr.c — accept/reject table for the qn landriver's address
  * strings. The canonical grammar lives in
- * src/vendor/quakespasm/Quake/net_qn.c (QN_StringToAddr); this mirrors
+ * src/driver/net_qn.c (QN_StringToAddr); this mirrors
  * its sscanf arms case by case so the table runs on every `make check`.
  * The end-to-end path through the datagram layer arrives with the
  * spawn/pump hooks. Keep the mirror in step with any change to the real

@@ -1,14 +1,16 @@
 --- a/Quake/menu.c
 +++ b/Quake/menu.c
-@@ -23,6 +23,7 @@
+@@ -22,6 +22,9 @@
+ 
  #include "quakedef.h"
  #include "bgmusic.h"
- #include "qn_menu.h"
++#include "qn_menu.h"
 +#include "qn_pad.h"
++#include "net_qn.h"
  
  void (*vid_menucmdfn)(void); //johnfitz
  void (*vid_menudrawfn)(void);
-@@ -36,7 +37,6 @@
+@@ -35,7 +38,6 @@
  		void M_Menu_Save_f (void);
  	void M_Menu_MultiPlayer_f (void);
  		void M_Menu_Setup_f (void);
@@ -16,7 +18,7 @@
  		void M_Menu_LanConfig_f (void);
  		void M_Menu_GameOptions_f (void);
  		void M_Menu_Search_f (void);
-@@ -53,7 +53,6 @@
+@@ -52,7 +54,6 @@
  		void M_Save_Draw (void);
  	void M_MultiPlayer_Draw (void);
  		void M_Setup_Draw (void);
@@ -24,7 +26,7 @@
  		void M_LanConfig_Draw (void);
  		void M_GameOptions_Draw (void);
  		void M_Search_Draw (void);
-@@ -70,7 +69,6 @@
+@@ -69,7 +70,6 @@
  		void M_Save_Key (int key);
  	void M_MultiPlayer_Key (int key);
  		void M_Setup_Key (int key);
@@ -32,7 +34,7 @@
  		void M_LanConfig_Key (int key);
  		void M_GameOptions_Key (int key);
  		void M_Search_Key (int key);
-@@ -89,10 +87,10 @@
+@@ -88,10 +88,10 @@
  qboolean	m_return_onerror;
  char		m_return_reason [32];
  
@@ -47,95 +49,259 @@
  
  void M_ConfigureNetSubsystem(void);
  
-@@ -603,7 +601,7 @@
- /* MULTIPLAYER MENU */
+@@ -603,6 +603,42 @@
  
  int	m_multiplayer_cursor;
--#define	MULTIPLAYER_ITEMS	5
-+#define	MULTIPLAYER_ITEMS	3
+ #define	MULTIPLAYER_ITEMS	3
++#define	QN_ROOM_ROWS		6
++
++static int	qn_mfocus;			/* 0 buttons, 1 lobby rooms */
++static int	qn_room_cursor;
++static int	qn_room_order[QN_ROOM_ROWS];
++static int	qn_room_rows;
++
++/* top rows by players desc then name (owner D4): stable selection sort */
++static void QN_MultiSort (void)
++{
++	int	picked[64];
++	int	n = QN_LobbyCount (), i, j, best, tmp;
++
++	if (n > (int) (sizeof (picked) / sizeof (picked[0])))
++		n = (int) (sizeof (picked) / sizeof (picked[0]));
++	for (i = 0; i < n; i++)
++		picked[i] = i;
++	qn_room_rows = n < QN_ROOM_ROWS ? n : QN_ROOM_ROWS;
++	for (i = 0; i < qn_room_rows; i++)
++	{
++		best = i;
++		for (j = i + 1; j < n; j++)
++		{
++			int	a = picked[j], b = picked[best];
++			int	pa = QN_LobbyPlayers (a), pb = QN_LobbyPlayers (b);
++			if (pa > pb || (pa == pb && Q_strcmp (QN_LobbyName (a), QN_LobbyName (b)) < 0))
++				best = j;
++		}
++		tmp = picked[i];
++		picked[i] = picked[best];
++		picked[best] = tmp;
++		qn_room_order[i] = picked[i];
++	}
++	if (qn_room_cursor >= qn_room_rows)
++		qn_room_cursor = qn_room_rows ? qn_room_rows - 1 : 0;
++}
  
  
  void M_Menu_MultiPlayer_f (void)
-@@ -612,6 +610,8 @@
+@@ -611,22 +647,91 @@
  	key_dest = key_menu;
  	m_state = m_multiplayer;
  	m_entersound = true;
 +	if (m_multiplayer_cursor < 0 || m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
 +		m_multiplayer_cursor = 0;
++	qn_mfocus = 1;		/* browser-first: the lobby is the point */
++	QN_LobbyWatch ();
  }
  
  
-@@ -619,18 +619,23 @@
+ void M_MultiPlayer_Draw (void)
  {
- 	int		f;
+-	int		f;
  	qpic_t	*p;
-+	const char	*items[3] = { "Host game", "Join game", "Setup" };
-+	int	i;
++	int	i, cy, x, total;
++	int	btnw[MULTIPLAYER_ITEMS];
++	static const char	*items[MULTIPLAYER_ITEMS] = { "Host game", "Join by code", "Setup" };
  
  	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp") );
  	p = Draw_CachePic ("gfx/p_multi.lmp");
  	M_DrawPic ( (320-p->width)/2, 4, p);
 -	M_DrawTransPic (72, 32, Draw_CachePic ("gfx/mp_menu.lmp") );
--
+ 
 -	f = (int)(realtime * 10)%6;
++	QN_MultiSort ();
++	/* room list panel: bordered box (menu text-box art), header, rows.
++	 * All coordinates in pixels: M_Print advances 8 px per glyph. */
++	M_DrawTextBox (8, 48, 36, 9);
++	M_PrintWhite (32, 56, "room");
++	M_PrintWhite (152, 56, "map");
++	M_PrintWhite (224, 56, "mode");
++	M_PrintWhite (264, 56, "p/y");
++	for (i = 0; i < qn_room_rows; i++)
++	{
++		int	r = qn_room_order[i];
++		char	nm[15], mp[9], pl[8];
++
++		q_strlcpy (nm, QN_LobbyName (r), sizeof (nm));
++		q_strlcpy (mp, QN_LobbyMap (r), sizeof (mp));
++		q_snprintf (pl, sizeof (pl), "%d/%d", QN_LobbyPlayers (r), QN_LobbyMax (r));
++		cy = 68 + i * 8;
++		if (QN_LobbyMine (r))
++			M_Print (32, cy, nm);		/* own room reads dimmed */
++		else
++			M_PrintWhite (32, cy, nm);
++		M_PrintWhite (152, cy, mp);
++		M_PrintWhite (224, cy, QN_LobbyMode (r) == 1 ? "dm" : "coop");
++		M_PrintWhite (264, cy, pl);
++		if (qn_mfocus == 1 && i == qn_room_cursor)
++			M_DrawCharacter (24, cy, 7);
++	}
++	if (!qn_room_rows)
++		M_PrintWhite ((320 - (QN_LobbyHave () ? 17*8 : 12*8))/2, 76,
++		              QN_LobbyHave () ? "no public lobbies" : "searching...");
++
++	/* buttons: pixel layout computed from the labels themselves (each
++	 * cell is label+2 chars for brackets, 16 px apart), whole row centred */
++	total = 0;
++	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
++	{
++		btnw[i] = (Q_strlen (items[i]) + 2) * 8;
++		total += btnw[i] + 16;
++	}
++	total -= 16;
++	x = (320 - total) / 2;
++	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
++	{
++		char	cell[40];
++		qboolean	sel = (qn_mfocus == 0 && i == m_multiplayer_cursor);
++		if (sel)
++			q_snprintf (cell, sizeof (cell), "[%s]", items[i]);
++		else
++			q_snprintf (cell, sizeof (cell), " %s ", items[i]);
++		if (sel)
++			M_PrintWhite (x, 160, cell);
++		else
++			M_Print (x, 160, cell);
++		x += btnw[i] + 16;
++	}
  
 -	M_DrawTransPic (54, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
-+	for (i = 0; i < MULTIPLAYER_ITEMS; i++)
-+		M_Print ((320 - (int)strlen(items[i]) * 8) / 2, 32 + i * 20, items[i]);
- 
--	M_Print (90, 92, "Host p2pquake");
--	M_Print (90, 112, "Join p2pquake");
-+	f = (int)(realtime * 10)%6;
++	/* keybind legend (320x200 menu space, pixels) */
++	if (qn_mfocus == 1)
 +	{
-+		int	dx = (320 - (int)strlen(items[m_multiplayer_cursor]) * 8) / 2 - 26;
-+		if (dx < 4)
-+			dx = 4;
-+		M_DrawTransPic (dx, 32 + m_multiplayer_cursor * 20,Draw_CachePic( va("gfx/menudot%i.lmp", f+1 ) ) );
++		M_Print ((320 - 35*8)/2, 184, "up/down room  enter join  r refresh");
++		M_Print ((320 - 21*8)/2, 192, "tab switch to buttons");
++	}
++	else
++	{
++		M_Print ((320 - 33*8)/2, 184, "left/right select  enter activate");
++		M_Print ((320 - 19*8)/2, 192, "tab switch to lobby");
 +	}
  
  	if (ipxAvailable || tcpipAvailable)
  		return;
-@@ -666,34 +671,22 @@
+@@ -640,41 +745,103 @@
+ 	{
+ 	case K_ESCAPE:
+ 	case K_BBUTTON:
++		QN_LobbyUnwatch ();
+ 		M_Menu_Main_f ();
+ 		break;
+ 
+-	case K_DOWNARROW:
++	case K_TAB:
++		S_LocalSound ("misc/menu1.wav");
++		qn_mfocus = !qn_mfocus;
++		break;
++
++	case K_LEFTARROW:
++		if (qn_mfocus != 0)
++			break;
++		S_LocalSound ("misc/menu1.wav");
++		m_multiplayer_cursor = (m_multiplayer_cursor + MULTIPLAYER_ITEMS - 1) % MULTIPLAYER_ITEMS;
++		break;
++
++	case K_RIGHTARROW:
++		if (qn_mfocus != 0)
++			break;
+ 		S_LocalSound ("misc/menu1.wav");
+-		if (++m_multiplayer_cursor >= MULTIPLAYER_ITEMS)
+-			m_multiplayer_cursor = 0;
++		m_multiplayer_cursor = (m_multiplayer_cursor + 1) % MULTIPLAYER_ITEMS;
+ 		break;
+ 
+ 	case K_UPARROW:
++		if (qn_mfocus != 1)
++			break;
++		QN_MultiSort ();
++		if (qn_room_rows > 0)
++		{
++			S_LocalSound ("misc/menu1.wav");
++			qn_room_cursor = (qn_room_cursor + qn_room_rows - 1) % qn_room_rows;
++		}
++		break;
++
++	case K_DOWNARROW:
++		if (qn_mfocus != 1)
++			break;
++		QN_MultiSort ();
++		if (qn_room_rows > 0)
++		{
++			S_LocalSound ("misc/menu1.wav");
++			qn_room_cursor = (qn_room_cursor + 1) % qn_room_rows;
++		}
++		break;
++
++	case 'r':
++		if (qn_mfocus != 1)
++			break;
+ 		S_LocalSound ("misc/menu1.wav");
+-		if (--m_multiplayer_cursor < 0)
+-			m_multiplayer_cursor = MULTIPLAYER_ITEMS - 1;
++		QN_LobbyWatch ();	/* re-receipt forces an immediate snapshot */
+ 		break;
+ 
+ 	case K_ENTER:
+ 	case K_KP_ENTER:
+ 	case K_ABUTTON:
+ 		m_entersound = true;
++		if (qn_mfocus == 1)
++		{	/* click-to-join: the code rides the advert; the dial
++			    below is the join-by-code path verbatim */
++			QN_MultiSort ();
++			if (qn_room_rows > 0)
++			{
++				char	grouped[20];
++				int	r = qn_room_order[qn_room_cursor];
++				if (QN_LobbyCodeGrouped (r, grouped, sizeof (grouped)))
++				{
++					QN_LobbyUnwatch ();
++					QN_Menu_JoinAdvert (grouped);
++					memset (grouped, 0, sizeof (grouped));
++				}
++			}
++			break;
++		}
  		switch (m_multiplayer_cursor)
  		{
  		case 0:
 -			if (ipxAvailable || tcpipAvailable)
 -				M_Menu_Net_f ();
--			break;
--
--		case 1:
--			if (ipxAvailable || tcpipAvailable)
--				M_Menu_Net_f ();
--			break;
--
--		case 2:
--			M_Menu_Setup_f ();
--			break;
--
--		case 3:
- 			IN_Deactivate(modestate == MS_WINDOWED);
- 			key_dest = key_menu;
- 			m_state = m_qn_host;
--			m_entersound = true;
- 			QN_Menu_HostInit ();
++			QN_LobbyUnwatch ();
++			IN_Deactivate(modestate == MS_WINDOWED);
++			key_dest = key_menu;
++			m_state = m_qn_host;
++			QN_Menu_HostInit ();
  			break;
  
--		case 4:
-+		case 1:
- 			IN_Deactivate(modestate == MS_WINDOWED);
- 			key_dest = key_menu;
- 			m_state = m_qn_join;
--			m_entersound = true;
- 			QN_Menu_JoinInit ();
+ 		case 1:
+-			if (ipxAvailable || tcpipAvailable)
+-				M_Menu_Net_f ();
++			QN_LobbyUnwatch ();
++			IN_Deactivate(modestate == MS_WINDOWED);
++			key_dest = key_menu;
++			m_state = m_qn_join;
++			QN_Menu_JoinInit ();
  			break;
-+
-+		case 2:
-+			M_Menu_Setup_f ();
-+			break;
+ 
+ 		case 2:
++			QN_LobbyUnwatch ();
+ 			M_Menu_Setup_f ();
+ 			break;
  		}
++		break;
  	}
  }
-@@ -719,8 +712,8 @@
+ 
+@@ -699,8 +866,8 @@
  	key_dest = key_menu;
  	m_state = m_setup;
  	m_entersound = true;
@@ -146,7 +312,7 @@
  	setup_top = setup_oldtop = ((int)cl_color.value) >> 4;
  	setup_bottom = setup_oldbottom = ((int)cl_color.value) & 15;
  }
-@@ -816,8 +809,8 @@
+@@ -796,8 +963,8 @@
  			goto forward;
  
  		// setup_cursor == 4 (OK)
@@ -157,7 +323,7 @@
  		if (Q_strcmp(hostname.string, setup_hostname) != 0)
  			Cvar_Set("hostname", setup_hostname);
  		if (setup_top != setup_oldtop || setup_bottom != setup_oldbottom)
-@@ -856,6 +849,9 @@
+@@ -836,6 +1003,9 @@
  {
  	int l;
  
@@ -167,7 +333,7 @@
  	switch (setup_cursor)
  	{
  	case 0:
-@@ -884,114 +880,6 @@
+@@ -864,114 +1034,6 @@
  }
  
  //=============================================================================
@@ -282,7 +448,7 @@
  /* OPTIONS MENU */
  
  enum
-@@ -1751,14 +1639,7 @@
+@@ -1731,14 +1793,7 @@
  	key_dest = key_menu;
  	m_state = m_lanconfig;
  	m_entersound = true;
@@ -298,7 +464,7 @@
  		lanConfig_cursor = 1;
  	lanConfig_port = DEFAULTnet_hostport;
  	sprintf(lanConfig_portname, "%u", lanConfig_port);
-@@ -1782,22 +1663,13 @@
+@@ -1762,22 +1817,13 @@
  
  	basex = 72; /* Arcane Dimensions has an oversized gfx/p_multi.lmp */
  
@@ -324,7 +490,7 @@
  
  	M_Print (basex, lanConfig_cursor_table[0], "Port");
  	M_DrawTextBox (basex+8*8, lanConfig_cursor_table[0]-8, 6, 1);
-@@ -1837,7 +1709,7 @@
+@@ -1817,7 +1863,7 @@
  	{
  	case K_ESCAPE:
  	case K_BBUTTON:
@@ -333,7 +499,7 @@
  		break;
  
  	case K_UPARROW:
-@@ -2349,7 +2221,7 @@
+@@ -2329,7 +2375,7 @@
  	{
  	case K_ESCAPE:
  	case K_BBUTTON:
@@ -342,7 +508,7 @@
  		break;
  
  	case K_UPARROW:
-@@ -2583,6 +2455,8 @@
+@@ -2563,6 +2609,8 @@
  	Cmd_AddCommand ("help", M_Menu_Help_f);
  	Cmd_AddCommand ("menu_quit", M_Menu_Quit_f);
  	Cmd_AddCommand ("menu_credits", M_Menu_Credits_f); // needed by the 2021 re-release
@@ -351,7 +517,7 @@
  }
  
  
-@@ -2637,10 +2511,6 @@
+@@ -2617,10 +2665,6 @@
  		M_Setup_Draw ();
  		break;
  
@@ -362,7 +528,22 @@
  	case m_options:
  		M_Options_Draw ();
  		break;
-@@ -2733,10 +2603,6 @@
+@@ -2655,6 +2699,14 @@
+ 		M_GameOptions_Draw ();
+ 		break;
+ 
++	case m_qn_host:
++		QN_Menu_HostDraw ();
++		break;
++
++	case m_qn_join:
++		QN_Menu_JoinDraw ();
++		break;
++
+ 	case m_search:
+ 		M_Search_Draw ();
+ 		break;
+@@ -2705,10 +2757,6 @@
  		M_Setup_Key (key);
  		return;
  
@@ -373,7 +554,41 @@
  	case m_options:
  		M_Options_Key (key);
  		return;
-@@ -2829,7 +2695,7 @@
+@@ -2744,6 +2792,14 @@
+ 	case m_slist:
+ 		M_ServerList_Key (key);
+ 		return;
++
++	case m_qn_host:
++		QN_Menu_HostKey (key);
++		return;
++
++	case m_qn_join:
++		QN_Menu_JoinKey (key);
++		return;
+ 	}
+ }
+ 
+@@ -2761,6 +2817,9 @@
+ 	case m_lanconfig:
+ 		M_LanConfig_Char (key);
+ 		return;
++	case m_qn_join:
++		QN_Menu_JoinChar (key);
++		return;
+ 	default:
+ 		return;
+ 	}
+@@ -2777,6 +2836,8 @@
+ 		return M_Quit_TextEntry ();
+ 	case m_lanconfig:
+ 		return M_LanConfig_TextEntry ();
++	case m_qn_join:
++		return true;
+ 	default:
+ 		return false;
+ 	}
+@@ -2788,7 +2849,7 @@
  // enable/disable net systems to match desired config
  	Cbuf_AddText ("stopdemo\n");
  
@@ -382,79 +597,3 @@
  		net_hostport = lanConfig_port;
  }
  
---- a/Quake/menu.h
-+++ b/Quake/menu.h
-@@ -31,7 +31,6 @@
- 	m_save,
- 	m_multiplayer,
- 	m_setup,
--	m_net,
- 	m_options,
- 	m_video,
- 	m_keys,
---- a/Quake/net_qn.c
-+++ b/Quake/net_qn.c
-@@ -46,6 +46,7 @@
- #include "qn_spawn.h"
- #include "qn_stext.h"
- #include "qn_transport.h"
-+#include "qn_buildid.h"
- 
- #include "net_qn.h"
- 
-@@ -1486,6 +1487,27 @@
- 	return 0;	/* LAN discovery belongs to the UDP landriver */
- }
- 
-+static const char *QN_state_text (void)
-+{
-+	switch (qn_state)
-+	{
-+	case QN_OFF:		return "off";
-+	case QN_STANDBY:	return "standby";
-+	default:		return "running";
-+	}
-+}
-+
-+void QN_Status_f (void)
-+{
-+	Con_Printf ("qn engine build %s\n", QN_BUILD_ID);
-+	Con_Printf ("state %s\n", QN_state_text ());
-+	Con_Printf ("host lane %s\n", qn_host_lane_up ? "up" : "down");
-+	Con_Printf ("client lane %s\n", qn_client_lane_up ? "up" : "down");
-+	Con_Printf ("listening %s\n", qn_wantlisten ? "wanted" : "idle");
-+	if (qn_last_note)
-+		Con_Printf ("last note: %s\n", qn_last_note);
-+}
-+
- const char *QN_AddrToString (struct qsockaddr *addr)
- {
- 	static char		buffer[32];
---- a/Quake/net_qn.h
-+++ b/Quake/net_qn.h
-@@ -29,6 +29,7 @@
- /* Grouped join code for the host page (spec 5.1 display surface), or ""
-  * when no room is currently announced. */
- const char *QN_JoinCodeText (void);
-+void QN_Status_f (void);
- sys_socket_t  QN_OpenSocket (int port);
- int  QN_CloseSocket (sys_socket_t socketid);
- int  QN_Connect (sys_socket_t socketid, struct qsockaddr *addr);
---- a/Quake/host_cmd.c
-+++ b/Quake/host_cmd.c
-@@ -23,6 +23,7 @@
- 
- #include "quakedef.h"
- #include "filenames.h"
-+#include "net_qn.h"
- #ifndef _WIN32
- #include <dirent.h>
- #endif
-@@ -2409,6 +2410,7 @@
- 	Cmd_AddCommand ("randmap", Host_Randmap_f); //ericw
- 
- 	Cmd_AddCommand ("status", Host_Status_f);
-+	Cmd_AddCommand ("qn_status", QN_Status_f);
- 	Cmd_AddCommand ("quit", Host_Quit_f);
- 	Cmd_AddCommand ("god", Host_God_f);
- 	Cmd_AddCommand ("notarget", Host_Notarget_f);

@@ -1,0 +1,13 @@
+--- a/Quake/quakedef.h
++++ b/Quake/quakedef.h
+@@ -269,6 +269,10 @@
+ #include "keys.h"
+ #include "menu.h"
+ #include "cdaudio.h"
++#ifdef QN_METAL
++#include "qn_metal.h"
++#endif
++
+ #include "glquake.h"
+ 
+ 

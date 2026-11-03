@@ -1,0 +1,29 @@
+--- a/Quake/net_defs.h
++++ b/Quake/net_defs.h
+@@ -168,6 +168,11 @@
+ 	const char	*name;
+ 	qboolean	initialized;
+ 	sys_socket_t	controlSock;
++	int		datagram_max;	/* largest DATA payload this landriver
++					   carries in one datagram; 0 selects
++					   MAX_DATAGRAM. The p2p landriver sets
++					   1092 so every datagram fits one
++					   relay body (protocol 3.4) */
+ 	sys_socket_t	(*Init) (void);
+ 	void		(*Shutdown) (void);
+ 	void		(*Listen) (qboolean state);
+@@ -186,6 +191,14 @@
+ 	int		(*AddrCompare) (struct qsockaddr *addr1, struct qsockaddr *addr2);
+ 	int		(*GetSocketPort) (struct qsockaddr *addr);
+ 	int		(*SetSocketPort) (struct qsockaddr *addr, int port);
++	int		(*PollFd) (sys_socket_t socketid);
++					/* fd to poll() while waiting for
++					 * this landriver's next datagram,
++					 * or -1: landrivers that own a
++					 * daemon transport supply it so
++					 * handshake spins can yield instead
++					 * of starving the peer; raw UDP
++					 * readers leave it NULL */
+ } net_landriver_t;
+ 
+ #define	MAX_NET_DRIVERS		8

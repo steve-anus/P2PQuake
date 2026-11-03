@@ -15,7 +15,7 @@
  		UDP_Init,
  		UDP_Shutdown,
  		UDP_Listen,
-@@ -90,6 +92,30 @@
+@@ -90,6 +92,31 @@
  		UDP_AddrCompare,
  		UDP_GetSocketPort,
  		UDP_SetSocketPort
@@ -42,7 +42,8 @@
 +		QN_GetAddrFromName,
 +		QN_AddrCompare,
 +		QN_GetSocketPort,
-+		QN_SetSocketPort
++		QN_SetSocketPort,
++		QN_PollFd
  	}
  };
  

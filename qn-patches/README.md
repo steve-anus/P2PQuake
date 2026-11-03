@@ -1,76 +1,52 @@
 # qn-patches
 
-Fixes applied inside the vendored engine tree (`src/vendor/quakespasm`).
-The tree in git already has them applied; these files exist so
-`tools/update-engine.sh` can re-apply them automatically after each engine
-sync. A patch that fails to apply there is a STOP condition — read the
-failing hunk, rebase or retire the patch, never skip it. To (re)generate an
-entry from the vendored working tree, run
-`tools/regen-patch.sh qn-patches/NNNN-name.patch [Quake-file ...]`: it stages
-the pinned bytes plus the earlier series and diffs the named files; members
-shared with a later patch refuse regeneration there (regenerate the later
-one). Always follow with `make engine-verify` before committing.
+Changes to upstream files inside the vendored engine tree
+(`src/vendor/quakespasm`). There is exactly one patch per changed upstream
+file, `<file>.patch`, holding the whole difference between the pinned
+upstream file (URL and commit in `ENGINE.upstream`) and the vendored one.
+Patches never depend on each other, so the set only grows when a new
+upstream file has to change.
 
-| file | what it does |
+Code that is entirely ours (the landriver `net_qn.c`/`net_qn.h`, the
+p2pquake menus `qn_menu.c`/`qn_menu.h`, and the Plane A, spawn, map-pool
+and allowlist modules) lives in `src/driver/` as ordinary source; the
+engine makefiles find it through `vpath` and `-I`. Keep engine edits to
+the hooks that connect upstream code to it.
+
+## Working with the patches
+
+- Change a vendored file, rebuild (`make engine`), run the checks, then
+  refresh its patch with `tools/regen-patch.sh <file>` (no argument
+  refreshes every file) and prove the set with `make engine-verify`: it
+  applies every patch to pristine pin bytes, diffs the result against the
+  tree, and builds it.
+- Engine updates: `tools/update-engine.sh <commit|tag|latest>` merges each
+  changed file three ways (old upstream, our version, new upstream). Clean
+  merges are applied and their patches refreshed; a real conflict stops the
+  update with conflict markers left in that file for a manual resolution.
+
+## What each patch changes
+
+| patch | changes |
 |---|---|
-| `0001-cl-parse-index-clamps.patch` | rejects negative/out-of-range wire-supplied model, sound and viewentity indices (and NULL precache entries) with a disconnect instead of memory unsafety |
-| `0002-cl-parse-parse-exits-disconnect.patch` | turns four remote-triggerable `Sys_Error` process exits in the server-message parser into recoverable `Host_Error` disconnects |
-| `0003-host_cmd-path-traversal-filter.patch` | rejects `..`, absolute paths and drive prefixes (and argless calls) in map/save/view names accepted by server-influenced console commands |
-| `0004-common-msg-read-float-bounds.patch` | bounds-checks `MSG_ReadFloat` against the message size like its sibling readers, flagging a bad read instead of reading past the message |
-| `0005-sv-phys-entity-cap.patch` | upstream's entity-cap fix: `SV_Physics` re-reads the cap each iteration instead of looping on a stale count |
-| `0006-net-qn-landriver.patch` | new files `Quake/net_qn.c` / `Quake/net_qn.h`: the p2pquake landriver -- virtual socket table and address model for the local qn-peer transport; absent unless `-qn` is on the command line, standby (all data-plane ops refuse) until the Plane A lifecycle hooks report an authenticated daemon. Cosmetic note: while registered, the datagram layer prints its resolve-failure line once per landriver, so an unresolvable name shows one extra `Could not resolve` line than UDP-only builds |
-| `0007-net-bsd-qn-registration.patch` | registers the QN landriver in `net_landrivers[]` after UDP |
-| `0008-makefile-qn-object.patch` | adds `net_qn.o` and the shared driver modules `qn_transport.o` / `qn_frame.o` / `qn_spawn.o` to the engine's net objects, with a `vpath` and include flag for the project's `src/driver` directory |
-| `0009-main-sdl-qn-pump.patch` | calls `QN_Pump` once per frame from both host loops in `main_sdl.c`: drives the landriver's Plane A session -- on-demand daemon spawn, auth watchdog, frame dispatch, and the host/client lane framing |
-| `0010-net-dgrm-datagram-limits.patch` | the datagram layer's size contract: chunks reliable DATA messages by the landriver's advertised datagram ceiling instead of the compile-time maximum (zero leaves behaviour unchanged — over the p2p lane every datagram must arrive whole inside one relay body); drops a received packet whose declared length disagrees with the bytes actually delivered; refuses a reassembly build-up past the receive buffer |
-| `0011-net-defs-datagram-max.patch` | adds the `datagram_max` field to `net_landriver_t` that a landriver may advertise and the datagram layer honours (the p2p landriver does; UDP leaves it zero for the compile-time default) |
-| `0012-common-longswap-unsigned-shift.patch` | `LongSwap` composes its bytes in the unsigned domain: `(int)b1 << 24` overflows signed int for `b1 >= 128` — undefined behaviour, surfaced by `-fsanitize=undefined` on the net paths |
-| `0013-client-lane-join.patch` | the join lane: QN_PollFd in the landriver table plus the datagram layer's connect-spin yield (with the advertised `datagram_max` and the `qn:` name left intact through `Strip_Port`); the landriver's host-lane lifecycle (transient `!sv.active` windows no longer retire the lane or re-mint the room code), reconnect re-arm that re-sends the join only after a played match, and per-slot peer identity so server output reaches exactly its own player (the datagram layer acknowledges any DATA chunk, so fan-out must never be a room broadcast) |
-| `0014-stufftext-allowlist.patch` | the spec 6.4 remote-console gate: game-stream `svc_stufftext` and Plane A `STUFFTEXT` frames dispatch to the console only through the derived allowlist predicate (`src/driver/qn_stext.c`), which the vendored Makefile links from the driver directory |
-| `0015-engine-build-id-marker.patch` | embeds the source-level build identity as the magic-framed marker `QNBID:<QN_BUILD_ID>` (value from the Makefile-generated `src/driver/qn_buildid.h`) and prints it at startup: the join lane's comparable `build_id` is proven from the parent image the daemon reads (spec 3.4a) |
-| `0016-host-lane-listen-gate.patch` | the host lane follows the engine's accept gate: the landriver opens its host lane (daemon spawn, HOST_UP, join code) only while the server is active **and** listening — the same gate UDP refuses behind — and prints one fixed note (`server not listening: no join code`) instead of advertising a room the datagram layer could never accept into |
-| `0017-default-standby-landriver.patch` | the landriver registers in **standby by default** so menu-first play needs no engine flags; `-qn` remains accepted as a no-op and `-no-qn` is the explicit kill switch restoring the old absent posture (offline development, test isolation). Standby still refuses every data-plane operation and spawns no daemon until a lane demands one, so the default costs only the standby console line and the resolve-name hook |
-| `0018-host-page-join-code-api.patch` | the landriver's host-page API: the minted join code is cached in grouped form for the in-game display surface (`QN_JoinCodeText()`), cleared whenever a room dies (teardown, re-host); and `QN_Listen(false)` now retires the host lane properly — it sends HOST_DOWN so the room closes and the code dies the moment the engine stops listening, instead of leaving the room announced behind a refused accept gate |
-| `0019-menu-host-page.patch` | the in-game hosting page: Multiplayer menu gains a fourth line (**Host p2pquake**) opening `Quake/qn_menu.c` — superseded for menu layout by `0022` (three centered all-text rows); the page itself is unchanged — game type, map (from the pak-derived add-on map list, filtered to `[A-Za-z0-9_]` at build time and again at use), players 1–8 shown as `N (N-1 open slots)` (the engine counts the host inside `maxclients`), and one Start/Stop action driving the same edges the flags drive (`listen`/`maxclients`/`map`). Only fixed texts and integers ever reach the command buffer from this page; while hosting, fields lock and the share code renders on the page from the cached display copy. New files `Quake/qn_menu.c` / `Quake/qn_menu.h`; `menu.h` gains the `m_qn_host` state, `menu.c` the entry line and dispatch cases |
-| `0020-makefile-qn-menu-object.patch` | builds `qn_menu.o` into the engine's net objects |
-| `0021-menu-join-pad.patch` | the join-by-code page: Multiplayer menu gains a fifth line (**Join p2pquake**) opening a character pad in `Quake/qn_menu.c` — 16 Crockford-base32 characters, accepted one keystroke at a time into a fixed buffer that the sanitizer caps at the write site; an explicit **L** keystroke (a letter excluded from the alphabet, so it can never be code data) pulls the clipboard once, treated as fully untrusted and accepted whole-or-not-at-all (never echoed); **Del** clears, **Enter** dials only a complete-and-valid code via the same buffer-validated `connect` path the server browser uses, and the code never reaches typed-console history or argv. Draws the grouped 4-4-4-4 form with a block cursor; failures return to the page with the fixed reason text. Also guards the UDP landriver from ever resolving or error-printing `qn:`-prefixed names (the join code is a bearer secret: no console echo, no DNS egress; `net_udp.c`, `net_dgrm.c`). Builds `qn_pad.o` (the shared input sanitizer in `src/driver/qn_pad.c`) alongside |
-| `0022-menu-first-run.patch` | first-run menu surface: the Multiplayer menu becomes three centered all-text rows — **Host game**, **Join game**, **Setup** — the legacy LAN server-browser and LAN-config pages drop off the menu and stay reachable only as the `menu_serverlist` / `menu_lanconfig` console commands (the IPX-era chooser page they hid behind is removed outright; the LAN config page always opens as a new-game host — joining via the browser — and its port field no longer zeroes the host port when left empty); the Setup page's name row now clamps and filters at the write site (printable ASCII minus quote/backslash/hash, 15 chars to match the `name` command's own cap), fills via bounded copies (no raw strcpy from the cvars), and commits with a direct `Cvar_Set("_cl_name", …)` — the sanctioned path the `name` command itself uses — never interpolated command text, and never an empty name; new read-only `qn_status` console command (engine build id, landriver state, lane states, listening, last fixed note) |
-| `0023-join-refusal-causes.patch` | honest join failure: the last daemon FATAL cause seen on a joiner lane (spec 6.3 table) is kept as a fixed literal (`src/driver/qn_causes.c`, one class per line, pinned by unit tests) and surfaces on the engine's FATAL console line, a `last cause:` line in `qn_status`, and a priority line on the Join page until the next `qn:` dial; the connect handshake never echoes host-supplied reject text for a `qn:` dial (fixed literal instead); the Host page lists who is in with the engine's own averaged per-client ping, masking any name byte outside the printable band. The spec 6.2 join-refuse classes reach the page through the same slot via the Plane-A JOIN_NO frame shipped in `0024` |
-| `0024-join-no-relay.patch` | the joiner's daemon relays why a join failed before hanging up clean (Plane-A JOIN_NO carrying the spec 6.2 cause): fixed player-facing literals on the Join page (long classes wrap to two lines), an engine console line, and the status surface; only a fully parsed join code revives a retired lane after a clean hang-up |
-| `0025-menu-layout.patch` | the Multiplayer selection band (the 256px `gfx/menudot` graphic) centers under the centered rows instead of a left-anchored slot; the Host page puts labels left at one column, all values and actions at a second, the blinking cursor at a third, and truncates long map names so rows never print on top of each other |
-| `0026-menu-selection-dot.patch` | the Multiplayer page marks the selected row with a centered bullet (conchars tile 7) left of the label instead of the bracket band graphic, and the rows sit lower on the page |
-| `0027-daemon-name-sanitizer.patch` | daemon argv hardening: the `-qn-name` value handed to the daemon as `--name` is masked to the printable ASCII band (out-of-band bytes to `.`, the roster display's own convention) and capped at 20 bytes, so a name violating the daemon's printable-≤20 exec contract degrades to a dotted display string instead of killing the daemon at exec |
-| `0028-coop-map-pools.patch` | the Host page now filters its map list by Game Type through the driver's `qn_maps` pool predicates (campaign pool for co-op, `lqdm` prefix for deathmatch), sorts the list in story/numeric order, re-filters with cursor clamp when Game Type changes, refuses to start when the selection is outside the active pool, re-examines the list before starting (a pak or game-directory change cannot leave a stale selection), clamps the map cursor at both bounds, and links `qn_maps.o` into the engine |
-| `0029-coop-ceilings.patch` | per-mode player ceilings: the host init raises the client-slot allocation floor to the engine ceiling so the Host page can reach it, the Players row cycles inside the mode's band (co-op 1-4, deathmatch 2-16, clamped by the engine limit), and Start queues listen 0 -> maxplayers N -> coop/deathmatch -> listen 1 -> map as one command sequence so the mode cvars always outrank the maxplayers side-flip |
-| `0030-host-advance.patch` | Host page gains a co-op Campaign advance row (visible only while hosting a co-op match): the next story-order entry of the filtered pool re-issues as a fixed changelevel command line, never free-form text; the list end surfaces a fixed note and the cursor navigation skips hidden rows |
-| `0031-coop-skill.patch` | Host page gains a co-op Skill row (visible only before hosting): cycles the four named difficulties and rides the Start command queue after the mode cvars as a fixed literal line so the progs read it at world spawn; deathmatch starts never touch the skill cvar |
-| `0032-pak-map-list.patch` | the map enumeration also lists `.bsp` files inside the base-dir paks (the upstream heuristic skipped them to keep official id1 maps out of the add-on list; this distribution ships its campaign inside those paks, so the Host page's co-op list came up empty). Console completion now offers every loadable map; the Host page's pool filters still gate what can be selected |
-| `0033-hostname-archive.patch` | the `hostname` cvar becomes `CVAR_ARCHIVE` so the Setup page's host name is written to `config.cfg` at clean quit and restored by the startup `exec config.cfg` (pak0's quake.rc); the room title shown to joiners now persists across launches, like the player name and colors already did. Also bounds the loopback host-cache copies of the host name and map with `q_strlcpy` (previously unbounded `Q_strcpy` into fixed fields; archiving makes long values persistent, so the copies were fixed at the same time) |
-| `0034-sv-user-stringcmd-allowlist.patch` | the admin-verb gate: the `clc_stringcmd` dispatcher in `sv_user.c` replaces upstream's `q_strncasecmp` prefix chain (which admitted `kick`, `ban`, `give`, `god`, `notarget`, `fly`, `noclip`, `setpos`, `kill`, `pause`, `status`, `ping` from any client-wire peer, and matched prefixes so `spawner` passed as `spawn`) with an exact-first-token allowlist predicate (`src/driver/qn_scmd.c`, linked via the vendored Makefile) covering the phrases proven needed on the wire: the signon set (`prespawn`/`name`/`color`/`spawn`/`begin`, sent by `cl_main.c`) and the chat family (`say`/`say_team`/`tell`, `Host_Say_f` origin, live: the loopback fake peer asserts its echo). Everything else is rejected before dispatch; the shipped LibreQuake progs register no client string commands (string-table enumeration) |
-| `0035-multiplayer-lobby-browser.patch` | the Multiplayer page becomes the lobby browser: three buttons rendered side-by-side in the bottom band ("Host game" / "Join by code" — the rename — / "Setup") with a left/right cursor; the page middle carries the browser panel (up/down select, Enter joins, R refreshes; columns room/map/mode/players x/y) fed by daemon-verified adverts from Plane A `LOBBY_LIST` (consecutive-run intake, atomic whole-view swap on the empty-payload terminator, silent drops, roster-grade mask on every remote byte); joining a row drives the join-by-code pad and dial verbatim; page open/close issues `LOBBY_WATCH`/`LOBBY_UNWATCH`. `net_qn.c`/`net_qn.h` gain the lobby view, the watch API and the `QNLOBBY` swap dump behind the `QN_LOBBY_DUMP=1` lab knob (never set in play or CI); `qn_menu.c`/`qn_menu.h` gain the advert-driven join entry |
-| `0036-host-visibility.patch` | the host page gains a Visibility row (public / private, private by default; left/right or Enter toggles it live, even while hosting); the pump announces the room to the public lobby while it is public and hosted and withdraws on the falling edge, both without a match restart, re-issuing on content change (map, title, maxplayers, mode, player count); `qn_status` gains the visibility and lobby-advertising fields; the `qn_visibility <0|1>` console command mirrors the row for dedicated operators and lanes. `host_cmd.c` registers the command |
-| `0037-windows-port.patch` | Windows port of the p2p net stack in `Quake/net_qn.c` and `Quake/net_udp.c`: named-pipe Plane A endpoint selection (per-user path with instance tag), winsock2 includes, `ioctlsocket`/`recvfrom` winsock call shapes, the winsock error table for `socketerror()`, and winsock resolver diagnostics — all `_WIN32`-gated, posix behaviour byte-identical |
-| `0038-makefile-w64-qn-wiring.patch` | the win64 cross-build wiring in `Quake/Makefile.w64`: swaps the stock winsock net objects for `net_bsd.o net_udp.o` + the qn driver objects (incl. the win twins and `qn_winsock_win.o` winsock startup), the `QNDIR` vpath/include, OBJDIR staging, and the static SDL2/mpg123 link flags |
-| `0039-macos-metal.patch` | optional macOS make hook, native Metal context/frame/gamma hooks, SDL2 relative-mouse handling and command-line entry; implementation and shaders live in `macos/`, with Linux/Windows renderer behavior retained |
-| `0040-public-lobby-sixteen.patch` | public rooms advertise and list up to 16 players (the deathmatch ceiling) instead of 8: the host announce clamps max players at 16, the browser accepts adverts up to 16, and the room panel is two characters wider so a `16/16` count fits inside its border |
-
-The vendored engine is otherwise upstream code (URL and commit recorded in
-`ENGINE.upstream`) and is only ever modified in: `Quake/net_bsd.c`,
-`Quake/main_sdl.c`, `Quake/gl_vidsdl.c`, `Quake/in_sdl.c`, `Quake/quakedef.h` (macOS Metal/SDL2 hooks in `0039`), `Quake/net_main.c`, `Quake/host.c`, `Quake/cl_parse.c`,
-`Quake/host_cmd.c`, `Quake/common.c` (message-reader bounds; byte-swap composition in the unsigned domain),
-`Quake/sv_phys.c` (upstream's entity-cap fix), `Quake/net_dgrm.c` (reliable DATA chunking via the advertised ceiling only, the connect-spin, and the suppression of resolve/progress prints for `qn:` names, and the landriver replace-on-connect (host-supplied connect-reject text is never printed or shown for a `qn:` dial — a fixed literal stands in), `Quake/net_udp.c` (never resolving `qn:`-prefixed names — they belong to the QN landriver; plus the `_WIN32` winsock plumbing of `0037`), `Quake/Makefile.w64` (the win64 cross-build wiring of `0038` only), `Quake/cl_main.c` (one DPrintf redaction for `qn:` hosts only), `Quake/net_defs.h` (the `datagram_max` field only), `Quake/menu.h` and `Quake/menu.c` (the `m_qn_host`/`m_qn_join` states and their dispatch; the Multiplayer menu rows; the Setup page's name/hostname write-site gates and commit paths; the `menu_lanconfig`/`menu_serverlist` registrations; and removal of the unreachable IPX-era chooser — nothing else), `Quake/Makefile`.
-Anything else upstream must stay untouched so updates stay cheap and
-reviews stay small. `make engine-verify` checks this claim mechanically:
-it replays the series onto pristine pin bytes and diffs against the tree.
-
-To add a fix: edit one of those files, rebuild (`make engine DEBUG=1`), run
-the checks (`make check`), commit. Then export the change as the next
-numbered patch here and prove it re-creates the tree from untouched sources.
-The patch's file headers must read `a/Quake/<file>` / `b/Quake/<file>` (the update tool applies with `-p1` from `src/vendor/quakespasm`):
-
-    CACHE=${QN_ENGINE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/p2pquake/qs-engine}   # upstream clone kept by tools/update-engine.sh
-    pristine=$(mktemp -d)
-    git -C "$CACHE" archive "$(sed -n 2p ENGINE.upstream)" Quake/<file> | tar -x -C "$pristine"
-    diff -u "$pristine"/Quake/<file> src/vendor/quakespasm/Quake/<file> \
-      | sed '1s|.*|--- a/Quake/<file>|;2s|.*|+++ b/Quake/<file>|' > qn-patches/NNNN-name.patch
-    patch -p1 -d "$pristine" --dry-run -i "$PWD"/qn-patches/NNNN-name.patch  # must apply clean
+| `cl_main.c.patch` | the connect debug line never prints a `qn:` address (join codes are bearer secrets) |
+| `cl_parse.c.patch` | rejects negative or out-of-range wire-supplied model, sound and viewentity indices (and NULL precache entries) with a disconnect; turns four remote-triggerable `Sys_Error` exits into `Host_Error` disconnects; game-stream `svc_stufftext` reaches the console only through the allowlist predicate (`src/driver/qn_stext.c`) |
+| `common.c.patch` | `MSG_ReadFloat` is bounds-checked like its sibling readers; `LongSwap` composes its bytes in the unsigned domain (no signed-shift overflow) |
+| `gl_vidsdl.c.patch` | macOS: native Metal context, frame and gamma hooks (implementation in `macos/`); other platforms unchanged |
+| `host.c.patch` | host init raises the client-slot allocation floor to the engine ceiling so the Host page can reach the per-mode player limits |
+| `host_cmd.c.patch` | map/save/view names from server-influenced commands refuse `..`, absolute paths and drive prefixes; embeds the build identity marker `QNBID:<id>` and prints it at startup; map listing includes `.bsp` files inside the base-dir paks; registers the `qn_status` and `qn_visibility` console commands |
+| `in_sdl.c.patch` | macOS: SDL2 relative-mouse handling for the Metal renderer |
+| `main_sdl.c.patch` | calls `QN_Pump` once per frame from both host loops (daemon spawn, auth watchdog, frame dispatch); macOS command-line entry |
+| `Makefile.patch` | builds the driver modules from `src/driver` into the engine (`vpath`, `-I. -I$(QNDIR)`), links the stufftext/admin-verb allowlists and map pools, and offers the optional macOS make hook |
+| `Makefile.w64.patch` | the win64 cross-build: `net_bsd.o net_udp.o` plus the driver objects (with the Windows twins and winsock startup), the `QNDIR` vpath and include, OBJDIR staging, static SDL2/mpg123 link flags |
+| `menu.c.patch` | the Multiplayer page: the lobby browser panel (room/map/mode/players, up to 16 players), the Host game / Join by code / Setup buttons, the Setup name row filtered at the write site, legacy LAN pages reachable only by the `menu_lanconfig` / `menu_serverlist` console commands |
+| `menu.h.patch` | the menu state list: drops the IPX-era network chooser state, adds the Host and Join pages |
+| `net_bsd.c.patch` | registers the p2pquake landriver in `net_landrivers[]` after UDP |
+| `net_defs.h.patch` | `net_landriver_t` gains `datagram_max` (a landriver's datagram ceiling) and the poll-fd hook the join lane uses |
+| `net_dgrm.c.patch` | chunks reliable DATA by the landriver's advertised datagram ceiling; drops packets whose declared length disagrees with the bytes delivered; bounds reassembly to the receive buffer; yields during the connect spin; never echoes host-supplied reject text for a `qn:` dial |
+| `net_loop.c.patch` | loopback host-cache copies of the host name and map are bounded (`q_strlcpy`) |
+| `net_main.c.patch` | the `hostname` cvar is archived to `config.cfg`, so the room title persists across launches |
+| `net_udp.c.patch` | `qn:` names are never handed to the DNS resolver (a join code must not leave the machine); Windows: winsock2 includes, `ioctlsocket` and the winsock error table and resolver diagnostics (`_WIN32`-gated), plus `char *` casts on `recvfrom`/`sendto` that are no-ops elsewhere |
+| `quakedef.h.patch` | macOS: the Metal renderer hook declarations |
+| `sv_phys.c.patch` | `SV_Physics` re-reads the entity cap each iteration instead of looping on a stale count |
+| `sv_user.c.patch` | `clc_stringcmd` dispatch through an exact-first-token allowlist (`src/driver/qn_scmd.c`) instead of upstream's prefix chain, which admitted admin and cheat verbs from any client |

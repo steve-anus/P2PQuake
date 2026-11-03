@@ -9,7 +9,28 @@
  #ifdef __EMSCRIPTEN__
  #include <gl4esinit.h>
  #endif
-@@ -126,6 +128,7 @@
+@@ -65,12 +67,19 @@
+ 
+ // On OS X we call SDL_main from the launcher, but SDL2 doesn't redefine main
+ // as SDL_main on OS X anymore, so we do it ourselves.
+-#if defined(USE_SDL2) && defined(__APPLE__)
++#if defined(USE_SDL2) && defined(__APPLE__) && !defined(QN_METAL)
+ #define main SDL_main
+ #endif
+ 
++#ifdef QN_METAL
++#define main QNM_engine_main
++#endif
++
+ int main(int argc, char *argv[])
+ {
++#ifdef QN_METAL
++	setvbuf(stdout, NULL, _IOLBF, 0);
++#endif
+ #ifdef __EMSCRIPTEN__
+ 	initialize_gl4es();
+ #endif
+@@ -126,6 +135,7 @@
  				time = newtime - oldtime;
  			}
  
@@ -17,7 +38,7 @@
  			Host_Frame (time);
  			oldtime = newtime;
  		}
-@@ -151,6 +154,7 @@
+@@ -151,6 +161,7 @@
  		newtime = Sys_DoubleTime ();
  		time = newtime - oldtime;
  

@@ -214,11 +214,14 @@ identity of the software a peer actually runs:
   image at compile time as a magic-framed marker: the exact bytes
   `QNBID:<id>\0`, where `<id>` is 1..64 characters from `[A-Za-z0-9._+-]`
   (the release version from the committed `VERSION` file plus a digest
-  over the wire-critical source closure - the ordered engine patch series,
-  the qn driver sources, the peer sources, and this specification;
-  platform-local translation files (the Windows-only pipe-transport and
-  spawn twins) sit outside the closure, since they only ever pair one
-  machine's own engine with its own daemon inside a single shipped build;
+  over the wire-critical source closure - the engine pin and its patches,
+  the qn driver sources, the peer sources, and the locked network library
+  versions; files that are provably local to one machine sit outside the
+  closure: platform translation files (the Windows and macOS pipe,
+  transport and spawn twins, which only ever pair one machine's own engine
+  with its own daemon inside a single shipped build), the menus, join pad
+  and cause texts, the macOS renderer and mouse hooks, the relay server and
+  its test hook, and this document, whose bytes the code defines;
   before a version is assigned the git commit serves in place of the
   version; an implementation may append a provenance suffix from the same
   charset, and comparison is byte equality over the whole `<id>`).

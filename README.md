@@ -75,9 +75,11 @@ make check                 # the full test suite
 
 `make engine` builds the vendored QuakeSpasm tree against SDL2 with the
 mpg123 backend, embedding a build identity (the `VERSION` release
-number plus a digest over the wire-critical source: the `qn-patches/`
-series, the driver, the peer, the protocol spec) that the peer proves
-before every join. Builds from the same source on Linux, Windows and macOS carry
+number plus a digest over everything that can change what two machines
+exchange: the engine pin and `qn-patches/`, the driver, the peer, and the
+locked network library versions in `package-lock.json`; menus, the
+macOS renderer hooks and the relay server are left out) that the peer
+proves before every join. Builds from the same source on Linux, Windows and macOS carry
 the identical identity, so the platforms can play together; anything
 version-mismatched is refused at the join.
 `make check` runs everything: the C protocol/unit suites, the scripted
