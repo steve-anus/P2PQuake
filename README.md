@@ -196,6 +196,14 @@ downloaded are the bits that were published.
   [Kademlia](https://pdos.csail.mit.edu/~petar/papers/maymounkov-kademlia-lncs.pdf),
   the DHT design that the network layer builds on.
 
+## AI disclosure
+
+This project's code, tests and documentation were written by AI coding
+assistants. The maintainer made key design decisions, tested it on real
+machines and signed the releases, but did not write the code. The
+vendored engine, game data and libraries are the work of the people
+credited above, and some changes came from outside contributors.
+
 ## Licenses
 
 - Source code: GPL-3.0
